@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+tokens.json
+
+# 离线 wheel 包（pip download -d wheels 生成的目录，体积大、随项目拷贝即可，不入库）
+wheels/
+pip-wheels/
+
+# 本机自检截图等临时产物
+web-check.png
+
+# 个人数据目录（凭据 / 阅读历史 / 下载记录 / 收藏台账 / 页面配置；换机直接拷这个目录，不必入库）
+data/
+
+# 阅读历史（个人使用，跟着项目目录走，但不必入库）
+history.jsonl
+history.jsonl.tmp
+_tmp_tests/
+
+# 分享打包产物（用 README「打包与移植」里的命令随时重新生成）
+dist/
+
+# pytest 在本机写缓存失败时留下的空目录
+pytest-cache-files-*/
+.pytest_cache/

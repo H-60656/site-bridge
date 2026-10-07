@@ -1,0 +1,17 @@
+# 只打包运行必需的文件；凭据、虚拟环境、缓存、离线包都不进镜像。
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+tokens.json
+data/
+history.jsonl
+wheels/
+pip-wheels/
+web-check.png
+dist/
+tests/
+examples/
+.git/
+.gitignore

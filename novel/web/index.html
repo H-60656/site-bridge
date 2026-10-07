@@ -1,0 +1,3065 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<title>Pixiv 小说阅读器 · Pixiv Bridge</title>
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --text:#1d2129; --muted:#86909c; --line:#e5e6eb;
+  --primary:#3b6ef0; --primary-soft:#eef3ff; --danger:#e5484d; --shadow:0 2px 10px rgba(20,24,35,.08);
+  --r:14px;
+  --warn:#b4531a; --warn-soft:rgba(224,112,42,.12); --warn-line:rgba(224,112,42,.35);
+  --toast-bg:rgba(29,33,41,.94); --toast-fg:#fff;
+}
+body.theme-sepia{--bg:#f3ead9;--panel:#fbf5e7;--text:#3b3226;--muted:#9c8d76;--line:#e3d7bf;--primary:#96652f;--primary-soft:#f0e3c9;
+  --warn:#8a4b13; --warn-soft:rgba(150,101,47,.14); --warn-line:rgba(150,101,47,.35);}
+body.theme-dark{--bg:#16181d;--panel:#1f2229;--text:#dfe2e8;--muted:#8b93a1;--line:#2e323b;--primary:#6f9bff;--primary-soft:#232a3a;--shadow:0 2px 10px rgba(0,0,0,.4);
+  --warn:#f0a35e; --warn-soft:rgba(240,163,94,.14); --warn-line:rgba(240,163,94,.35);
+  --toast-bg:rgba(240,242,246,.95); --toast-fg:#16181d;}
+/* 注意：任何 id 级 display 规则都会压过 [hidden]，这里的 !important 是必须的 */
+[hidden]{display:none!important}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text); -webkit-text-size-adjust:100%;
+  font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+button{font:inherit;color:inherit;cursor:pointer;touch-action:manipulation}
+a{color:var(--primary)}
+img{max-width:100%}
+html{-webkit-tap-highlight-color:transparent}
+
+/* ---------- 顶栏 ---------- */
+header{
+  position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:10px;
+  padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--line);
+}
+.brand{display:flex;align-items:center;gap:8px;min-width:0}
+.logo{
+  display:grid;place-items:center;width:28px;height:28px;border-radius:8px;flex:0 0 auto;
+  background:var(--primary);color:#fff;font-size:15px;font-weight:700;
+}
+.brand h1{margin:0;font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hdr-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+#auth-badge{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 9px;white-space:nowrap}
+#auth-badge.ok{color:var(--primary);border-color:var(--primary);background:var(--primary-soft)}
+
+/* ---------- 导航 ---------- */
+nav{display:flex;gap:6px;padding:8px 12px;overflow-x:auto;background:var(--panel);border-bottom:1px solid var(--line);
+  position:sticky;top:49px;z-index:29;scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+nav button{
+  border:1px solid var(--line);background:transparent;border-radius:999px;padding:5px 13px;
+  font-size:14px;white-space:nowrap;color:var(--muted);
+}
+nav button.active{background:var(--primary);border-color:var(--primary);color:#fff}
+
+main{max-width:1080px;margin:0 auto;padding:14px 14px 64px}
+
+/* ---------- 过滤条 ---------- */
+.filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+input,select{
+  font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:7px 10px;min-width:0;
+}
+input[type=date]{padding:6px 8px}
+#q-word{flex:1 1 220px;min-width:160px}
+button.primary{background:var(--primary);border:1px solid var(--primary);color:#fff;border-radius:10px;padding:7px 16px}
+button.primary:disabled{opacity:.55;cursor:not-allowed}
+button.ghost{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px 12px}
+button.icon-btn{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-weight:600}
+
+/* ---------- 列表 ---------- */
+.list-meta{color:var(--muted);font-size:13px;margin:2px 2px 10px}
+.novel-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+.novel-card{
+  display:flex;gap:11px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  padding:11px;box-shadow:var(--shadow);cursor:pointer;text-align:left;width:100%;
+}
+.novel-card:hover{border-color:var(--primary)}
+.novel-card.shelf-card{cursor:default;padding:8px 10px 8px 11px}
+/* 卡片里的操作按钮（移除 / 合并导出）：不跟着卡片高度拉伸 */
+.novel-card.shelf-card > .ghost,.novel-card.shelf-card > .rm{align-self:center;flex:0 0 auto}
+.novel-card .card-open{display:flex;gap:11px;flex:1;min-width:0;background:none;border:0;padding:0;
+  text-align:left;cursor:pointer;color:inherit;font:inherit}
+.novel-card .card-open:hover .novel-title{color:var(--primary)}
+.rm{color:var(--danger);font-size:12px;border:1px solid var(--line);border-radius:8px;padding:5px 10px;
+  background:var(--panel);flex:0 0 auto;align-self:center}
+.rm.plain{color:var(--primary);border-color:var(--primary);text-decoration:none;
+  display:inline-flex;align-items:center;justify-content:center}
+.cover{position:relative;width:56px;height:76px;flex:0 0 auto;border-radius:9px;overflow:hidden;background:var(--primary-soft);
+  display:grid;place-items:center;font-size:22px;font-weight:700;color:var(--primary)}
+.cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.novel-body{min-width:0;flex:1}
+.novel-title{font-weight:600;font-size:15px;line-height:1.35;margin-bottom:4px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.novel-sub{color:var(--muted);font-size:12.5px;display:flex;flex-wrap:wrap;gap:6px;margin-bottom:5px}
+.tags{display:flex;flex-wrap:wrap;gap:5px}
+.tag{font-size:11.5px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 7px;white-space:nowrap}
+.badge{font-size:11px;background:var(--primary-soft);color:var(--primary);border-radius:6px;padding:1px 6px}
+.empty{color:var(--muted);text-align:center;padding:34px 12px}
+.open-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:16px}
+.open-actions button{min-height:40px}
+button.more{display:block;margin:16px auto 0;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 22px}
+
+/* ---------- 章节列表 / 书架 ---------- */
+.chapter-list{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.chapter{
+  display:flex;align-items:center;gap:10px;padding:11px 13px;border-bottom:1px solid var(--line);cursor:pointer;
+  text-align:left;width:100%;background:transparent;border-left:0;border-right:0;border-top:0;
+}
+.chapter:last-child{border-bottom:0}
+.chapter:hover{background:var(--primary-soft)}
+.chapter .idx{color:var(--muted);font-size:12.5px;flex:0 0 auto;font-variant-numeric:tabular-nums}
+.chapter .c-title{flex:1;min-width:0;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chapter .c-meta{color:var(--muted);font-size:12px;flex:0 0 auto}
+.chapter.current{background:var(--primary-soft)}
+.chapter.current .c-title{color:var(--primary);font-weight:600}
+
+/* ---------- 阅读器 ---------- */
+.reader-bar{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;
+  position:sticky;top:97px;z-index:20;background:var(--bg);padding:6px 0;border-bottom:1px solid var(--line);
+}
+.reader-bar .spacer{flex:1}
+#reader{
+  --fs:18px; --lh:1.95; --w:760px;
+  max-width:min(var(--w),100%);margin:0 auto;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--r);padding:26px 22px 34px;box-shadow:var(--shadow);
+}
+#reader h2{margin:0 0 8px;font-size:21px;line-height:1.4}
+.reader-meta{color:var(--muted);font-size:13px;display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px;align-items:center}
+.reader-tags{margin-bottom:6px}
+.rule{height:1px;background:var(--line);margin:14px 0 18px}
+#reader-text{font-size:var(--fs);line-height:var(--lh);white-space:pre-wrap;word-break:break-word;
+  font-family:"Songti SC","Noto Serif CJK SC",Georgia,"Source Han Serif SC",serif}
+body.font-sans #reader-text{font-family:inherit}
+#reader-text p{margin:0 0 1em}
+/* 正文里的插图、章节标题、分页与 ruby */
+.novel-fig{margin:14px 0;text-align:center}
+.novel-fig img{display:block;max-width:100%;height:auto;margin:0 auto;border-radius:10px;background:var(--bg)}
+.novel-fig figcaption{color:var(--muted);font-size:12px;margin-top:6px}
+.novel-fig .ph{color:var(--muted);font-size:13px;border:1px dashed var(--line);border-radius:10px;padding:14px 10px;background:var(--bg)}
+.novel-fig.missing .ph{border-style:solid;border-color:var(--warn-line);color:var(--warn)}
+.novel-chapter{font-size:1.06em;font-weight:700;margin:1.4em 0 .6em;border-left:3px solid var(--primary);padding-left:9px;line-height:1.5}
+.novel-page-sep{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;margin:1.2em 0;font-family:inherit}
+.novel-page-sep::before,.novel-page-sep::after{content:"";height:1px;background:var(--line);flex:1}
+#reader-text ruby rt{font-size:.5em;color:var(--muted)}
+#reader-text a{color:var(--primary)}
+.reader-diag{margin-top:20px;border:1px dashed var(--danger);border-radius:10px;padding:10px 12px;color:var(--muted);font-size:13px}
+.reader-diag pre{white-space:pre-wrap;word-break:break-all;font-size:12px;background:var(--bg);border-radius:8px;padding:8px;margin:8px 0 0;max-height:220px;overflow:auto}
+.chapter-nav{display:flex;gap:8px;align-items:center;justify-content:center;margin:16px auto 0;max-width:760px;flex-wrap:wrap}
+.chapter-nav button{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 14px}
+.chapter-nav button:disabled{opacity:.45;cursor:not-allowed}
+.chapter-nav select{max-width:260px}
+
+/* ---------- 抽屉（目录 / 设置） ---------- */
+.drawer{
+  position:fixed;z-index:60;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);
+  left:50%;transform:translateX(-50%);bottom:0;width:min(560px,100%);max-height:72vh;overflow:auto;
+  border-radius:16px 16px 0 0;padding:14px 14px 22px;
+}
+.drawer h3{margin:2px 0 10px;font-size:15px}
+.drawer .row{display:flex;align-items:center;gap:10px;margin:10px 0;font-size:14px}
+.drawer .row label{width:74px;color:var(--muted);flex:0 0 auto}
+.drawer .row input[type=range]{flex:1}
+.drawer .row .val{width:52px;text-align:right;color:var(--muted);font-size:12.5px}
+.drawer .row select{flex:1}
+#scrim{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:55}
+.drawer-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+
+/* ---------- 提示 / 遮罩（遮罩与 loading 刻意不跟随主题） ---------- */
+#toast{
+  position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:90;background:var(--toast-bg);color:var(--toast-fg);
+  padding:9px 16px;border-radius:10px;font-size:14px;max-width:88vw;text-align:center;
+}
+#loading{position:fixed;inset:0;z-index:80;display:grid;place-items:center;background:rgba(0,0,0,.28)}
+/* ---------- 旧版服务提示条 ---------- */
+#ver-banner{
+  margin:0 0 12px;padding:10px 12px;border-radius:10px;font-size:13.5px;line-height:1.55;
+  background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-line);
+}
+#loading .box{background:var(--panel);border-radius:12px;padding:16px 20px;display:flex;align-items:center;gap:11px;font-size:14px;box-shadow:var(--shadow)}
+.spinner{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* ---------- 作者页 / 收藏 / 下载记录 / 本地书架 ---------- */
+.grid-head{grid-column:1/-1;display:flex;align-items:center;gap:8px;margin:8px 2px 0;font-size:13px;color:var(--muted)}
+.grid-head:first-child{margin-top:0}
+.grid-head b{color:var(--text);font-weight:600;font-size:14px}
+.grid-head .ln{flex:1;height:1px;background:var(--line)}
+.user-head{display:flex;gap:12px;align-items:center;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--r);padding:12px;box-shadow:var(--shadow);margin-bottom:12px}
+.user-head .u-avatar{width:64px;height:64px;border-radius:50%;object-fit:cover;flex:0 0 auto;background:var(--primary-soft);
+  display:grid;place-items:center;font-size:24px;font-weight:700;color:var(--primary)}
+.user-head .u-body{min-width:0;flex:1}
+.user-head h2{margin:0 0 4px;font-size:18px;line-height:1.3;overflow:hidden;text-overflow:ellipsis}
+.user-head .u-sub{color:var(--muted);font-size:12.5px;display:flex;flex-wrap:wrap;gap:8px}
+.user-head .u-comment{color:var(--muted);font-size:13px;margin-top:6px;white-space:pre-wrap;word-break:break-word;max-height:4.6em;overflow:auto}
+.user-head .u-act{display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
+button.ghost.on{border-color:var(--primary);color:var(--primary);background:var(--primary-soft)}
+.hint{color:var(--muted);font-size:12.5px;margin:4px 2px 10px;line-height:1.55}
+.hint.warn{color:var(--warn);background:var(--warn-soft);border:1px solid var(--warn-line);border-radius:9px;padding:7px 9px;word-break:break-word}
+#set-lib-list{display:flex;flex-direction:column;gap:6px;margin:8px 0 2px}
+#set-lib-list:empty{display:none}
+#set-lib-list .dir{display:flex;align-items:center;gap:8px;font-size:13px;border:1px solid var(--line);border-radius:9px;padding:6px 9px}
+#set-lib-list .dir span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+#set-libdir-row input{flex:1;min-width:0}
+.drawer hr{border:0;border-top:1px solid var(--line);margin:14px 0 10px}
+.drawer h4{margin:0 0 4px;font-size:14px}
+
+/* ---------- 移动端适配（主要使用场景是手机） ---------- */
+@media (max-width:640px){
+  /* 顶栏固定高度，配合 env(safe-area-inset-top) 适配刘海屏 / 全屏 PWA */
+  header{height:calc(46px + env(safe-area-inset-top));padding:0 12px;padding-top:env(safe-area-inset-top);gap:8px}
+  .logo{width:26px;height:26px;font-size:14px}
+  .brand h1{font-size:15px}
+  #auth-badge{font-size:11px;max-width:34vw;overflow:hidden;text-overflow:ellipsis}
+  #btn-settings{min-height:44px}
+  /* 触摸目标 ≥44px：搜索行 / 各来源参数行 / 加载榜单按钮 */
+  #filters-search button,#filters-ranking button,#filters-follow button{min-height:44px}
+
+  /* 导航改成贴底标签栏：拇指可达、不占首屏 */
+  nav{
+    position:fixed;left:0;right:0;bottom:0;top:auto;z-index:40;justify-content:space-between;
+    padding:6px 8px calc(6px + env(safe-area-inset-bottom));
+    border-bottom:0;border-top:1px solid var(--line);overflow:visible;
+  }
+  nav button{flex:1 1 0;min-height:44px;padding:4px 2px;font-size:12.5px;border:0;border-radius:10px}
+  nav button.active{background:var(--primary-soft);color:var(--primary);border:0}
+
+  main{padding:12px 12px calc(84px + env(safe-area-inset-bottom))}
+
+  /* 表单：iOS 只在字号 ≥16px 时才不会放大整页 */
+  input,select{font-size:16px;padding:9px 11px;min-height:42px}
+  input[type=date]{padding:8px 10px}
+  button.primary,button.ghost,button.icon-btn{min-height:42px}
+  .filters{gap:8px;margin-bottom:10px}
+  /* 首屏优先：「搜索类型 + 关键词 + 搜索 + 筛选」挤在一行，排序/日期收进 #adv-search */
+  #q-kind{flex:0 0 auto;padding:10px 6px}
+  #q-word{flex:1 1 0;min-width:0}
+  #q-run,#adv-toggle{flex:0 0 auto;padding-left:13px;padding-right:13px}
+  #adv-search select{flex:1 1 100%}
+  #adv-search input[type=date]{flex:1 1 calc(50% - 4px)}
+  #q-date{flex:1 1 100%}
+  /* 榜单 / 关注：参数和按钮挤在一行 */
+  #filters-ranking select,#filters-follow select{flex:1 1 auto}
+  #q-run-rank,#q-run-follow{flex:0 0 auto;padding-left:13px;padding-right:13px}
+
+  /* 列表：单列 + 更大的封面与点击区域 */
+  .novel-grid{grid-template-columns:1fr;gap:10px}
+  .novel-card{padding:12px;gap:12px}
+  .cover{width:64px;height:88px;font-size:24px}
+  .novel-title{font-size:15.5px}
+  .chapter{padding:13px;min-height:50px}
+  /* 触控目标统一到 44px（iOS 建议） */
+  .rm{padding:9px 12px;min-height:44px}
+  button.more,.open-actions button{min-height:44px;padding:10px 22px}
+
+  /* 阅读页工具条：不换行、可横向滑动，避免遮挡正文 */
+  .reader-bar{top:calc(46px + env(safe-area-inset-top));flex-wrap:nowrap;overflow-x:auto;gap:6px;
+    padding:6px 0;scrollbar-width:none}
+  .reader-bar::-webkit-scrollbar{display:none}
+  .reader-bar .spacer{display:none}
+  .reader-bar button{flex:0 0 auto;min-height:44px;padding:9px 12px;font-size:13px}
+  #reader{padding:18px 14px 24px;border-radius:12px;max-width:100%}
+  #reader h2{font-size:19px}
+  .rule{margin:12px 0 14px}
+  .chapter-nav{gap:6px;max-width:100%;margin-top:14px}
+  .chapter-nav select{flex:1 1 100%;max-width:100%;order:-1}
+  .chapter-nav button{flex:1 1 0;min-height:44px;padding:8px 6px;font-size:13.5px}
+
+  /* 抽屉：底部浮层，抬高到贴底导航之上 */
+  .drawer{
+    left:0;transform:none;width:100%;bottom:calc(58px + env(safe-area-inset-bottom));
+    border-radius:14px 14px 0 0;max-height:76vh;padding:14px 14px 18px;
+  }
+  .drawer .row{margin:12px 0;gap:8px}
+  .drawer .row label{width:56px}
+  .drawer .row input[type=range]{height:30px}
+  .drawer .row .val{width:46px}
+  .drawer-actions button{flex:1;min-height:44px}
+
+  #toast{bottom:calc(72px + env(safe-area-inset-bottom));max-width:92vw}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="logo">書</span>
+    <h1>Pixiv 小说阅读器</h1>
+  </div>
+  <div class="hdr-right">
+    <span id="auth-badge">检查登录状态…</span>
+    <button class="icon-btn" id="btn-settings" title="阅读设置" aria-label="阅读设置">Aa</button>
+  </div>
+</header>
+
+<nav id="nav" aria-label="内容来源">
+  <button data-source="ranking" class="active">榜单</button>
+  <button data-source="recommended">推荐</button>
+  <button data-source="follow">关注</button>
+  <button data-source="watchlist">追更</button>
+  <button data-source="bookmarks">收藏</button>
+  <button data-source="shelf">书架</button>
+</nav>
+
+<main>
+  <div id="ver-banner" hidden></div>
+  <!-- ============ 列表 ============ -->
+  <section id="view-list">
+    <div class="filters" id="filters-search">
+      <select id="q-kind" aria-label="搜索类型">
+        <option value="novel">作品</option>
+        <option value="user">作者</option>
+      </select>
+      <input id="q-word" type="search" placeholder="搜索小说：关键词 / 标签，回车即搜" aria-label="搜索关键词或标签" autocomplete="off" />
+      <button class="primary" id="q-run">搜索</button>
+      <button class="ghost" id="adv-toggle" aria-expanded="false" aria-controls="adv-search">筛选 ▾</button>
+    </div>
+    <div class="filters" id="adv-search" hidden>
+      <select id="q-sort" aria-label="排序方式">
+        <option value="date_desc">最新</option>
+        <option value="date_asc">最旧</option>
+        <option value="popular_desc">热门（需会员）</option>
+      </select>
+      <input id="q-start" type="date" title="起始日期（可留空）" aria-label="起始日期" />
+      <input id="q-end" type="date" title="结束日期（可留空）" aria-label="结束日期" />
+      <input id="q-date" type="date" title="榜单日期（留空为今天）" aria-label="榜单日期" />
+    </div>
+
+    <div class="filters" id="filters-ranking" hidden>
+      <select id="q-mode" aria-label="榜单模式">
+        <option value="day">日榜</option>
+        <option value="week">周榜</option>
+        <option value="month">月榜</option>
+        <option value="day_male">日榜·男性向</option>
+        <option value="day_female">日榜·女性向</option>
+        <option value="week_rookie">周榜·新人</option>
+        <option value="day_r18">日榜·R18</option>
+        <option value="week_r18">周榜·R18</option>
+      </select>
+      <button class="primary" id="q-run-rank">加载榜单</button>
+    </div>
+
+    <div class="filters" id="filters-follow" hidden>
+      <select id="q-restrict" aria-label="关注范围">
+        <option value="public">公开</option>
+        <option value="private">私密</option>
+      </select>
+      <button class="primary" id="q-run-follow">加载关注新作</button>
+      <button class="ghost" id="q-my-following">我的关注</button>
+    </div>
+
+    <div class="list-meta" id="list-meta" role="status" aria-live="polite"></div>
+    <div class="novel-grid" id="grid"></div>
+    <button class="more" id="btn-more" hidden>加载更多</button>
+  </section>
+
+  <!-- ============ 系列（追更 / 目录） ============ -->
+  <section id="view-series" hidden>
+    <div class="filters">
+      <button class="ghost" id="series-back">← 返回</button>
+      <button class="primary" id="series-download">下载全系列（EPUB）</button>
+      <button class="ghost" id="series-watch">追更</button>
+      <button class="ghost" id="series-author" hidden>作者主页</button>
+    </div>
+    <h2 id="series-title" style="margin:4px 2px 6px"></h2>
+    <div class="list-meta" id="series-meta"></div>
+    <div class="hint" id="series-dl-hint" hidden></div>
+    <div class="chapter-list" id="series-chapters"></div>
+  </section>
+
+  <!-- ============ 作者 ============ -->
+  <section id="view-user" hidden>
+    <div class="filters">
+      <button class="ghost" id="user-back">← 返回</button>
+      <button class="ghost" id="user-follow">关注</button>
+      <button class="ghost" id="user-pixiv">Pixiv 主页</button>
+    </div>
+    <div class="user-head" id="user-head"></div>
+    <div class="list-meta" id="user-meta" role="status" aria-live="polite"></div>
+    <div class="novel-grid" id="user-grid"></div>
+    <button class="more" id="user-more" hidden>加载更多</button>
+  </section>
+
+  <!-- ============ 阅读器 ============ -->
+  <section id="view-reader" hidden>
+    <div class="reader-bar">
+      <button class="ghost" id="reader-back">← 返回</button>
+      <span class="list-meta" id="reader-pos" style="margin:0"></span>
+      <span class="spacer"></span>
+      <button class="ghost" id="btn-toc" hidden>目录</button>
+      <button class="ghost" id="btn-copy">复制全文</button>
+      <button class="ghost" id="btn-download">下载 EPUB</button>
+      <button class="ghost" id="btn-fav">收藏</button>
+      <button class="ghost" id="btn-watch" hidden>追更</button>
+      <button class="ghost" id="btn-pixiv">Pixiv 原页</button>
+    </div>
+    <article id="reader">
+      <h2 id="reader-title"></h2>
+      <div class="reader-meta" id="reader-meta"></div>
+      <div class="reader-tags tags" id="reader-tags"></div>
+      <div class="rule"></div>
+      <div id="reader-text"></div>
+      <div class="reader-diag" id="reader-diag" hidden></div>
+    </article>
+    <div class="chapter-nav" id="chapter-nav" hidden>
+      <button id="btn-prev">← 上一章</button>
+      <select id="chapter-select"></select>
+      <button id="btn-next">下一章 →</button>
+    </div>
+  </section>
+</main>
+
+<!-- 抽屉：章节目录 -->
+<aside class="drawer" id="toc" role="dialog" aria-modal="true" aria-labelledby="toc-title" hidden>
+  <h3 id="toc-title">目录</h3>
+  <div class="chapter-list" id="toc-list"></div>
+  <div class="drawer-actions"><button class="ghost" id="toc-download">下载全系列（EPUB）</button><button class="ghost" id="toc-close">关闭</button></div>
+</aside>
+
+<!-- 抽屉：阅读设置 -->
+<aside class="drawer" id="settings" role="dialog" aria-modal="true" aria-labelledby="set-title" hidden>
+  <h3 id="set-title">阅读设置</h3>
+  <div class="row"><label for="set-fs">字号</label><input id="set-fs" type="range" min="14" max="30" step="1" /><span class="val" id="set-fs-val"></span></div>
+  <div class="row"><label for="set-lh">行距</label><input id="set-lh" type="range" min="1.4" max="2.6" step="0.05" /><span class="val" id="set-lh-val"></span></div>
+  <div class="row"><label for="set-w">页宽</label><input id="set-w" type="range" min="520" max="1200" step="20" /><span class="val" id="set-w-val"></span></div>
+  <div class="row"><label for="set-theme">主题</label>
+    <select id="set-theme">
+      <option value="light">浅色</option>
+      <option value="sepia">米黄</option>
+      <option value="dark">深色</option>
+    </select>
+  </div>
+  <div class="row"><label for="set-font">字体</label>
+    <select id="set-font">
+      <option value="serif">衬线（推荐阅读）</option>
+      <option value="sans">无衬线</option>
+    </select>
+  </div>
+  <hr />
+  <h4>书架与下载</h4>
+  <div class="hint" id="set-data-hint">正在读取项目配置…</div>
+  <div class="hint warn" id="set-warn" hidden></div>
+  <div class="row" id="set-libdir-row">
+    <label for="set-libdir">本地目录</label>
+    <input id="set-libdir" placeholder="E:\小说  或  ~/Books" aria-label="本地书架目录" />
+    <button class="ghost" id="set-libdir-add">添加</button>
+  </div>
+  <div id="set-lib-list"></div>
+  <div class="row"><label for="set-merge">系列合并</label>
+    <select id="set-merge">
+      <option value="1">开启：同名系列合成一个 EPUB</option>
+      <option value="0">关闭</option>
+    </select>
+  </div>
+  <div class="row"><label for="set-skip">跳过已下载</label>
+    <select id="set-skip">
+      <option value="1">开启：整本已下过就不再导出</option>
+      <option value="0">关闭</option>
+    </select>
+  </div>
+  <div class="row"><label for="set-depth">扫描层数</label>
+    <select id="set-depth">
+      <option value="1">1 层</option>
+      <option value="2">2 层</option>
+      <option value="3">3 层</option>
+      <option value="4">4 层</option>
+      <option value="5">5 层</option>
+      <option value="6">6 层</option>
+    </select>
+  </div>
+  <div class="drawer-actions"><button class="ghost" id="set-reset">恢复默认</button><button class="ghost" id="set-close">完成</button><button class="primary" id="set-save">保存配置</button></div>
+</aside>
+<div id="scrim" aria-hidden="true" hidden></div>
+
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<div id="loading" role="status" aria-live="polite" hidden><div class="box"><span class="spinner"></span><span id="loading-text">加载中…</span></div></div>
+
+<script>
+"use strict";
+/* =====================================================================
+ * Pixiv Bridge 小说阅读器（单文件，无构建步骤）
+ * 数据全部来自本机 Pixiv Bridge 接口（/api/...），不直连 Pixiv。
+ * ===================================================================== */
+
+const $ = (id) => document.getElementById(id);
+// 复用一个 div 做转义：一次列表渲染要调几十次，不值得每次新建节点
+const escDiv = document.createElement("div");
+const esc = (value) => {
+  escDiv.textContent = value === null || value === undefined ? "" : String(value);
+  return escDiv.innerHTML;
+};
+const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
+const fmtNum = (n) => (n === null ? "" : n >= 10000 ? (n / 10000).toFixed(1).replace(/\.0$/, "") + " 万" : String(n));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const SHELF_KEY = "pb.shelf.v1";
+const SETTINGS_KEY = "pb.reader.v1";
+const SERIES_FETCH_GAP = 700; // ms，配合接口 100 次/分的限流（约 85 次/分）
+const DEFAULT_SETTINGS = { fs: 18, lh: 1.95, w: 760, theme: "light", font: "serif" };
+const BASE_TITLE = "Pixiv 小说阅读器 · Pixiv Bridge";
+
+const state = {
+  source: "ranking",
+  list: [],
+  nextUrl: null,
+  seriesKind: "novel",   // 列表项是小说（novel）、系列（series）还是作者（user）
+  listScroll: 0,
+  view: "list",
+  current: null,         // 当前阅读的小说：{id, novel, text, shape, chapters, seriesDetail, chapterIndex}
+  seriesView: null,      // 系列视图：{id, info:{detail, chapters}}
+  userView: null,        // 作者页：{id, user, profile, source, novels, nextUrl}
+  busy: false,
+  lastDownload: 0,       // 上次开始导出的时间戳（防连点，见 downloadBlocked）
+  loaded: false,         // 列表 view 是否已经成功加载过一次（用于深链返回时补加载）
+  loadToken: 0,
+  historyFile: "",       // 项目里阅读历史文件的路径（GET /api/history 返回，仅用于展示）
+  myId: null,            // 当前登录用户 id（GET /api/auth/status，用于「我的关注」）
+  favList: [],           // 本地收藏台账（GET /api/bookmarks）
+  favIds: [],            // 上面那份的 id，便于 O(1) 判断按钮状态
+  serverConfig: null,    // 项目里的用户配置（data/settings.json）
+  library: null,         // 本地文件书架（GET /api/library）
+  dlMarks: {},           // 下载记录："<bookId>#<chapterIndex>" → 记录（当前上下文用得上的一份）
+  dlSeries: {},          // 下载记录：章节序号 → 记录（系列页用）
+  dlGroups: [],          // 下载记录按系列名（merge_key）分组后的结果
+};
+let settings = loadSettings();
+
+/* ---------------- 基础 UI ---------------- */
+let toastTimer = null;
+let authBadgeFresh = false;
+function showToast(message, ms) {
+  const el = $("toast");
+  el.textContent = message;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, ms || 2600);
+}
+function showLoading(text) {
+  $("loading-text").textContent = text || "加载中…";
+  $("loading").hidden = false;
+}
+function hideLoading() { $("loading").hidden = true; }
+function setMoreBusy(busy) {
+  // 「加载更多」用按钮自身状态反馈，避免全屏遮罩盖住已经读到的列表
+  const btn = $("btn-more");
+  btn.disabled = !!busy;
+  btn.textContent = busy ? "加载中…" : "加载更多";
+  btn.setAttribute("aria-busy", busy ? "true" : "false");
+}
+let lastFocus = null;
+function openDrawer(id) {
+  lastFocus = document.activeElement;
+  $("scrim").hidden = false;
+  const drawer = $(id);
+  drawer.hidden = false;
+  const first = drawer.querySelector("input,select,button");
+  if (first) first.focus({ preventScroll: true });
+}
+function closeDrawers() {
+  const open = ["toc", "settings"].filter((id) => !$(id).hidden);
+  if (!open.length) return;
+  $("scrim").hidden = true;
+  open.forEach((id) => { $(id).hidden = true; });
+  if (lastFocus && document.contains(lastFocus)) lastFocus.focus({ preventScroll: true });
+  lastFocus = null;
+}
+function trapTab(drawer, e) {
+  // 让 Tab 在抽屉内循环，抽屉之外的元素拿不到焦点
+  const items = [...drawer.querySelectorAll("button,input,select,textarea,a[href]")]
+    .filter((el) => !el.disabled && !el.hidden);
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  const active = document.activeElement;
+  if (!drawer.contains(active)) { e.preventDefault(); first.focus(); return; }
+  if (e.shiftKey && active === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+}
+
+/* ---------------- 接口调用 ---------------- */
+async function callApi(path, params) {
+  const url = new URL("/api" + path, location.origin);
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value === undefined || value === null || value === "") continue;
+    url.searchParams.set(key, value);
+  }
+  const resp = await fetch(url.toString());
+  const raw = await resp.text();
+  let body = null;
+  try { body = raw ? JSON.parse(raw) : null; } catch (e) { body = raw; }
+  if (!resp.ok) {
+    const message = (body && body.error && body.error.message) || (typeof body === "string" ? body.slice(0, 200) : "") || ("HTTP " + resp.status);
+    const err = new Error(message);
+    err.status = resp.status;
+    err.reason = body && body.error ? body.error.reason : "";
+    err.body = body;
+    throw err;
+  }
+  // 第一次「需要登录」的接口成功后，登录态才会真正生效（access token 是惰性换取的），
+  // 此时刷新一次徽章；/auth/* 自身不算，否则状态查询会把这个机会先消耗掉。
+  if (!authBadgeFresh && String(path).indexOf("/auth/") !== 0) {
+    authBadgeFresh = true;
+    loadAuthBadge();
+  }
+  return body;
+}
+/** 写接口（收藏 / 关注 / 追更 / 下载记录 / 项目配置）：统一 POST JSON 并解析错误。 */
+async function callApiPost(path, body, method) {
+  const resp = await fetch("/api" + path, {
+    method: method || "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const raw = await resp.text();
+  let data = null;
+  try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = raw; }
+  if (!resp.ok) {
+    let message = (data && data.error && data.error.message) || (data && data.detail) || ("HTTP " + resp.status);
+    if (typeof message !== "string") message = JSON.stringify(message);
+    const err = new Error(message);
+    err.status = resp.status;
+    err.reason = data && data.error ? data.error.reason : "";
+    err.body = data;
+    throw err;
+  }
+  if (!authBadgeFresh) { authBadgeFresh = true; loadAuthBadge(); }
+  return data;
+}
+function errorHint(err) {
+  const reason = (err && err.reason) || "";
+  if (err && err.status === 401) return "需要登录：先运行 python get_token.py（或把 PIXIV_REFRESH_TOKEN 写进 .env）。";
+  if (err && err.status === 429) return "请求过于频繁（接口限流），稍等一下再试。";
+  if (err && (err.status === 502 || reason === "upstream_error" || reason === "connect_failed"))
+    return "连不上 Pixiv：本机到上游的连接被阻断。参见 INSTALL.md，开启 ECH 或设置代理。";
+  return "";
+}
+/** 桥自身的路由不存在时，FastAPI 回的是 {"detail":"Not Found"}，与上游错误体不同。 */
+function isRouteMissing(err) {
+  const body = err && err.body;
+  const detail = body && (body.detail || (body.error && body.error.detail));
+  return !!(err && err.status === 404 && typeof detail === "string" && /not\s*found/i.test(detail));
+}
+/** /api/novel/{id} 报 404 时，这个 id 很可能其实是「系列 id」：试着按系列打开。 */
+async function tryOpenAsSeries(id, err) {
+  if (!err || err.status !== 404 || isRouteMissing(err)) return false;
+  try {
+    const data = await callApi("/novel/series", { series_id: id });
+    const detail = (data && (data.novel_series_detail || data.series)) || null;
+    const chapters = (data && (data.novels || data.novel_series)) || [];
+    if (!detail && !chapters.length) return false;
+    showToast("这是系列 id，已按系列打开");
+    location.hash = "#/series/" + id;
+    return true;
+  } catch (e) { return false; }
+}
+function diagLines(id, err, suffix) {
+  let body = "";
+  try { body = JSON.stringify(err && err.body).slice(0, 400); } catch (e) { body = String(err && err.body).slice(0, 400); }
+  return [
+    "时间: " + new Date().toLocaleString(),
+    "页面: " + location.href,
+    "接口: GET /api/novel/" + id + (suffix || ""),
+    "HTTP: " + ((err && err.status) || "-"),
+    "reason: " + ((err && err.reason) || "-"),
+    "message: " + ((err && err.message) || "-"),
+    "body: " + (body || "-"),
+  ].join("\n");
+}
+/** 打不开小说时给可操作的说明 + 可复制的诊断信息，而不是只把错误原文丢在正文区。 */
+function renderOpenError(id, err) {
+  const status = err && err.status;
+  const routeMissing = isRouteMissing(err);
+  const blocks = [];
+  let title = "打开失败";
+  if (routeMissing) {
+    title = "接口不存在（404）";
+    blocks.push("正在运行的服务里没有 <b>/api/novel/" + esc(String(id)) + "</b> 这个接口。"
+      + "<br />通常是<b>服务进程还是旧版本</b>：请停止 Pixiv Bridge、用最新代码重新启动，"
+      + "然后刷新本页（手机上可下拉刷新）。");
+    checkRoutes();
+  } else if (status === 404) {
+    title = "Pixiv 返回 404";
+    blocks.push("上游找不到小说 <b>" + esc(String(id)) + "</b>。常见原因："
+      + "<br />· 这个 id 其实是<b>系列 id</b>（上面已自动尝试按系列打开，若也失败说明系列同样取不到）"
+      + "<br />· 作品已删除、转为私密或仅作者可见"
+      + "<br />· R-18 等需要先在 Pixiv 上确认年龄的作品"
+      + "<br /><br />可点工具条上的「Pixiv 原页」，用同一账号在网页版确认这本是否还在。");
+  } else {
+    const hint = errorHint(err);
+    if (hint) blocks.push(esc(hint));
+    blocks.push("错误信息：" + esc((err && err.message) || "未知错误"));
+  }
+  const diag = diagLines(id, err);
+  $("reader-title").textContent = title;
+  $("reader-meta").textContent = "";
+  $("reader-tags").innerHTML = "";
+  // 错误状态下也要让「Pixiv 原页」指向当前这本（否则会沿用上一个打开成功的 id）
+  $("btn-pixiv").onclick = () => window.open("https://www.pixiv.net/novel/show.php?id=" + id, "_blank", "noopener");
+  document.title = "打开失败 · Pixiv 小说阅读器";
+  $("reader-text").innerHTML = '<div class="empty">' + blocks.join("<br /><br />") + '<div class="open-actions">'
+    + (routeMissing ? "" : '<button class="ghost" id="open-as-series">把 id 当系列打开</button>')
+    + '<button class="ghost" id="open-copy-diag">复制诊断信息</button></div></div>';
+  $("reader-diag").hidden = false;
+  $("reader-diag").innerHTML = "<div>诊断信息（反馈问题时请附上这段）：</div><pre>" + esc(diag) + "</pre>";
+  const asSeries = $("open-as-series");
+  if (asSeries) asSeries.addEventListener("click", () => { location.hash = "#/series/" + id; });
+  bindDiagCopy(diag);
+  showToast(title + "：" + ((err && err.message) || ""));
+}
+
+/** 「复制诊断信息」按钮：错误面板与正文错误面板共用。 */
+function bindDiagCopy(diag) {
+  const btn = $("open-copy-diag");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(diag); showToast("诊断信息已复制"); }
+    catch (e) { showToast("复制失败，请手动选择文本"); }
+  });
+}
+
+/** 详情拿到了、正文却没取到：标题/作者/字数留在页面上，只说明正文的问题。 */
+function renderTextError(id, err) {
+  const status = err && err.status;
+  const routeMissing = isRouteMissing(err);
+  const blocks = [];
+  let title = "正文取不到";
+  if (routeMissing) {
+    title = "正文接口不存在（404）";
+    blocks.push("当前服务里没有 <b>/api/novel/" + esc(String(id)) + "/text</b> 这个接口，"
+      + "通常是<b>服务进程还是旧版本</b>：请停止 Pixiv Bridge、用最新代码重新启动，然后刷新本页。");
+    checkRoutes();
+  } else if (status === 404) {
+    title = "正文接口返回 404";
+    blocks.push("这本书的信息能取到（作者、字数、标签都在上面），但正文接口拿不到内容。"
+      + "<br />Pixiv 已在 2024 年 2 月的 App 更新里删掉了 <b>/v1/novel/text</b>，旧接口只会回一句"
+      + "「Specified end-point doesn't exist」；本服务已改用官方 iOS 客户端的 /webview/v2/novel 取正文。"
+      + "<br />若这里仍报 404，多半是这本作品本身看不了：R-18 未在 Pixiv 确认年龄、本文非公开、或已被删除。");
+  } else {
+    const hint = errorHint(err);
+    if (hint) blocks.push(esc(hint));
+    blocks.push("错误信息：" + esc((err && err.message) || "未知错误"));
+  }
+  const diag = diagLines(id, err, "/text");
+  $("reader-title").textContent = title;
+  $("reader-text").innerHTML = '<div class="empty">' + blocks.join("<br /><br />")
+    + '<div class="open-actions"><button class="ghost" id="open-copy-diag">复制诊断信息</button></div></div>';
+  $("reader-diag").hidden = false;
+  $("reader-diag").innerHTML = "<div>诊断信息（反馈问题时请附上这段）：</div><pre>" + esc(diag) + "</pre>";
+  bindDiagCopy(diag);
+  document.title = "正文取不到 · Pixiv 小说阅读器";
+  showToast(title);
+}
+
+/* ---------------- 设置 ---------------- */
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+    return Object.assign({}, DEFAULT_SETTINGS, saved && typeof saved === "object" ? saved : {});
+  } catch (e) { return Object.assign({}, DEFAULT_SETTINGS); }
+}
+function applySettings() {
+  $("reader").style.setProperty("--fs", settings.fs + "px");
+  $("reader").style.setProperty("--lh", String(settings.lh));
+  $("reader").style.setProperty("--w", settings.w + "px");
+  document.body.classList.toggle("theme-sepia", settings.theme === "sepia");
+  document.body.classList.toggle("theme-dark", settings.theme === "dark");
+  document.body.classList.toggle("font-sans", settings.font === "sans");
+  $("set-fs").value = settings.fs; $("set-fs-val").textContent = settings.fs + "px";
+  $("set-lh").value = settings.lh; $("set-lh-val").textContent = Number(settings.lh).toFixed(2);
+  $("set-w").value = settings.w; $("set-w-val").textContent = settings.w + "px";
+  $("set-theme").value = settings.theme;
+  $("set-font").value = settings.font;
+}
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* 隐私模式忽略 */ }
+  applySettings();
+}
+
+/* ---------------- 书架（localStorage） ---------------- */
+function loadShelf() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SHELF_KEY) || "[]");
+    return Array.isArray(saved) ? saved : [];
+  } catch (e) { return []; }
+}
+function saveShelf(items) {
+  try { localStorage.setItem(SHELF_KEY, JSON.stringify(items.slice(0, 200))); } catch (e) { /* ignore */ }
+}
+function touchShelf(novel, patch) {
+  if (!novel || !novel.id) return;
+  const id = Number(novel.id);
+  const items = loadShelf();
+  const idx = items.findIndex((it) => Number(it.id) === id);
+  const series = novel.series || {};
+  const base = {
+    id: id,
+    title: novel.title || ("小说 " + id),
+    user: (novel.user && novel.user.name) || "",
+    seriesId: series.id ? Number(series.id) : null,
+    seriesTitle: series.title || "",
+    at: Date.now(),
+  };
+  const item = Object.assign({}, idx >= 0 ? items[idx] : {}, base, patch || {});
+  if (idx >= 0) items.splice(idx, 1);
+  items.unshift(item);
+  saveShelf(items);
+  // 只在书架列表可见时重绘：在阅读页里滚动保存进度也会走到这里，
+  // 而 renderShelf() 会 showView("list")，那样会把正在读的书踢回列表。
+  if (state.view === "list" && state.source === "shelf") renderShelf();
+  return item;
+}
+function shelfProgressPct(item) {
+  return item && item.progress ? Math.round(item.progress * 100) : 0;
+}
+function fmtWhen(at) {
+  const ms = Number(at || 0);
+  if (!ms) return "";
+  const d = new Date(ms);
+  const now = new Date();
+  const pad = (n) => (n < 10 ? "0" + n : String(n));
+  const hm = pad(d.getHours()) + ":" + pad(d.getMinutes());
+  if (d.toDateString() === now.toDateString()) return "今天 " + hm;
+  return pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + hm;
+}
+
+/* ---------------- 阅读历史（项目目录下的 history.jsonl） ----------------
+   本机 localStorage 仍然照写（离线可用、刷新立刻有），同时把「读完读到哪」
+   写进项目里的 history.jsonl：换浏览器、清了浏览器数据也不会丢，
+   个人使用、不区分用户，文件可以由用户自己备份或删除。
+   写入很克制：同一本书最快 15 秒一条，离页时再补一条（sendBeacon）。 */
+const HISTORY_MIN_GAP = 15000;
+let historySentAt = 0;
+let historyLastKey = "";
+function historyEntry(novel, extra) {
+  const cur = state.current || {};
+  const series = (novel && novel.series) || {};
+  const chapters = (cur.chapters && cur.chapters.length) ? cur.chapters : [];
+  const id = Number((novel && novel.id) || 0);
+  const shelfItem = loadShelf().find((it) => Number(it.id) === id);
+  const progress = typeof cur.progress === "number" ? cur.progress
+    : (shelfItem && typeof shelfItem.progress === "number" ? shelfItem.progress : null);
+  // 只有系列章节才写「读到第几章」；单篇的 -1 这类内部标记不落到文件里。
+  const seriesId = series.id ? Number(series.id) : (cur.seriesId || (shelfItem && shelfItem.seriesId) || null);
+  const chapterIndex = seriesId
+    ? (cur.chapterIndex >= 0 ? cur.chapterIndex : (shelfItem && shelfItem.chapterIndex >= 0 ? shelfItem.chapterIndex : null))
+    : null;
+  return Object.assign({
+    id: id,
+    title: (novel && novel.title) || "",
+    user: (novel && novel.user && novel.user.name) || "",
+    series_id: seriesId,
+    series_title: series.title || "",
+    chapter_index: chapterIndex,
+    chapters: chapters.length || null,
+    progress: progress,
+    read_at: new Date().toISOString(),
+  }, extra || {});
+}
+function postHistory(entry, force) {
+  if (!entry || !entry.id) return;
+  const now = Date.now();
+  const key = entry.id + "|" + entry.progress + "|" + entry.chapter_index;
+  if (!force) {
+    if (key === historyLastKey && now - historySentAt < HISTORY_MIN_GAP) return;
+    if (now - historySentAt < 3000) return;
+  }
+  historySentAt = now;
+  historyLastKey = key;
+  try {
+    // keepalive 让请求在「切页/关标签」时也能发出去（体积很小）。
+    fetch("/api/history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(entry),
+      keepalive: true,
+    }).catch(() => { /* 服务是旧版/离线：localStorage 里还有一份 */ });
+  } catch (e) { /* 忽略 */ }
+}
+function beaconHistory(entry) {
+  if (!entry || !entry.id) return;
+  const key = entry.id + "|" + entry.progress + "|" + entry.chapter_index;
+  const now = Date.now();
+  // beforeunload 和 pagehide 会连着触发，内容一样就只留一条。
+  if (key === historyLastKey && now - historySentAt < 3000) return;
+  historyLastKey = key;
+  historySentAt = now;
+  // 拿不到 sendBeacon（少见）时退回普通请求，keepalive 一样能在离页时发出。
+  if (!navigator.sendBeacon) { postHistory(entry, true); return; }
+  try {
+    navigator.sendBeacon("/api/history", new Blob([JSON.stringify(entry)], { type: "application/json" }));
+  } catch (e) { /* 忽略 */ }
+}
+function historyMetaText(count) {
+  const file = state.historyFile || "";
+  if (!file) return count + " 本 · 阅读历史只在本机浏览器里";
+  const name = file.split(/[\\/]/).pop() || file;
+  return count + " 本 · 阅读历史写入项目里的 " + name;
+}
+/** 启动时把项目里的历史并进书架：换浏览器/清了数据也能看到「最近在读」。 */
+async function hydrateHistory() {
+  let data = null;
+  try {
+    const resp = await fetch("/api/history?limit=200", { cache: "no-store" });
+    data = resp.ok ? await resp.json() : null;
+  } catch (e) { data = null; }
+  if (!data || !Array.isArray(data.entries)) return;
+  state.historyFile = data.file || "";
+  const items = loadShelf();
+  let changed = false;
+  data.entries.forEach((entry) => {
+    const id = Number(entry.id);
+    if (!id) return;
+    const at = Date.parse(entry.read_at || "") || Date.now();
+    const idx = items.findIndex((it) => Number(it.id) === id);
+    if (idx < 0) {
+      items.push({
+        id: id,
+        title: entry.title || ("小说 " + id),
+        user: entry.user || "",
+        seriesId: entry.series_id || null,
+        seriesTitle: entry.series_title || "",
+        progress: typeof entry.progress === "number" ? entry.progress : 0,
+        chapterIndex: entry.chapter_index,
+        at: at,
+        fromHistory: true,
+      });
+      changed = true;
+      return;
+    }
+    const local = items[idx];
+    // 服务器上的记录可能更新（比如换了浏览器读到更后面）：只补更新的部分，不覆盖本机书名。
+    if (typeof entry.progress === "number" && at >= Number(local.at || 0) &&
+        Number(local.progress || 0) !== Number(entry.progress)) {
+      local.progress = entry.progress;
+      local.at = at;
+      changed = true;
+    }
+  });
+  if (changed) {
+    items.sort((a, b) => Number(b.at || 0) - Number(a.at || 0));
+    saveShelf(items);
+  }
+  if (state.view === "list" && state.source === "shelf") renderShelf();
+}
+
+/* ---------------- 收藏（上游 + 项目里的 bookmarks.jsonl） ----------------
+   pixiv 的 app 接口只有收藏的「加 / 删」，没有「列出我收藏的小说」，所以点收藏时
+   两边都写：上游跟着变（官网也能看到），本地台账照记（上游抖动也不丢收藏列表）。 */
+let favLoaded = false;
+async function loadFavs(force) {
+  if (favLoaded && !force) return state.favList;
+  try {
+    const data = await callApi("/bookmarks", { limit: 200 });
+    state.favList = (data && data.entries) || [];
+    state.favIds = state.favList.map((e) => Number(e.id));
+  } catch (err) { /* 服务是旧版 / 离线：收藏按钮点不动，但书照读 */ }
+  favLoaded = true;
+  renderFavButton();
+  return state.favList;
+}
+function isFav(id) { return state.favIds.indexOf(Number(id)) >= 0; }
+function favEntryOf(novel, restrict) {
+  const series = (novel && novel.series) || {};
+  const user = (novel && novel.user) || {};
+  return {
+    id: Number(novel.id),
+    title: novel.title || "",
+    user: user.name || "",
+    user_id: Number(user.id) || null,
+    series_id: series.id ? Number(series.id) : null,
+    series_title: series.title || "",
+    restrict: restrict || "public",
+  };
+}
+async function toggleFav(novel, restrict) {
+  const id = Number((novel && novel.id) || 0);
+  if (!id) return;
+  const on = !isFav(id);
+  try {
+    const data = on
+      ? await callApiPost("/bookmarks", favEntryOf(novel, restrict))
+      : await callApiPost("/bookmarks/delete", { id: id });
+    if (on) {
+      state.favIds = state.favIds.concat([id]);
+      state.favList = [(data && data.entry) || favEntryOf(novel, restrict)].concat(state.favList);
+    } else {
+      state.favIds = state.favIds.filter((v) => v !== id);
+      state.favList = state.favList.filter((e) => Number(e.id) !== id);
+    }
+    const synced = !data || data.synced !== false;
+    showToast((on ? "已收藏" : "已取消收藏") + (synced ? "" : "（pixiv 那边没同步上，本地已记下）"));
+  } catch (err) {
+    showToast("收藏失败：" + err.message);
+  }
+  renderFavButton();
+  if (state.view === "list" && state.source === "bookmarks") renderFavs();
+}
+function renderFavButton() {
+  const btn = $("btn-fav");
+  if (!btn) return;
+  const cur = state.current || {};
+  const on = cur.novel ? isFav(cur.novel.id) : false;
+  btn.textContent = on ? "已收藏" : "收藏";
+  btn.classList.toggle("on", on);
+}
+async function renderFavs() {
+  state.source = "bookmarks";
+  showView("list");
+  $("btn-more").hidden = true;
+  $("list-meta").textContent = "正在读取收藏…";
+  const list = await loadFavs(true);
+  if (state.view !== "list" || state.source !== "bookmarks") return;
+  $("list-meta").textContent = list.length
+    ? (list.length + " 本 · 收藏记在项目里的 bookmarks.jsonl")
+    : "还没有收藏：打开一本书，点工具条上的「收藏」";
+  if (!list.length) { $("grid").innerHTML = '<div class="empty">收藏为空</div>'; return; }
+  state.seriesKind = "novel";
+  state.list = list.map((e) => ({
+    id: e.id,
+    title: e.title,
+    user: { name: e.user, id: e.user_id },
+    series: e.series_id ? { id: e.series_id, title: e.series_title } : null,
+  }));
+  $("grid").innerHTML = state.list.map(novelCardHtml).join("");
+}
+
+/* ---------------- 追更（上游 watchlist） ---------------- */
+function seriesOf(novel) { return (novel && novel.series) || null; }
+async function toggleWatch(novel, forceOn) {
+  const series = seriesOf(novel);
+  if (!series || !series.id) { showToast("这本不属于连载系列，没法追更"); return; }
+  const btn = state.view === "series" ? $("series-watch") : $("btn-watch");
+  const on = typeof forceOn === "boolean" ? forceOn : !(btn && btn.classList.contains("on"));
+  try {
+    await callApiPost(on ? "/watchlist/novel/add" : "/watchlist/novel/delete", { series_id: String(series.id) });
+    setWatchButton(on);
+    showToast(on ? "已追更：" + (series.title || series.id) : "已取消追更");
+  } catch (err) { showToast("追更失败：" + err.message); }
+}
+function setWatchButton(on) {
+  for (const btn of [$("btn-watch"), $("series-watch")]) {
+    if (!btn) continue;
+    btn.classList.toggle("on", !!on);
+    if (btn === $("series-watch")) btn.textContent = on ? "已追更" : "追更";
+    else if (btn === $("btn-watch")) btn.textContent = on ? "已追更" : "追更";
+  }
+}
+
+/* ---------------- 下载记录（项目里的 downloads.jsonl） ----------------
+   粒度是「书 + 章节」：主键 bookId#chapterIndex，所以同一系列名下两个不同的
+   「第一章」（两个不同 book_id）是两条互不覆盖的记录。同一个 merge_key
+   （系列名归一化）下的章节可以合并成一个 EPUB 导出。 */
+const MERGE_KEY_MAX = 120;
+function mergeKeyOf(novel) {
+  const series = (novel && novel.series) || {};
+  const title = String((series.title || (novel && novel.title) || "")).trim();
+  return title.replace(/\s+/g, "").toLowerCase().slice(0, MERGE_KEY_MAX);
+}
+function mergeTitleOf(novel) {
+  const series = (novel && novel.series) || {};
+  return series.title || (novel && novel.title) || "未命名";
+}
+async function refreshDownloadMarks(seriesId) {
+  let data = null;
+  try { data = await callApi("/downloads", Object.assign({ limit: 500 }, seriesId ? { series_id: seriesId } : {})); }
+  catch (err) { return null; }
+  state.dlAll = (data && data.entries) || [];
+  state.dlMarks = {};
+  state.dlAll.forEach((e) => { state.dlMarks[e.book_id + "#" + (e.chapter_index || 0)] = e; });
+  state.dlSeries = (data && data.series) || {};
+  state.dlGroups = groupDownloads(state.dlAll, mergeSeriesOn());
+  return data;
+}
+/** 按系列名归组（可在配置里关掉：关掉后同一个系列名下的不同系列各成一组）。 */
+function groupDownloads(entries, mergeByName) {
+  const byName = mergeByName === undefined ? true : !!mergeByName;
+  const groups = new Map();
+  (entries || []).forEach((e) => {
+    const key = byName
+      ? (e.merge_key || mergeKeyOf({ series: { title: e.series_title }, title: e.title }))
+      : ("series:" + (e.series_id || ("book:" + e.book_id)));
+    if (!groups.has(key)) groups.set(key, { key: key, title: e.series_title || e.title || key, author: e.user || "", entries: [], at: "" });
+    const group = groups.get(key);
+    group.entries.push(e);
+    if (String(e.at || "") > String(group.at || "")) group.at = e.at || "";
+  });
+  const list = [...groups.values()];
+  list.forEach((group) => {
+    group.entries.sort((a, b) => (a.chapter_index || 0) - (b.chapter_index || 0) || String(a.title).localeCompare(String(b.title)));
+    // 同一章号出现多次 = 同名的两个系列各有一个「第 N 章」（用户明确提过「一个系列下两个不同的第一章」）。
+    // 章号相同的那些记录在卡片上额外标出 book_id，提示里按章号报个数，免得把「第二章重了」也说成第一章。
+    const byIndex = new Map();
+    group.entries.forEach((e) => {
+      const i = chapterIndexOf(e);
+      byIndex.set(i, (byIndex.get(i) || 0) + 1);
+    });
+    group.dupeIndexes = [...byIndex.entries()].filter((pair) => pair[1] > 1).sort((a, b) => a[0] - b[0]);
+    group.dupes = new Set(group.entries
+      .filter((e) => (byIndex.get(chapterIndexOf(e)) || 0) > 1)
+      .map((e) => Number(e.book_id)));
+  });
+  return list.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+}
+function chapterIndexOf(entry) { return Math.max(0, Number(entry.chapter_index || 0)); }
+function chapterLabelOf(entry, index) {
+  const no = "第 " + (index === undefined ? chapterIndexOf(entry) + 1 : index + 1) + " 章";
+  const name = entry.chapter_title || entry.title || "";
+  return no + (name && name !== entry.title ? "　" + name : "");
+}
+async function recordDownload(entry) {
+  try { await callApiPost("/downloads", entry); }
+  catch (err) { /* 记录失败不影响已经导出的文件 */ }
+}
+function downloadRecordOf(opts) {
+  return {
+    book_id: Number(opts.bookId),
+    chapter_index: Number(opts.chapterIndex || 0),
+    chapter_id: Number(opts.chapterId || opts.bookId),
+    chapter_title: opts.chapterTitle || "",
+    title: opts.title || "",
+    user: opts.user || "",
+    series_id: opts.seriesId ? Number(opts.seriesId) : null,
+    series_title: opts.seriesTitle || "",
+    merge_key: opts.mergeKey || "",
+    format: "epub",
+    file: opts.file || "",
+    bytes: Number(opts.bytes || 0),
+    chapters: Number(opts.chapters || 1),
+  };
+}
+/** 系列是否已经整本下载过（用于「跳过已下载」）。 */
+function seriesFullyDownloaded(chapters) {
+  if (!chapters || !chapters.length) return false;
+  return chapters.every((chapter, i) => {
+    const mark = state.dlSeries[String(i)] || state.dlMarks[chapter.id + "#" + i];
+    return !!mark;
+  });
+}
+function skipDownloadedOn() {
+  const cfg = (state.serverConfig && state.serverConfig.config) || {};
+  return cfg.skip_downloaded !== false;
+}
+function mergeSeriesOn() {
+  const cfg = (state.serverConfig && state.serverConfig.config) || {};
+  return cfg.merge_series !== false;
+}
+/** 把一组「同系列名」的下载记录合并成一个 EPUB（两个不同的第一章都各占一章）。 */
+async function downloadMergeGroup(group) {
+  if (downloadBlocked()) return;
+  if (!group || !group.entries.length) return;
+  state.busy = true;
+  try {
+    const entries = group.entries;
+    const units = [];
+    const failed = [];
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const label = chapterLabelOf(entry) + (group.dupes.has(entry.book_id) ? "（#" + entry.book_id + "）" : "");
+      showLoading("合并导出 " + (i + 1) + " / " + entries.length + " 章…");
+      try {
+        const content = await fetchContentWithRetry(entry.book_id);
+        units.push({ title: label, raw: content.text, images: content.images });
+      } catch (err) {
+        units.push({ title: label, raw: "", images: {}, html: '<p class="ph">（这一章没取到正文）</p>' });
+        failed.push(label + "（" + err.message + "）");
+      }
+      if (i < entries.length - 1) await sleep(SERIES_FETCH_GAP);
+    }
+    if (!units.some((unit) => unit.raw)) { showToast("合并导出失败：所有章节都没取到正文"); return; }
+    const notes = [];
+    if (failed.length) notes.push("本次未取到正文的章节：" + failed.join("；"));
+    notes.push("按系列名「" + group.title + "」合并 " + entries.length + " 章。");
+    showLoading("正在准备 EPUB…");
+    const result = await buildBookEpub({
+      title: group.title,
+      author: group.author || "",
+      units: units,
+      head: ["《" + group.title + "》", "作者：" + (group.author || "未知"), "共 " + entries.length + " 章（按系列名合并）"],
+      notes: notes,
+    });
+    const name = safeFileName(group.title, "（合并" + entries.length + "章）");
+    state.lastDownload = Date.now();
+    downloadBlob(name, result.blob);
+    showToast("已导出合并 EPUB：" + name + (failed.length ? "（缺 " + failed.length + " 章）" : ""));
+  } catch (err) {
+    showToast("合并导出失败：" + err.message);
+  } finally {
+    state.busy = false;
+    hideLoading();
+  }
+}
+
+/* ---------------- 项目配置与本地书架（data/settings.json + 目录扫描） ---------------- */
+async function loadServerConfig(force) {
+  if (state.serverConfig && !force) return state.serverConfig;
+  try { state.serverConfig = await callApi("/config"); }
+  catch (err) { state.serverConfig = null; }
+  applyServerConfig();
+  return state.serverConfig;
+}
+function applyServerConfig() {
+  const hint = $("set-data-hint");
+  const box = $("set-warn");
+  const data = state.serverConfig;
+  box.hidden = true;
+  box.textContent = "";
+  if (!data) {
+    hint.textContent = "读不到项目配置（服务可能是旧版本）：本地书架与下载选项不可用。";
+    return;
+  }
+  const cfg = data.config || {};
+  const migrated = (data.migrated_files || []).length;
+  hint.textContent = "配置文件：" + data.file + (migrated ? "（已从项目根搬来：" + data.migrated_files.join("、") + "）" : "");
+  const warn = [];
+  (data.warnings || []).forEach((line) => warn.push(line));
+  const w = data.writable || null;
+  if (w && w.ok === false) {
+    warn.push("数据目录写不进去：" + (w.reason || "未知原因") + "（" + w.dir + "）。" +
+      "个人数据只写在项目目录里；安卓 / Termux 上请把项目放在 Termux 家目录（例如 ~/pixiv-bridge），" +
+      "不要把数据目录指到 /sdcard 下的路径——那种目录通常读得到却写不进，保存配置就会失败。");
+  }
+  if (warn.length) {
+    box.hidden = false;
+    box.textContent = warn.join("\n");
+  }
+  $("set-merge").value = cfg.merge_series === false ? "0" : "1";
+  $("set-skip").value = cfg.skip_downloaded === false ? "0" : "1";
+  $("set-depth").value = String(cfg.scan_depth || 3);
+  renderLibDirs(cfg.library_dirs || [], (data.library && data.library.missing) || []);
+}
+function renderLibDirs(dirs, missing) {
+  const box = $("set-lib-list");
+  if (!dirs.length) { box.innerHTML = ""; return; }
+  box.innerHTML = dirs.map((dir) => {
+    const gone = (missing || []).indexOf(dir) >= 0;
+    return '<div class="dir"><span title="' + esc(dir) + '">' + esc(dir) + (gone ? "（不存在）" : "") + "</span>" +
+      '<button class="rm plain" data-librm="' + esc(dir) + '">移除</button></div>';
+  }).join("");
+}
+async function saveServerConfig(patch) {
+  try {
+    state.serverConfig = await callApiPost("/config", patch, "PUT");
+    state.library = null;
+    applyServerConfig();
+    showToast(state.serverConfig && state.serverConfig.payload_error
+      ? "已保存：" + state.serverConfig.payload_error
+      : "已写入项目配置");
+    if (state.view === "list" && state.source === "shelf") renderShelf();
+  } catch (err) {
+    showToast("保存失败：" + err.message);
+    loadServerConfig(true);   // 顺便刷新「数据目录能不能写」的提示
+  }
+}
+async function loadLibrary(force) {
+  if (state.library && !force) return state.library;
+  try { state.library = await callApi("/library"); }
+  catch (err) { state.library = null; }
+  return state.library;
+}
+
+/* ---------------- 作者（按作者搜索 / 作者主页 / 我的关注） ---------------- */
+function userPreviewOf(item) {
+  const user = (item && (item.user || item)) || {};
+  return { user: user, novels: (item && item.novels) || null, illusts: (item && item.illusts) || null };
+}
+function avatarUrlOf(user) {
+  const urls = (user && user.profile_image_urls) || {};
+  return urls.medium || urls.px_170x170 || urls.large || urls.square_medium || "";
+}
+function userCardHtml(item) {
+  const preview = userPreviewOf(item);
+  const user = preview.user || {};
+  const subs = [];
+  if (user.account) subs.push("@" + esc(user.account));
+  if (Array.isArray(preview.novels)) subs.push(preview.novels.length + " 部小说");
+  else if (num(preview.novels) !== null) subs.push(fmtNum(preview.novels) + " 部小说");
+  if (user.is_followed) subs.push("已关注");
+  const avatar = avatarUrlOf(user);
+  const name = user.name || ("作者 " + user.id);
+  return '<button class="novel-card" data-user="' + esc(user.id) + '">' +
+    '<span class="cover" aria-hidden="true">' + esc(String(name).slice(0, 1)) + (avatar
+      ? '<img loading="lazy" decoding="async" src="' + esc(avatar) + '" alt="" onerror="this.remove()" />'
+      : "") + "</span>" +
+    '<span class="novel-body">' +
+      '<span class="novel-title">' + esc(name) + "</span>" +
+      '<span class="novel-sub">' + subs.map((s) => "<span>" + s + "</span>").join("") + "</span>" +
+    "</span></button>";
+}
+function authorOf(item) {
+  const user = (item && item.user) || {};
+  return user.id ? user : null;
+}
+async function openUser(id, fallbackName) {
+  showView("user");
+  window.scrollTo(0, 0);
+  showLoading("加载作者…");
+  state.userView = { kind: "user", id: Number(id), user: null, profile: null, items: [], nextUrl: null, followed: false };
+  $("user-head").innerHTML = '<div class="u-avatar">' + esc(String(fallbackName || "作").slice(0, 1)) + "</div>" +
+    '<div class="u-body"><h2>' + esc(fallbackName || ("作者 " + id)) + "</h2></div>";
+  $("user-meta").textContent = "正在加载…";
+  $("user-grid").innerHTML = "";
+  $("user-more").hidden = true;
+  $("user-follow").hidden = false;
+  $("user-follow").classList.remove("on");
+  $("user-follow").textContent = "关注";
+  $("user-pixiv").hidden = false;
+  try {
+    // 详情与作品列表分开取：作品接口在「作者没写过小说」时也会正常回空数组
+    const [detail, novels] = await Promise.all([
+      callApi("/user/" + id).catch(() => null),
+      callApi("/user/" + id + "/novels?next_url=").catch(() => null),
+    ]);
+    const user = (detail && detail.user) || {};
+    const profile = (detail && detail.profile) || {};
+    state.userView.user = user;
+    state.userView.profile = profile;
+    state.userView.followed = !!user.is_followed;
+    renderUserHead(user, profile);
+    const items = (novels && novels.novels) || [];
+    state.userView.items = items;
+    state.userView.nextUrl = (novels && novels.next_url) || null;
+    state.seriesKind = "novel";
+    $("user-grid").innerHTML = items.length ? items.map(novelCardHtml).join("") : '<div class="empty">这位作者还没有公开小说</div>';
+    $("user-meta").textContent = [user.name, items.length + " 部小说" + (state.userView.nextUrl ? "（可继续加载）" : ""),
+      profile.total_illusts !== undefined ? (fmtNum(profile.total_illusts) + " 张插画") : ""].filter(Boolean).join(" · ");
+    $("user-more").hidden = !state.userView.nextUrl;
+    document.title = (user.name || ("作者 " + id)) + " · Pixiv 小说阅读器";
+  } catch (err) {
+    $("user-meta").textContent = "加载失败：" + err.message;
+    $("user-grid").innerHTML = '<div class="empty">加载失败：' + esc(err.message) + "</div>";
+  } finally { hideLoading(); }
+}
+function renderUserHead(user, profile) {
+  const avatar = avatarUrlOf(user);
+  const subs = [];
+  if (user.account) subs.push("@" + esc(user.account));
+  if (profile.total_novels !== undefined) subs.push(fmtNum(profile.total_novels) + " 部小说");
+  if (profile.total_illusts !== undefined) subs.push(fmtNum(profile.total_illusts) + " 张插画");
+  if (profile.total_follow_users !== undefined) subs.push("关注 " + fmtNum(profile.total_follow_users));
+  subs.push(user.is_followed ? "已关注" : "未关注");
+  $("user-head").innerHTML =
+    '<div class="u-avatar">' + (avatar
+      ? '<img src="' + esc(avatar) + '" alt="" style="width:100%;height:100%;border-radius:50%;object-fit:cover" onerror="this.remove()" />'
+      : esc(String(user.name || "作").slice(0, 1))) + "</div>" +
+    '<div class="u-body"><h2>' + esc(user.name || ("作者 " + user.id)) + "</h2>" +
+      '<div class="u-sub">' + subs.map((s) => "<span>" + s + "</span>").join("") + "</div>" +
+      (user.comment ? '<div class="u-comment">' + esc(user.comment) + "</div>" : "") + "</div>";
+  // 关注状态在两处显示（按钮 + 概况行），统一走 setFollowUi，别让它们互相矛盾
+  const chip = $("user-head").querySelector(".u-sub span:last-child");
+  if (chip) chip.dataset.followChip = "1";
+  setFollowUi(!!user.is_followed);
+  $("user-pixiv").onclick = () => window.open("https://www.pixiv.net/users/" + user.id, "_blank", "noopener");
+}
+function setFollowUi(on) {
+  $("user-follow").textContent = on ? "已关注" : "关注";
+  $("user-follow").classList.toggle("on", on);
+  const chip = document.querySelector("#user-head [data-follow-chip]");
+  if (chip) chip.textContent = on ? "已关注" : "未关注";
+}
+async function toggleFollow() {
+  const uv = state.userView;
+  if (!uv || !uv.id) return;
+  const on = !uv.followed;
+  try {
+    if (on) await callApiPost("/user/follow/add", { user_id: uv.id, restrict: "public" });
+    else await callApiPost("/user/follow/delete", { user_id: uv.id });
+    uv.followed = on;
+    if (uv.user) uv.user.is_followed = on;
+    setFollowUi(on);
+    showToast(on ? "已关注" : "已取消关注");
+  } catch (err) { showToast("关注失败：" + err.message); }
+}
+/** 我的关注：用 /api/auth/status 里的自己的 id 拉 /user/{id}/following。 */
+async function openFollowing() {
+  showView("user");
+  window.scrollTo(0, 0);
+  $("user-follow").hidden = true;
+  $("user-more").hidden = true;
+  $("user-pixiv").hidden = true;
+  $("user-meta").textContent = "正在加载…";
+  $("user-grid").innerHTML = "";
+  state.userView = { kind: "following", id: null, items: [], nextUrl: null };
+  $("user-head").innerHTML = '<div class="u-avatar">关</div><div class="u-body"><h2>我关注的人</h2>' +
+    '<div class="u-sub"><span>来自 pixiv 关注列表</span></div></div>';
+  document.title = "我关注的人 · Pixiv 小说阅读器";
+  showLoading("加载关注列表…");
+  try {
+    if (!state.myId) {
+      const status = await callApi("/auth/status");
+      state.myId = (status && status.user && Number(status.user.id)) || null;
+    }
+    if (!state.myId) throw new Error("还不知道当前账号 id，请先确认登录状态");
+    const data = await callApi("/user/" + state.myId + "/following", { restrict: $("q-restrict").value });
+    const items = (data && (data.user_previews || data.users)) || [];
+    state.userView.items = items;
+    state.userView.nextUrl = (data && data.next_url) || null;
+    renderUserCards(items);
+    $("user-meta").textContent = "共 " + items.length + " 人" + (state.userView.nextUrl ? "（可继续加载）" : "");
+    $("user-more").hidden = !state.userView.nextUrl;
+  } catch (err) {
+    $("user-meta").textContent = "加载失败：" + err.message;
+    $("user-grid").innerHTML = '<div class="empty">加载失败：' + esc(err.message) + "</div>";
+  } finally { hideLoading(); }
+}
+function renderUserCards(items) {
+  $("user-grid").innerHTML = items.length
+    ? items.map(userCardHtml).join("")
+    : '<div class="empty">还没有关注任何作者</div>';
+}
+/** 作者页 / 关注列表的「加载更多」：两条路径的下一页接口不同，分开处理。 */
+async function userMore() {
+  const uv = state.userView;
+  if (!uv || !uv.nextUrl) return;
+  const token = ++state.loadToken;
+  setMoreBusy(true);
+  try {
+    if (uv.kind === "following") {
+      const data = await callApi("/next", { url: uv.nextUrl });
+      if (token !== state.loadToken) return;
+      const items = (data && (data.user_previews || data.users)) || [];
+      uv.items = uv.items.concat(items);
+      renderUserCards(uv.items);
+      uv.nextUrl = (data && data.next_url) || null;
+      $("user-meta").textContent = "共 " + uv.items.length + " 人" + (uv.nextUrl ? "（可继续加载）" : "");
+    } else {
+      const data = await callApi("/next", { url: uv.nextUrl });
+      if (token !== state.loadToken) return;
+      const items = (data && data.novels) || [];
+      uv.items = uv.items.concat(items);
+      state.seriesKind = "novel";
+      $("user-grid").innerHTML = uv.items.map(novelCardHtml).join("");
+      uv.nextUrl = (data && data.next_url) || null;
+      $("user-meta").textContent = [uv.user && uv.user.name, uv.items.length + " 部小说" + (uv.nextUrl ? "（可继续加载）" : "")].filter(Boolean).join(" · ");
+    }
+    $("user-more").hidden = !uv.nextUrl;
+  } catch (err) {
+    showToast("加载失败：" + err.message);
+  } finally { setMoreBusy(false); }
+}
+
+/* ---------------- 文本归一化 ---------------- */
+function looksLikeHtml(value) { return /<\/?[a-z!][\s\S]*>/i.test(value); }
+function htmlToText(html) {
+  let doc;
+  try { doc = new DOMParser().parseFromString(html, "text/html"); }
+  catch (e) { return html; }
+  doc.querySelectorAll("rt, rp").forEach((el) => el.remove());            // 去掉振り仮名
+  // 正文若是 HTML 形状，<img> 也当成插图保留下来（转成标记，交给 parseNovelText 处理）
+  doc.querySelectorAll("img").forEach((el) => el.replaceWith("\n[[imgurl:" + (el.getAttribute("src") || "") + "]]\n"));
+  doc.querySelectorAll("br").forEach((el) => el.replaceWith("\n"));
+  doc.querySelectorAll("p, div, li, h1, h2, h3, h4, blockquote, section").forEach((el) => el.append("\n"));
+  const text = doc.body ? doc.body.textContent || "" : html;
+  return text.replace(/\r\n?/g, "\n").replace(/[ \t\u00a0]+/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+function normalizeText(value) {
+  const text = String(value == null ? "" : value).replace(/\r\n?/g, "\n");
+  if (looksLikeHtml(text)) return htmlToText(text);
+  return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+/** 上游 /v1/novel/text 的确切结构未在文档中固定，这里对多种形状做容错。 */
+function extractText(payload) {
+  const KEYS = ["novel_text", "text", "content", "body", "novel_content"];
+  if (typeof payload === "string") {
+    const text = normalizeText(payload);
+    return { text: text, shape: text ? "raw-string" : "unknown" };
+  }
+  if (payload && typeof payload === "object") {
+    for (const key of KEYS) {
+      const value = payload[key];
+      if (typeof value === "string" && value.trim()) return { text: normalizeText(value), shape: key };
+      if (value && typeof value === "object") {
+        for (const inner of KEYS) {
+          if (typeof value[inner] === "string" && value[inner].trim()) {
+            return { text: normalizeText(value[inner]), shape: key + "." + inner };
+          }
+        }
+      }
+    }
+  }
+  return { text: "", shape: "unknown" };
+}
+
+/* ---------------- 正文标记：插图 / 章节 / 分页 / ruby / 链接 ----------------
+   Pixiv 正文用的是标记语法（与官方 App 的 contentRegexp 一致）：
+     [newpage]                   分页
+     [chapter:标题]               章节标题
+     [uploadedimage:ID]          作者随小说上传的图，URL 在 payload.novel_images[ID]
+     [pixivimage:ID]             引用 pixiv 插画（多页写作 [pixivimage:ID-页码]）
+     [[rb:汉字 > 假名]]           振り仮名
+     [[jumpuri:标题 > url]]       外链
+     [jump:N]                    跳到第 N 页
+   另外 HTML 形状的正文里 <img> 会被 htmlToText 换成 [[imgurl:URL]]。 */
+const NOVEL_MARKER_RE = /\[newpage\]|\[chapter:([^\]]*)\]|\[uploadedimage:([0-9]+)\]|\[pixivimage:([0-9]+)(?:-([0-9]+))?\]|\[\[rb:([^\]]*?)\s*>\s*([^\]]*?)\]\]|\[\[jumpuri:([^\]]*?)\s*>\s*([^\]]*?)\]\]|\[jump:([0-9]+)\]|\[\[imgurl:([^\]]+)\]\]/g;
+
+function parseNovelText(raw) {
+  const nodes = [];
+  const text = String(raw == null ? "" : raw);
+  const pushText = (value) => { if (value) nodes.push({ t: "text", v: value }); };
+  NOVEL_MARKER_RE.lastIndex = 0;
+  let last = 0;
+  let m;
+  while ((m = NOVEL_MARKER_RE.exec(text)) !== null) {
+    pushText(text.slice(last, m.index));
+    last = m.index + m[0].length;
+    if (m[1] !== undefined) nodes.push({ t: "chapter", v: m[1].trim() });
+    else if (m[2] !== undefined) nodes.push({ t: "img", kind: "uploaded", id: m[2] });
+    else if (m[3] !== undefined) nodes.push({ t: "img", kind: "pixiv", id: m[3], page: m[4] ? parseInt(m[4], 10) : 0 });
+    else if (m[5] !== undefined) nodes.push({ t: "ruby", v: m[5], r: m[6] });
+    else if (m[7] !== undefined) nodes.push({ t: "link", v: m[7], href: m[8] });
+    else if (m[9] !== undefined) nodes.push({ t: "jump", n: m[9] });
+    else if (m[10] !== undefined) nodes.push({ t: "img", kind: "url", url: m[10] });
+    else nodes.push({ t: "page" });
+  }
+  pushText(text.slice(last));
+  return nodes;
+}
+/** 把标记换成可读纯文本（「复制全文」用）。 */
+function novelPlainText(raw, images) {
+  let n = 0;
+  const out = String(raw == null ? "" : raw).replace(
+    NOVEL_MARKER_RE,
+    (all, chapter, upId, pixivId, pixivPage, rbWord, rbRuby, linkText, linkUrl, jumpN, imgUrl) => {
+      if (chapter !== undefined) return "\n\n【" + chapter.trim() + "】\n\n";
+      if (upId !== undefined) { n += 1; return "［插图 " + n + "］"; }
+      if (pixivId !== undefined) { n += 1; return "［插图 " + n + "：pixiv " + pixivId + (pixivPage ? "-" + pixivPage : "") + "］"; }
+      if (rbWord !== undefined) return rbRuby ? rbWord + "（" + rbRuby + "）" : rbWord;
+      if (linkText !== undefined) return linkText + "（" + linkUrl + "）";
+      if (jumpN !== undefined) return "［第 " + jumpN + " 页］";
+      if (imgUrl !== undefined) { n += 1; return "［插图 " + n + "］"; }
+      return "\n\n";   // [newpage]
+    }
+  );
+  return out.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "");
+}
+/* 图片映射在几种接口形状里叫法不同（网页版 textEmbeddedImages、 snake_case、
+   桥归一化后的 novel_images），全部认下来：取正文插图时不能因为键名不同就当作没有图。 */
+const NOVEL_IMAGE_KEYS = [
+  "novel_images", "novelImages", "textEmbeddedImages", "text_embedded_images",
+  "embeddedImages", "embedded_images", "novel_image", "images",
+];
+function extractImages(payload) {
+  const shapes = [payload, payload && payload.novel, payload && payload.text, payload && payload.data];
+  for (const shape of shapes) {
+    if (!shape || typeof shape !== "object") continue;
+    for (const key of NOVEL_IMAGE_KEYS) {
+      const value = shape[key];
+      if (value && typeof value === "object" && !Array.isArray(value)) return value;
+    }
+  }
+  return {};
+}
+/** 插图 URL 各尺寸的键名在网页/App 两套命名里不同，这里统一取一张够清晰的。
+    （桥会把 novel_images 归一化成 large/original/medium/thumb；这里兼容原始
+    形状：旧版的 1200x1200 档位名、以及 original_image_url 这类网页键名。） */
+function pickImageUrl(entry) {
+  if (!entry) return "";
+  if (typeof entry === "string") return entry;
+  if (Array.isArray(entry)) {
+    for (const item of entry) {
+      const url = pickImageUrl(item);
+      if (url) return url;
+    }
+    return "";
+  }
+  if (typeof entry !== "object") return "";
+  const src = entry.urls || entry.image_urls || entry.imageUrls || entry;
+  if (typeof src === "string") return src;
+  if (!src || typeof src !== "object") {
+    return entry.url || entry.src || entry.link || "";
+  }
+  return src.large || src["1200x1200"] || src.large_image_url || src.original ||
+    src.original_image_url || src.originalImageUrl ||
+    src.medium || src["480mw"] || src["540x540"] || src.medium_image_url ||
+    src.thumb || src["128x128"] || src.square_medium_image_url || src.thumbnail_image_url ||
+    src.url || src.src || "";
+}
+const illustCache = new Map();
+function pickIllustUrl(illust, page) {
+  if (!illust) return "";
+  const pages = illust.meta_pages;
+  if (page && Array.isArray(pages) && pages[page - 1]) return pickImageUrl(pages[page - 1].image_urls || pages[page - 1]);
+  return pickImageUrl(illust.image_urls || illust.meta_single_page || illust);
+}
+async function resolvePixivImage(id, page) {
+  let illust = illustCache.get(id);
+  if (illust === undefined) {
+    const data = await callApi("/illust/" + id);
+    illust = (data && (data.illust || data.illust_detail)) || data;
+    illustCache.set(id, illust);
+  }
+  return pickIllustUrl(illust, page);
+}
+function imgProxyUrl(url) { return "/img?url=" + encodeURIComponent(url); }
+/** 正文里的一个插图块：先占位，拿到 URL 后再把 <img> 填进去。 */
+function novelFigure(node, images, index) {
+  const fig = document.createElement("figure");
+  fig.className = "novel-fig pending";
+  const ph = document.createElement("div");
+  ph.className = "ph";
+  ph.textContent = "插图 " + index + " 加载中…";
+  const img = document.createElement("img");
+  img.loading = "lazy";
+  img.decoding = "async";
+  img.alt = "插图 " + index;
+  const caption = document.createElement("figcaption");
+  const where = node.kind === "uploaded" ? "作者上传"
+    : node.kind === "pixiv" ? ("pixiv 插画 " + node.id + (node.page ? " 第 " + node.page + " 页" : ""))
+    : "图片";
+  caption.textContent = "插图 " + index + " · " + where;
+  const fail = (message) => {
+    fig.classList.remove("pending");
+    fig.classList.add("missing");
+    if (img.parentNode) img.remove();
+    ph.textContent = "插图 " + index + "：" + message + "。可点上方「Pixiv 原页」在原站查看。";
+  };
+  const setSrc = (url) => {
+    if (!url) {
+      // 报错里带上标记 id 与本页解析到的图片映射，方便反馈时定位（个人使用，不展示在正文里）。
+      console.warn("[插图] 没有取到图片地址", node.kind, node.id, "已解析的图片键：", Object.keys(images || {}));
+      if (node.kind === "uploaded") {
+        const parsed = Object.keys(images || {}).length;
+        fail("没有取到图片地址（正文里的 uploadedimage " + node.id + "，" +
+          (parsed ? "本次解析到 " + parsed + " 张插图但都不匹配" : "本次没有解析到任何插图") + "）");
+      } else {
+        fail("没有取到图片地址（插画 " + node.id + "）");
+      }
+      return;
+    }
+    img.addEventListener("load", () => { if (ph.parentNode) ph.remove(); fig.classList.remove("pending"); });
+    img.addEventListener("error", () => fail("图片加载失败"));
+    img.src = imgProxyUrl(url);
+    fig.insertBefore(img, ph);
+    fig.appendChild(caption);
+  };
+  fig.appendChild(ph);
+  if (node.kind === "uploaded") setSrc(pickImageUrl(images && (images[node.id] || images[String(node.id)])));
+  else if (node.kind === "url") setSrc(node.url);
+  else {
+    resolvePixivImage(node.id, node.page)
+      .then((url) => (url ? setSrc(url) : fail("没有取到图片地址（插画 " + node.id + "）")))
+      .catch((err) => fail("插画信息取不到：" + ((err && err.message) || "未知错误")));
+  }
+  return fig;
+}
+/** 把归一化后的正文渲染成 DOM：纯文本走文本节点，插图/章节/分页/ruby 走元素。 */
+function renderNovelText(raw, images) {
+  const box = $("reader-text");
+  box.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  let index = 0;
+  for (const node of parseNovelText(raw)) {
+    if (node.t === "text") { frag.appendChild(document.createTextNode(node.v)); continue; }
+    if (node.t === "chapter") {
+      const h = document.createElement("h3");
+      h.className = "novel-chapter";
+      h.textContent = node.v;
+      frag.appendChild(h);
+    } else if (node.t === "page") {
+      const sep = document.createElement("div");
+      sep.className = "novel-page-sep";
+      sep.textContent = "翻页";
+      frag.appendChild(sep);
+    } else if (node.t === "jump") {
+      frag.appendChild(document.createTextNode("［第 " + node.n + " 页］"));
+    } else if (node.t === "ruby") {
+      const ruby = document.createElement("ruby");
+      ruby.appendChild(document.createTextNode(node.v));
+      const rt = document.createElement("rt");
+      rt.textContent = node.r;
+      ruby.appendChild(rt);
+      frag.appendChild(ruby);
+    } else if (node.t === "link") {
+      const a = document.createElement("a");
+      a.href = node.href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = node.v;
+      frag.appendChild(a);
+    } else if (node.t === "img") {
+      index += 1;
+      frag.appendChild(novelFigure(node, images, index));
+    }
+  }
+  box.appendChild(frag);
+}
+
+/* ---------------- 列表 ---------------- */
+function showView(name) {
+  state.view = name;
+  for (const view of ["list", "series", "reader", "user"]) {
+    $("view-" + view).hidden = view !== name;
+  }
+  // 回列表就把标题复位，免得停在「正文取不到」/上一本书的书名上
+  if (name === "list") document.title = BASE_TITLE;
+  setNavActive();
+}
+function setNavActive() {
+  for (const btn of $("nav").querySelectorAll("button")) {
+    const on = state.view === "list" && btn.dataset.source === state.source;
+    btn.classList.toggle("active", on);
+    if (on) btn.setAttribute("aria-current", "page"); else btn.removeAttribute("aria-current");
+  }
+}
+function setFilters() {
+  // 搜索框常驻；榜单 / 关注 各自多一行参数；排序与日期收在「筛选」里
+  const searchMode = state.source === "search";
+  $("filters-ranking").hidden = state.source !== "ranking";
+  $("filters-follow").hidden = state.source !== "follow";
+  $("q-sort").hidden = !searchMode;
+  $("q-start").hidden = !searchMode;
+  $("q-end").hidden = !searchMode;
+  $("q-date").hidden = searchMode;
+  const hasAdv = searchMode || state.source === "ranking";
+  $("adv-toggle").hidden = !hasAdv;
+  if (!hasAdv) setAdvOpen(false);
+}
+function setAdvOpen(open) {
+  // 排序 / 起止日期默认收起，手机上把首屏还给列表
+  $("adv-search").hidden = !open;
+  const toggle = $("adv-toggle");
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.textContent = open ? "筛选 ▴" : "筛选 ▾";
+}
+const SOURCE_LABELS = {
+  search: "搜索结果",
+  ranking: "小说榜单（日榜/周榜/月榜，来自 Pixiv）",
+  recommended: "为你推荐",
+  follow: "关注作者的新作",
+  watchlist: "追更的连载系列",
+  bookmarks: "我的收藏",
+  shelf: "我的书架",
+};
+function setNavSource(source) {
+  state.source = source;
+  setFilters();
+  setNavActive();
+  if (source === "shelf") { renderShelf(); return; }
+  if (source === "bookmarks") { renderFavs(); return; }
+  $("list-meta").textContent = SOURCE_LABELS[source] || "";
+  runQuery(source, false);
+}
+async function runQuery(source, more) {
+  // 关键词先校验再改 state.source：否则空关键词会切到「搜索」来源，却还显示着上一次的榜单
+  if (source === "search" && !$("q-word").value.trim()) { showToast("请输入搜索关键词"); return; }
+  if (!more) { state.source = source; setFilters(); setNavActive(); }
+  const token = ++state.loadToken;
+  let path = "", params = {}, key = "novels";
+  if (source === "search") {
+    const word = $("q-word").value.trim();
+    if ($("q-kind").value === "user") {
+      path = "/search/user"; key = "user_previews";
+      params = { word: word };
+    } else {
+      path = "/search/novel"; key = "novels";
+      params = { word: word, sort: $("q-sort").value, start_date: $("q-start").value, end_date: $("q-end").value };
+    }
+  } else if (source === "ranking") {
+    path = "/novel/ranking"; key = "novels";
+    params = { mode: $("q-mode").value, date: $("q-date").value };
+  } else if (source === "recommended") {
+    path = "/novel/recommended"; key = "novels";
+  } else if (source === "follow") {
+    path = "/novel/follow"; key = "novels";
+    params = { restrict: $("q-restrict").value };
+  } else if (source === "watchlist") {
+    path = "/watchlist/novel"; key = "novel_series";
+  } else {
+    return;
+  }
+  if (!more) { $("grid").innerHTML = ""; state.list = []; state.nextUrl = null; $("btn-more").hidden = true; }
+  if (more) setMoreBusy(true); else showLoading("加载中…");
+  try {
+    const data = more
+      ? await callApi("/next", { url: state.nextUrl })
+      : await callApi(path, params);
+    if (token !== state.loadToken || source !== state.source) return;
+    const added = (data && (data[key] || data.novels || data.novel_series)) || [];
+    state.list = (more ? state.list : []).concat(added);
+    state.nextUrl = (data && data.next_url) || null;
+    state.seriesKind = key === "novel_series" ? "series" : (key === "user_previews" ? "user" : "novel");
+    state.loaded = true;
+    // 翻页只追加新卡片：全量重建会让已加载的封面重新解码、丢掉滚动位置
+    if (more && added.length) $("grid").insertAdjacentHTML("beforeend", added.map(cardHtml).join(""));
+    else renderList();
+    $("list-meta").textContent = listMetaText(source);
+    $("btn-more").hidden = !state.nextUrl;
+  } catch (err) {
+    const hint = errorHint(err);
+    $("list-meta").textContent = "加载失败：" + err.message + (hint ? " — " + hint : "");
+    if (!more) $("grid").innerHTML = '<div class="empty">加载失败：' + esc(err.message) + "</div>";
+    showToast("加载失败：" + err.message);
+  } finally {
+    if (token === state.loadToken) { hideLoading(); setMoreBusy(false); }
+  }
+}
+function tagsOf(item) {
+  // 接口按 Accept-Language 返回等价的 translated_name，中文界面优先显示它
+  return (item && Array.isArray(item.tags) ? item.tags : [])
+    .map((t) => (t && (t.translated_name || t.name)) || "")
+    .filter(Boolean);
+}
+function coverOf(item) {
+  const urls = (item && item.image_urls) || {};
+  return urls.medium || urls.large || urls.square || urls.original || "";
+}
+function novelCardHtml(item) {
+  const user = (item && item.user) || {};
+  const subs = [];
+  if (user.name) subs.push(esc(user.name));
+  const length = num(item.text_length);
+  if (length !== null) subs.push(fmtNum(length) + " 字");
+  const bookmarks = num(item.total_bookmarks !== undefined ? item.total_bookmarks : item.bookmark_count);
+  if (bookmarks !== null) subs.push("♥ " + fmtNum(bookmarks));
+  if (item.series && item.series.title) subs.push("连载中");
+  const tags = tagsOf(item).slice(0, 3);
+  const cover = coverOf(item);
+  const title = item.title || ("小说 " + item.id);
+  return '<button class="novel-card" data-id="' + esc(item.id) + '">' +
+    '<span class="cover" aria-hidden="true">' + esc(String(title).slice(0, 1)) + (cover
+      ? '<img loading="lazy" decoding="async" src="/img?url=' + encodeURIComponent(cover) + '" alt="" onerror="this.remove()" />'
+      : "") + "</span>" +
+    '<span class="novel-body">' +
+      '<span class="novel-title">' + esc(title) + "</span>" +
+      '<span class="novel-sub">' + subs.map((s) => "<span>" + s + "</span>").join("") + "</span>" +
+      '<span class="tags">' + tags.map((t) => '<span class="tag">' + esc(t) + "</span>").join("") + "</span>" +
+    "</span></button>";
+}
+function seriesCardHtml(item) {
+  const user = (item && item.user) || {};
+  const subs = [];
+  if (user.name) subs.push(esc(user.name));
+  const count = num(item.published_total !== undefined ? item.published_total : (item.novel_count !== undefined ? item.novel_count : item.total));
+  if (count !== null) subs.push(fmtNum(count) + " 章");
+  if (item.last_published_content) subs.push("最近更新");
+  const tags = tagsOf(item).slice(0, 3);
+  return '<button class="novel-card" data-series="' + esc(item.id) + '" data-title="' + esc(item.title || "") + '">' +
+    '<span class="cover" aria-hidden="true">' + esc(String(item.title || "系列").slice(0, 1)) + "</span>" +
+    '<span class="novel-body">' +
+      '<span class="novel-title">' + esc(item.title || ("系列 " + item.id)) + "</span>" +
+      '<span class="novel-sub"><span class="badge">连载系列</span>' + subs.map((s) => "<span>" + s + "</span>").join("") + "</span>" +
+      '<span class="tags">' + tags.map((t) => '<span class="tag">' + esc(t) + "</span>").join("") + "</span>" +
+    "</span></button>";
+}
+function cardHtml(item) {
+  if (state.seriesKind === "series") return seriesCardHtml(item);
+  if (state.seriesKind === "user") return userCardHtml(item);
+  return novelCardHtml(item);
+}
+function listMetaText(source) {
+  // 榜单的日期收在「筛选」里，这里把当前实际用的模式与日期写出来
+  const prefix = source === "ranking" ? rankingLabel() + " · " : "";
+  const unit = state.seriesKind === "user" ? " 位作者" : " 项";
+  return prefix + (state.list.length || "0") + unit + (state.nextUrl ? "（可继续加载）" : "");
+}
+function rankingLabel() {
+  const sel = $("q-mode");
+  const label = sel && sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : "榜单";
+  const date = $("q-date").value;
+  return label + " · " + (date || "今天");
+}
+function renderList() {
+  const grid = $("grid");
+  if (!state.list.length) {
+    grid.innerHTML = '<div class="empty">没有内容</div>';
+    return;
+  }
+  grid.innerHTML = state.list.map(cardHtml).join("");
+}
+function headHtml(title, note) {
+  return '<div class="grid-head"><b>' + esc(title) + "</b>" +
+    (note ? "<span>" + esc(note) + "</span>" : "") + '<span class="ln"></span></div>';
+}
+function shelfCardHtml(item) {
+  return '<div class="novel-card shelf-card">' +
+    '<button class="card-open" data-id="' + esc(item.id) + '">' +
+      '<span class="cover" aria-hidden="true">' + esc(String(item.title || "书").slice(0, 1)) + "</span>" +
+      '<span class="novel-body">' +
+        '<span class="novel-title">' + esc(item.title) + "</span>" +
+        '<span class="novel-sub">' + (item.user ? "<span>" + esc(item.user) + "</span>" : "") +
+          (shelfProgressPct(item) ? "<span>已读 " + shelfProgressPct(item) + "%</span>" : "") +
+          (Number(item.chapterIndex) >= 0 && item.chapterIndex !== null && item.chapterIndex !== undefined
+            ? "<span>读到第 " + (Number(item.chapterIndex) + 1) + " 章</span>" : "") +
+          (fmtWhen(item.at) ? "<span>" + esc(fmtWhen(item.at)) + "</span>" : "") + "</span>" +
+        '<span class="tags">' + (item.seriesTitle ? '<span class="tag">' + esc(item.seriesTitle) + "</span>" : "") + "</span>" +
+      "</span>" +
+    "</button>" +
+    '<button class="rm" data-rm="' + esc(item.id) + '" aria-label="从书架移除">移除</button>' +
+  "</div>";
+}
+function localCardHtml(file) {
+  const size = file.size >= 1048576
+    ? (file.size / 1048576).toFixed(1) + " MB"
+    : Math.max(1, Math.round(file.size / 1024)) + " KB";
+  const ext = String(file.ext || "").replace(".", "").toUpperCase();
+  return '<div class="novel-card shelf-card">' +
+    '<button class="card-open" data-local="' + esc(file.path) + '">' +
+      '<span class="cover" aria-hidden="true">' + esc(String(file.name || "书").slice(0, 1)) + "</span>" +
+      '<span class="novel-body">' +
+        '<span class="novel-title">' + esc(file.name) + "</span>" +
+        '<span class="novel-sub"><span class="badge">' + esc(ext) + "</span><span>" + size + "</span>" +
+          (file.mtime ? "<span>" + esc(fmtWhen(file.mtime * 1000)) + "</span>" : "") + "</span>" +
+        '<span class="tags"><span class="tag">' + esc(file.rel || file.dir) + "</span></span>" +
+      "</span>" +
+    "</button>" +
+    '<a class="rm plain" href="/api/library/file?path=' + encodeURIComponent(file.path) + '" download="' + esc(file.name) + '">下载</a>' +
+  "</div>";
+}
+function dlSectionHtml() {
+  const groups = state.dlGroups || [];
+  const all = state.dlAll || [];
+  const parts = [headHtml("下载记录", all.length ? (all.length + " 章 · " + groups.length + " 组") : "空")];
+  if (!all.length) {
+    parts.push('<div class="empty">还没有下载记录：导出 EPUB 之后，这里会按系列名归组，同一组的章节可以合并成一个文件。</div>');
+    return parts.join("");
+  }
+  parts.push(groups.map((group) => {
+    const chips = group.entries.map((e) => {
+      const dup = group.dupes.has(e.book_id);
+      return '<span class="tag">' + esc(chapterLabelOf(e) + (dup ? "（#" + e.book_id + "）" : "")) + "</span>";
+    }).join("");
+    return '<div class="novel-card shelf-card">' +
+      '<span class="cover" aria-hidden="true">' + esc(String(group.title).slice(0, 1)) + "</span>" +
+      '<span class="novel-body">' +
+        '<span class="novel-title">' + esc(group.title) + "</span>" +
+        '<span class="novel-sub"><span>' + group.entries.length + " 章</span>" +
+          (group.author ? "<span>" + esc(group.author) + "</span>" : "") +
+          (fmtWhen(group.at) ? "<span>" + esc(fmtWhen(group.at)) + "</span>" : "") +
+          (group.dupeIndexes || []).map((pair) => "<span>同名不同「第 " + (pair[0] + 1) + " 章」" + pair[1] + " 个</span>").join("") + "</span>" +
+        '<span class="tags">' + chips + "</span>" +
+      "</span>" +
+      '<button class="ghost" data-merge="' + esc(group.key) + '">' +
+        (group.entries.length > 1 ? "合并导出" : "再导一次") + "</button>" +
+    "</div>";
+  }).join(""));
+  parts.push('<div class="filters"><button class="ghost" data-dl-clear="1">清空下载记录</button></div>');
+  return parts.join("");
+}
+function libSectionHtml() {
+  const lib = state.library;
+  const cfg = (state.serverConfig && state.serverConfig.config) || {};
+  const dirs = (lib && lib.dirs) || cfg.library_dirs || [];
+  const files = (lib && lib.files) || [];
+  const parts = [headHtml("本地文件", files.length
+    ? (files.length + " 个 txt/epub" + (lib && lib.truncated ? "（已截断）" : ""))
+    : (dirs.length ? "0 个" : "未配置目录"))];
+  if (!dirs.length) {
+    parts.push('<div class="empty">还没有配置本地目录：打开右上角「Aa」→「书架与下载」，填一个放 txt / epub 的目录（可以填多个）。</div>');
+    return parts.join("");
+  }
+  const missing = (lib && lib.missing) || (state.serverConfig && state.serverConfig.library && state.serverConfig.library.missing) || [];
+  if (missing.length) parts.push('<div class="hint">这些目录不存在，已跳过：' + missing.map(esc).join("、") + "</div>");
+  if (!files.length) {
+    parts.push('<div class="empty">这些目录里没有 .txt / .epub：' + dirs.map(esc).join("；") + "</div>");
+  } else {
+    parts.push(files.map(localCardHtml).join(""));
+  }
+  parts.push('<div class="filters"><button class="ghost" data-libscan="1">重新扫描</button></div>');
+  return parts.join("");
+}
+async function renderShelf() {
+  const items = loadShelf();
+  state.source = "shelf";
+  showView("list");
+  $("btn-more").hidden = true;
+  $("list-meta").textContent = items.length
+    ? historyMetaText(items.length)
+    : "书架还是空的，打开一本小说就会自动记录";
+  $("list-meta").title = state.historyFile ? ("阅读历史文件：" + state.historyFile) : "";
+  // 三段分开：云端记录（进度/收藏那类）· 下载记录（可合并导出）· 本地文件目录
+  $("grid").innerHTML = headHtml("云端记录", items.length ? items.length + " 本" : "空") +
+    (items.length ? items.map(shelfCardHtml).join("") : '<div class="empty">还没有云端记录：打开过的书会出现在这里</div>');
+  const token = ++state.loadToken;
+  await Promise.all([refreshDownloadMarks(), loadLibrary()]);
+  if (token !== state.loadToken || state.view !== "list" || state.source !== "shelf") return;
+  $("grid").insertAdjacentHTML("beforeend", dlSectionHtml() + libSectionHtml());
+}
+/** 打开本地文件：txt 直接在阅读器里看，epub 交给浏览器/系统（本地文件一律不写阅读记录）。 */
+async function openLocal(path, ext) {
+  const isEpub = String(ext || "").toLowerCase() === ".epub";
+  const href = "/api/library/file?path=" + encodeURIComponent(path);
+  if (isEpub) { window.open(href, "_blank", "noopener"); return; }
+  showLoading("读取本地文件…");
+  try {
+    const data = await callApi("/library/preview", { path: path });
+    closeDrawers();
+    if (state.view === "list") state.listScroll = window.scrollY;
+    showView("reader");
+    window.scrollTo(0, 0);
+    state.current = { id: 0, local: true, novel: { id: 0, title: data.name }, chapters: null,
+      seriesDetail: null, chapterIndex: -1, raw: "", images: {}, text: data.text || "" };
+    $("reader-pos").textContent = "";
+    $("reader-diag").hidden = true;
+    $("reader-title").textContent = data.name;
+    $("reader-meta").innerHTML = "<span>本地文件</span><span>" + esc(data.path) + "</span>" +
+      (data.truncated ? "<span>只显示前 " + Math.round(data.size / 1024) + " KB</span>" : "");
+    $("reader-tags").innerHTML = "";
+    $("btn-pixiv").textContent = "打开文件";
+    $("btn-pixiv").onclick = () => window.open(href, "_blank", "noopener");
+    $("btn-download").hidden = true;
+    $("btn-fav").hidden = true;
+    $("btn-watch").hidden = true;
+    $("btn-toc").hidden = true;
+    $("chapter-nav").hidden = true;
+    $("reader-text").textContent = data.text || "（这是个空文件）";
+    document.title = data.name + " · 本地文件";
+  } catch (err) {
+    showToast("打不开：" + err.message);
+  } finally { hideLoading(); }
+}
+
+/* ---------------- 系列 ---------------- */
+function orderChapters(items) {
+  return (items || []).slice().sort((a, b) => {
+    const da = String(a.create_date || a.published_at || "");
+    const db = String(b.create_date || b.published_at || "");
+    if (da && db) return da < db ? -1 : da > db ? 1 : 0;
+    return Number(a.id) - Number(b.id);
+  });
+}
+async function fetchSeries(seriesId) {
+  const data = await callApi("/novel/series", { series_id: seriesId });
+  const detail = (data && (data.novel_series_detail || data.series)) || {};
+  const chapters = orderChapters((data && (data.novels || data.novel_series)) || []);
+  return { detail: detail, chapters: chapters };
+}
+function chapterTitle(chapter, index) {
+  return chapter.title || ("第 " + (index + 1) + " 章");
+}
+function chapterListHtml(chapters, currentId) {
+  return chapters.map((chapter, i) => {
+    const isCurrent = currentId !== null && Number(chapter.id) === Number(currentId);
+    // 下载记录按「书 + 章节序号」记：这里按序号认，同一系列名下重复的「第一章」也能各自标出
+    const mark = state.dlSeries[String(i)] || state.dlMarks[chapter.id + "#" + i];
+    return '<button class="chapter' + (isCurrent ? " current" : "") + '" data-id="' + esc(chapter.id) + '">' +
+      '<span class="idx">' + (i + 1) + "</span>" +
+      '<span class="c-title">' + esc(chapterTitle(chapter, i)) + "</span>" +
+      '<span class="c-meta">' + (num(chapter.text_length) !== null ? fmtNum(chapter.text_length) + " 字" : "") +
+        (mark ? '<span class="tag">已下载</span>' : "") + "</span>" +
+    "</button>";
+  }).join("");
+}
+async function openSeries(seriesId, title) {
+  showView("series");
+  showLoading("加载章节…");
+  try {
+    const info = await fetchSeries(seriesId);
+    state.seriesView = { id: Number(seriesId), info: info };
+    const detail = info.detail || {};
+    $("series-title").textContent = detail.title || title || ("系列 " + seriesId);
+    document.title = $("series-title").textContent + " · Pixiv 小说阅读器";
+    const author = (detail.user && detail.user.name) || "";
+    const tags = tagsOf(detail);
+    $("series-meta").textContent = [author, info.chapters.length + " 章", tags.slice(0, 4).join(" / ")].filter(Boolean).join(" · ");
+    $("series-chapters").innerHTML = info.chapters.length
+      ? chapterListHtml(info.chapters, null)
+      : '<div class="empty">这个系列没有公开章节</div>';
+    // 追更 / 作者主页 / 已下载标记
+    const authorUser = detail.user || {};
+    $("series-watch").hidden = false;
+    setWatchButton(false);
+    $("series-author").hidden = !authorUser.id;
+    if (authorUser.id) $("series-author").onclick = () => { location.hash = "#/user/" + authorUser.id; };
+    $("series-dl-hint").hidden = false;
+    renderSeriesDlState();
+    refreshDownloadMarks(Number(seriesId)).then(renderSeriesDlState).catch(() => {});
+  } catch (err) {
+    $("series-chapters").innerHTML = '<div class="empty">加载失败：' + esc(err.message) + "</div>";
+    showToast("加载失败：" + err.message);
+  } finally { hideLoading(); }
+}
+/** 系列页的「已下载」标记与提示：下载完一次也要立刻变，别等重新进页面。 */
+function renderSeriesDlState() {
+  const sv = state.seriesView;
+  if (!sv || state.view !== "series") return;
+  const info = sv.info || {};
+  const chapters = info.chapters || [];
+  if (chapters.length) $("series-chapters").innerHTML = chapterListHtml(chapters, null);
+  const marks = Object.keys(state.dlSeries || {}).length;
+  $("series-dl-hint").hidden = !chapters.length;
+  $("series-dl-hint").textContent = chapters.length
+    ? (marks ? ("这个系列已经下载过 " + marks + " 章。") : "这个系列还没有下载记录。") +
+      (mergeSeriesOn() ? "同一系列名的记录可以在「书架」里合并导出。" : "") +
+      (skipDownloadedOn() ? "开启「跳过已下载」时，整本下过就不再重复导出。" : "")
+    : "";
+}
+
+/* ---------------- 阅读器 ---------------- */
+async function openReader(id) {
+  closeDrawers();
+  if (state.view === "reader") { clearTimeout(saveTimer); saveProgress(); }
+  else if (state.view === "list") state.listScroll = window.scrollY;
+  showView("reader");
+  window.scrollTo(0, 0);
+  // 上一次可能是本地 txt（隐藏了工具条、换了按钮文案），这里一律复位
+  $("btn-download").hidden = false;
+  $("btn-fav").hidden = false;
+  $("btn-pixiv").textContent = "Pixiv 原页";
+  showLoading("加载小说…");
+  state.current = { id: Number(id), novel: null, chapters: null, seriesDetail: null, chapterIndex: -1, raw: "", images: {} };
+  $("reader-pos").textContent = "";
+  $("reader-diag").hidden = true;
+  let novel = null;
+  try {
+    const data = await callApi("/novel/" + id);
+    novel = (data && (data.novel || data.novel_detail)) || data;
+    if (!novel || !novel.id) throw new Error("返回结构里没有小说数据");
+    state.current.novel = novel;
+    state.current.id = Number(novel.id);
+    renderReaderHeader(novel);
+    touchShelf(novel);
+    postHistory(historyEntry(novel), true);   // 项目里的 history.jsonl 也记一笔
+    const seriesId = novel.series && novel.series.id;
+    if (seriesId) {
+      fetchSeries(seriesId).then((info) => {
+        if (!state.current || state.current.id !== Number(novel.id)) return;
+        state.current.chapters = info.chapters;
+        state.current.seriesDetail = info.detail;
+        state.current.chapterIndex = info.chapters.findIndex((c) => Number(c.id) === Number(novel.id));
+        renderChapterNav();
+      }).catch(() => {});
+    } else {
+      $("btn-toc").hidden = true;
+      $("chapter-nav").hidden = true;
+      $("reader-pos").textContent = "";
+    }
+  } catch (err) {
+    // 404 时先试着当「系列 id」打开（Pixiv 上小说/系列 id 很容易混用）
+    if (await tryOpenAsSeries(id, err)) { hideLoading(); return; }
+    renderOpenError(id, err);
+    hideLoading();
+    return;
+  }
+  // 详情已经拿到了（标题/作者/字数/标签都能显示）；正文单独取。
+  // 正文失败不要说成「这本书打不开」——那是两个完全不同的问题。
+  try {
+    await loadText(novel.id);
+    restoreProgress(novel.id);
+  } catch (err) {
+    renderTextError(novel.id, err);
+  } finally { hideLoading(); }
+}
+function renderReaderHeader(novel) {
+  const user = novel.user || {};
+  $("reader-title").textContent = novel.title || ("小说 " + novel.id);
+  const bits = [];
+  if (user.name) {
+    const nameHtml = user.id
+      ? '<a href="#/user/' + esc(user.id) + '">' + esc(user.name) + "</a>"
+      : esc(user.name);
+    bits.push("<span>作者：" + nameHtml + (user.account ? "（" + esc(user.account) + "）" : "") + "</span>");
+  }
+  if (num(novel.text_length) !== null) bits.push("<span>" + fmtNum(novel.text_length) + " 字</span>");
+  const bookmarks = num(novel.total_bookmarks !== undefined ? novel.total_bookmarks : novel.bookmark_count);
+  if (bookmarks !== null) bits.push("<span>♥ " + fmtNum(bookmarks) + "</span>");
+  if (num(novel.total_view) !== null) bits.push("<span>浏览 " + fmtNum(novel.total_view) + "</span>");
+  if (novel.create_date) bits.push("<span>" + esc(String(novel.create_date).slice(0, 10)) + "</span>");
+  $("reader-meta").innerHTML = bits.join("");
+  $("reader-tags").innerHTML = tagsOf(novel).slice(0, 8).map((t) => '<span class="tag">' + esc(t) + "</span>").join("");
+  $("btn-pixiv").onclick = () => window.open("https://www.pixiv.net/novel/show.php?id=" + novel.id, "_blank", "noopener");
+  // 收藏 / 追更：收藏状态取本地台账，追更按钮只在属于连载系列时出现
+  renderFavButton();
+  const series = novel.series || null;
+  $("btn-watch").hidden = !(series && series.id);
+  if (series && series.id) setWatchButton(false);
+  document.title = (novel.title || "小说") + " · Pixiv 小说阅读器";
+}
+async function loadText(novelId) {
+  $("reader-text").innerHTML = '<div class="empty">加载正文…</div>';
+  $("reader-diag").hidden = true;
+  const data = await callApi("/novel/" + novelId + "/text");
+  const result = extractText(data);
+  // 图片映射可能来自两个接口：详情（novel.textEmbeddedImages / 桥补的 novel_images）
+  // 与正文接口。两边都收下，正文接口的优先——少一边就可能出现「没有取到图片地址」。
+  const detailImages = extractImages((state.current && state.current.novel) || {});
+  const images = Object.assign({}, detailImages, extractImages(data));
+  state.current.shape = result.shape;
+  state.current.raw = result.text;                 // 带标记的归一化正文（插图 / 章节 / ruby）
+  state.current.images = images;
+  state.current.text = novelPlainText(result.text, images);
+  if (result.text) {
+    renderNovelText(result.text, images);
+  } else {
+    $("reader-text").innerHTML = '<div class="empty">没有取到正文。可展开下方诊断信息，把内容反馈给作者以便适配。</div>';
+    $("reader-diag").hidden = false;
+    let snippet = "";
+    try { snippet = JSON.stringify(data, null, 2).slice(0, 1200); } catch (e) { snippet = String(data).slice(0, 1200); }
+    $("reader-diag").innerHTML = "<div>诊断：正文提取失败（响应结构与预期不符，shape=" + esc(result.shape) + "）。</div><pre>" + esc(snippet) + "</pre>";
+  }
+  return result.text;
+}
+function renderChapterNav() {
+  const cur = state.current || {};
+  const chapters = cur.chapters || [];
+  if (!chapters.length) { $("btn-toc").hidden = true; $("chapter-nav").hidden = true; $("reader-pos").textContent = ""; return; }
+  const index = cur.chapterIndex;
+  $("btn-toc").hidden = false;
+  $("chapter-nav").hidden = false;
+  $("reader-pos").textContent = index >= 0 ? ("第 " + (index + 1) + " / " + chapters.length + " 章") : ("共 " + chapters.length + " 章");
+  $("btn-prev").disabled = index <= 0;
+  $("btn-next").disabled = index < 0 || index >= chapters.length - 1;
+  $("chapter-select").innerHTML = chapters.map((c, i) =>
+    '<option value="' + esc(c.id) + '"' + (i === index ? " selected" : "") + ">第 " + (i + 1) + " 章 · " + esc(chapterTitle(c, i)) + "</option>").join("");
+  $("toc-title").textContent = (cur.seriesDetail && cur.seriesDetail.title) || "目录";
+  $("toc-list").innerHTML = chapterListHtml(chapters, cur.id);
+  $("toc-list").querySelectorAll(".chapter").forEach((el) => el.addEventListener("click", () => {
+    closeDrawers();
+    location.hash = "#/read/" + el.dataset.id;
+  }));
+}
+function gotoChapter(offset) {
+  const cur = state.current || {};
+  const chapters = cur.chapters || [];
+  const index = cur.chapterIndex + offset;
+  if (index < 0 || index >= chapters.length) return;
+  location.hash = "#/read/" + chapters[index].id;
+}
+
+/* ---------------- 阅读进度 ---------------- */
+let saveTimer = null;
+function progressMax() { return document.documentElement.scrollHeight - window.innerHeight; }
+function saveProgress() {
+  const cur = state.current;
+  if (!cur || !cur.novel || cur.local || state.view !== "reader") return;
+  // 正文还没渲染完就不要写进度：openReader 会先 scrollTo(0,0)，
+  // 而浏览器在刷新时可能已经恢复了上一次的滚动位置，那一瞬间的 scroll 事件会把进度误写成 0。
+  if (!cur.text) return;
+  const max = progressMax();
+  const p = max > 200 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
+  cur.progress = p;
+  touchShelf(cur.novel, { progress: p, chapterIndex: cur.chapterIndex, seriesId: cur.seriesId || (cur.novel.series && cur.novel.series.id) || null });
+  postHistory(historyEntry(cur.novel));   // 每 15 秒最多写一行（见 postHistory）
+}
+function restoreProgress(novelId) {
+  const item = loadShelf().find((it) => Number(it.id) === Number(novelId));
+  if (!item || !item.progress) return;
+  const apply = () => {
+    const max = progressMax();
+    if (max > 200) window.scrollTo(0, Math.round(max * item.progress));
+  };
+  // 立刻恢复一次（正文此时已经渲染，读 scrollHeight 会强制同步布局），
+  // 再等一帧补一次兜底：某些环境（后台标签页 / 无头浏览器）根本不会触发 rAF。
+  apply();
+  requestAnimationFrame(apply);
+}
+window.addEventListener("scroll", () => {
+  if (state.view !== "reader") return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveProgress, 500);
+}, { passive: true });
+
+/* ---------------- 下载 ---------------- */
+function novelHeaderLines(novel, extraBits) {
+  const user = novel.user || {};
+  const lines = ["《" + (novel.title || "") + "》"];
+  lines.push("作者：" + (user.name || "未知") + (user.account ? "（" + user.account + "）" : ""));
+  lines.push("来源：https://www.pixiv.net/novel/show.php?id=" + novel.id);
+  const meta = [];
+  if (num(novel.text_length) !== null) meta.push(fmtNum(novel.text_length) + " 字");
+  const bookmarks = num(novel.total_bookmarks !== undefined ? novel.total_bookmarks : novel.bookmark_count);
+  if (bookmarks !== null) meta.push("收藏 " + fmtNum(bookmarks));
+  if (novel.create_date) meta.push(String(novel.create_date).slice(0, 10));
+  if (meta.length) lines.push(meta.join("　·　"));
+  const tags = tagsOf(novel);
+  if (tags.length) lines.push("标签：" + tags.join("、"));
+  if (novel.series && novel.series.title) lines.push("系列：" + novel.series.title);
+  if (extraBits) lines.push(extraBits);
+  return lines;
+}
+function safeFileName(title, suffix, ext) {
+  const cleaned = String(title || "novel").replace(/[\\/:*?"<>|\r\n\t]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80);
+  return (cleaned || "novel") + (suffix || "") + (ext || ".epub");
+}
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 8000);
+}
+
+/* ---------------- 极简 ZIP 打包（只 store，不压缩） ----------------
+   EPUB 就是一个 ZIP：`mimetype` 必须是第一个条目且不压缩，其余条目压不压缩随意。
+   为了保持「单文件、零依赖」，这里手写最小 ZIP，不引 JSZip 之类的库。 */
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+const utf8 = (str) => new TextEncoder().encode(str);
+/** files: [{name, data: Uint8Array}]，第一个条目会被当成 mimetype（不压缩）。 */
+function zipStore(files) {
+  const now = new Date();
+  const dosTime = ((now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2)) & 0xffff;
+  const dosDate = (((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()) & 0xffff;
+  const body = [];
+  const central = [];
+  let offset = 0;
+  for (const file of files) {
+    const name = utf8(file.name);
+    const data = file.data;
+    // 文件名是 ASCII 就不置 UTF-8 标志位（mimetype 这一条尤其干净，OCF 对外层最挑）
+    const flags = /^[\x20-\x7e]*$/.test(file.name) ? 0 : 0x0800;
+    const crc = crc32(data);
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true);
+    local.setUint16(4, 20, true);      // version needed
+    local.setUint16(6, flags, true);
+    local.setUint16(8, 0, true);       // method 0 = store
+    local.setUint16(10, dosTime, true);
+    local.setUint16(12, dosDate, true);
+    local.setUint32(14, crc, true);
+    local.setUint32(18, data.length, true);
+    local.setUint32(22, data.length, true);
+    local.setUint16(26, name.length, true);
+    local.setUint16(28, 0, true);
+    body.push(new Uint8Array(local.buffer), name, data);
+    const dir = new DataView(new ArrayBuffer(46));
+    dir.setUint32(0, 0x02014b50, true);
+    dir.setUint16(4, 20, true);        // version made by
+    dir.setUint16(6, 20, true);        // version needed
+    dir.setUint16(8, flags, true);
+    dir.setUint16(10, 0, true);
+    dir.setUint16(12, dosTime, true);
+    dir.setUint16(14, dosDate, true);
+    dir.setUint32(16, crc, true);
+    dir.setUint32(20, data.length, true);
+    dir.setUint32(24, data.length, true);
+    dir.setUint16(28, name.length, true);
+    dir.setUint32(42, offset, true);
+    central.push(new Uint8Array(dir.buffer), name);
+    offset += 30 + name.length + data.length;
+  }
+  let centralSize = 0;
+  for (const chunk of central) centralSize += chunk.length;
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true);
+  end.setUint16(8, files.length, true);
+  end.setUint16(10, files.length, true);
+  end.setUint32(12, centralSize, true);
+  end.setUint32(16, offset, true);
+  return new Blob([...body, ...central, new Uint8Array(end.buffer)], { type: "application/epub+zip" });
+}
+
+/* ---------------- EPUB 素材 ----------------
+   图片要作为真正的文件打进 EPUB（不是 data URL），所以这里按字节取。 */
+const MAX_EPUB_IMAGE_BYTES = 40 * 1024 * 1024; // 整本书内嵌图片的软上限，超了只留说明
+function uuidv4() {
+  const bytes = new Uint8Array(16);
+  if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(bytes);
+  else for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" + hex.slice(20);
+}
+/** 属性值转义：esc() 只处理文本节点，属性里的引号得自己来。 */
+function xattr(value) { return esc(value).replace(/"/g, "&quot;"); }
+function imageKind(bytes) {
+  if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50) return { ext: "png", mime: "image/png" };
+  if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8) return { ext: "jpg", mime: "image/jpeg" };
+  if (bytes.length > 6 && bytes[0] === 0x47 && bytes[1] === 0x49) return { ext: "gif", mime: "image/gif" };
+  if (bytes.length > 12 && bytes[8] === 0x57 && bytes[9] === 0x45) return { ext: "webp", mime: "image/webp" };
+  return null;
+}
+async function fetchImageBytes(url) {
+  const resp = await fetch(imgProxyUrl(url), { cache: "force-cache" });
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const type = String(resp.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  const bytes = new Uint8Array(await resp.arrayBuffer());
+  let kind = imageKind(bytes);
+  // 认不出魔数时退回响应头给的类型（有些 CDN 会返回 WebP 但头写 image/jpeg，所以魔数优先）
+  if (!kind) {
+    if (type === "image/jpeg") kind = { ext: "jpg", mime: "image/jpeg" };
+    else if (type === "image/gif") kind = { ext: "gif", mime: "image/gif" };
+    else if (type === "image/webp") kind = { ext: "webp", mime: "image/webp" };
+    else kind = { ext: "png", mime: "image/png" };
+  }
+  return { bytes: bytes, ext: kind.ext, mime: kind.mime };
+}
+function coverUrlOf(item) {
+  const urls = (item && item.image_urls) || {};
+  return urls.large || urls.original || urls.medium || urls.square || "";
+}
+
+/* ---------------- EPUB 打包 ----------------
+   一本书 = 一个 .epub：正文、插图、章节目录、书籍信息都在里面，离线可读（分页交给阅读器）。 */
+const EPUB_LANG = "ja"; // Pixiv 小说的正文基本是日文，跟着正文走比跟界面语言走更合适
+const EPUB_CSS = [
+  'body{margin:0 5%;line-height:1.8;word-break:break-word;font-family:"Songti SC","Noto Serif CJK SC",Georgia,serif}',
+  'h1,h2{line-height:1.45;margin:1.6em 0 .6em;font-size:1.15em}',
+  'p{margin:0 0 1em}',
+  'p.sep{text-align:center;color:#aaa;letter-spacing:.4em}',
+  'figure.fig{margin:1.4em 0;text-align:center}',
+  'figure.fig img{max-width:100%;height:auto}',
+  'figure.fig figcaption,.ph{font-size:.85em;color:#888;text-align:center}',
+  'ruby rt{font-size:.55em}',
+  '.meta{font-size:.9em;color:#666;border-bottom:1px solid #ddd;padding-bottom:.8em;margin-bottom:1.4em}',
+  '.meta div{margin:.15em 0}',
+  '.src{font-size:.8em;color:#999;margin-top:2em}',
+].join("\n");
+function xhtmlDoc(title, body) {
+  return '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n' +
+    '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="' + EPUB_LANG + '" lang="' + EPUB_LANG + '">\n' +
+    '<head>\n<meta charset="utf-8"/>\n<title>' + esc(title) + '</title>\n' +
+    '<link rel="stylesheet" type="text/css" href="../style.css"/>\n</head>\n<body>\n' + body + "\n</body>\n</html>\n";
+}
+function metaBlock(lines) {
+  return '<header class="meta">' + lines.map((line) => "<div>" + esc(line) + "</div>").join("") + "</header>";
+}
+/** 一段正文 → XHTML 片段；插图取回来存成书里的图片文件，失败/超限只留一句说明。 */
+async function xhtmlBody(raw, images, ctx, headings) {
+  const parts = [];
+  let buffer = "";
+  // buffer 里已经是转义过的 XHTML（ruby / 链接要保留标签），换行交给这里补 <br/>
+  const flush = () => {
+    const content = buffer;
+    buffer = "";
+    for (const para of content.split(/\n{2,}/)) {
+      const text = para.replace(/^\n+|\n+$/g, "");
+      if (text.trim()) parts.push("<p>" + text.replace(/\n/g, "<br/>") + "</p>");
+    }
+  };
+  const addImage = async (node) => {
+    flush();
+    ctx.seq += 1;
+    const label = "插图 " + ctx.seq;
+    let url = "";
+    try {
+      if (node.kind === "uploaded") url = pickImageUrl(images && images[node.id]);
+      else if (node.kind === "url") url = node.url;
+      else url = await resolvePixivImage(node.id, node.page);
+    } catch (err) { url = ""; }
+    if (!url) { ctx.failed += 1; parts.push('<p class="ph">［' + esc(label) + "：没有取到图片地址］</p>"); return; }
+    let entry = ctx.cache.get(url);
+    if (!entry) {
+      if (ctx.bytes > MAX_EPUB_IMAGE_BYTES) {
+        parts.push('<p class="ph">［' + esc(label) + "：文件已很大，未再打包］</p>");
+        return;
+      }
+      try {
+        const file = await fetchImageBytes(url);
+        entry = { name: "images/img-" + String(ctx.images.length + 1).padStart(4, "0") + "." + file.ext, mime: file.mime, bytes: file.bytes };
+        ctx.bytes += file.bytes.length;
+        ctx.images.push(entry);
+        ctx.cache.set(url, entry);
+      } catch (err) {
+        ctx.failed += 1;
+        parts.push('<p class="ph">［' + esc(label) + "：图片取不到（" + esc((err && err.message) || "未知错误") + "）］</p>");
+        return;
+      }
+    }
+    parts.push('<figure class="fig"><img src="../' + entry.name + '" alt="' + xattr(label) + '"/><figcaption>' + esc(label) + "</figcaption></figure>");
+  };
+  for (const node of parseNovelText(raw)) {
+    if (node.t === "text") { buffer += esc(node.v); continue; }
+    if (node.t === "chapter") {
+      flush();
+      const id = "h" + (headings.length + 1);
+      headings.push({ id: id, text: node.v });
+      parts.push('<h2 id="' + id + '">' + esc(node.v) + "</h2>");
+      continue;
+    }
+    if (node.t === "page") { flush(); parts.push('<p class="sep">· · ·</p>'); continue; }
+    if (node.t === "jump") continue; // 翻页标记交给阅读器自己分页，不再插一页说明
+    if (node.t === "ruby") { buffer += node.r ? "<ruby>" + esc(node.v) + "<rt>" + esc(node.r) + "</rt></ruby>" : esc(node.v); continue; }
+    if (node.t === "link") { buffer += '<a href="' + xattr(node.href) + '">' + esc(node.v) + "</a>"; continue; }
+    if (node.t === "img") { await addImage(node); continue; }
+  }
+  flush();
+  return parts.join("\n");
+}
+/** 一段正文 → HTML 片段；插图取回来内嵌成 data URL，失败/超限就留占位。 */
+/** 把一本书（单本小说或整个系列）打成**一个** EPUB 文件。
+    book = { title, author, units: [{ title, raw, images }], head: [信息行], notes: [说明行],
+             coverUrl, sourceUrl, description }
+    units 为空时抛错；封面、章节正文、插图、目录全部塞进这一个文件里。 */
+async function buildBookEpub(book, onProgress) {
+  const units = (book.units || []).filter((unit) => unit && (unit.raw || unit.html));
+  if (!units.length) throw new Error("没有正文可导出");
+  const ctx = { images: [], cache: new Map(), bytes: 0, failed: 0, seq: 0 };
+  const docs = [];
+  for (let i = 0; i < units.length; i++) {
+    if (onProgress) onProgress(i + 1, units.length);
+    const unit = units[i];
+    const headings = [];
+    let body = unit.raw ? await xhtmlBody(unit.raw, unit.images || {}, ctx, headings) : unit.html;
+    if (i === 0 && book.head && book.head.length) body = metaBlock(book.head) + "\n" + body;
+    if (i === units.length - 1) {
+      const foot = [];
+      if (ctx.failed) foot.push("有 " + ctx.failed + " 张插图没取到（网络问题或原图已删除）。");
+      if (book.notes && book.notes.length) foot.push(book.notes.join("；"));
+      foot.push("由 Pixiv Bridge 导出，仅供个人阅读使用。");
+      body += '\n<p class="src">' + foot.map((line) => esc(line)).join("<br/>") + "</p>";
+    }
+    const id = "chapter-" + String(i + 1).padStart(4, "0");
+    docs.push({ id: id, href: "text/" + id + ".xhtml", title: unit.title || book.title || "正文", body: body, headings: headings });
+  }
+  // 封面取不到就跳过，不影响成书
+  let cover = null;
+  if (book.coverUrl) {
+    try {
+      const file = await fetchImageBytes(book.coverUrl);
+      cover = { name: "images/cover." + file.ext, mime: file.mime, bytes: file.bytes };
+    } catch (err) { cover = null; }
+  }
+  const uid = "urn:uuid:" + uuidv4();
+  const modified = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const toc = [];
+  docs.forEach((doc) => {
+    toc.push({ href: doc.href, title: doc.title });
+    doc.headings.forEach((h) => toc.push({ href: doc.href + "#" + h.id, title: h.text }));
+  });
+  const navItems = docs.map((doc) => {
+    const kids = doc.headings.map((h) => '<li><a href="' + doc.href + "#" + h.id + '">' + esc(h.text) + "</a></li>").join("");
+    return '<li><a href="' + doc.href + '">' + esc(doc.title) + "</a>" + (kids ? "<ol>" + kids + "</ol>" : "") + "</li>";
+  }).join("\n");
+  const navPoints = toc.map((entry, i) =>
+    '<navPoint id="nav-' + (i + 1) + '" playOrder="' + (i + 1) + '"><navLabel><text>' + esc(entry.title) +
+    '</text></navLabel><content src="' + xattr(entry.href) + '"/></navPoint>').join("\n");
+  const manifest = [
+    '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
+    '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>',
+    '<item id="css" href="style.css" media-type="text/css"/>',
+  ];
+  docs.forEach((doc) => manifest.push('<item id="' + doc.id + '" href="' + doc.href + '" media-type="application/xhtml+xml"/>'));
+  ctx.images.forEach((img, i) => manifest.push('<item id="img-' + (i + 1) + '" href="' + img.name + '" media-type="' + img.mime + '"/>'));
+  if (cover) {
+    manifest.push('<item id="cover-image" href="' + cover.name + '" media-type="' + cover.mime + '" properties="cover-image"/>');
+    manifest.push('<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>');
+  }
+  const spine = [];
+  if (cover) spine.push('<itemref idref="cover"/>');
+  docs.forEach((doc) => spine.push('<itemref idref="' + doc.id + '"/>'));
+  const meta = [
+    '<dc:identifier id="bookid">' + esc(uid) + "</dc:identifier>",
+    "<dc:title>" + esc(book.title || "未命名") + "</dc:title>",
+    "<dc:creator>" + esc(book.author || "未知") + "</dc:creator>",
+    "<dc:language>" + EPUB_LANG + "</dc:language>",
+  ];
+  if (book.sourceUrl) meta.push("<dc:source>" + esc(book.sourceUrl) + "</dc:source>");
+  if (book.description) meta.push("<dc:description>" + esc(book.description) + "</dc:description>");
+  meta.push('<meta property="dcterms:modified">' + modified + "</meta>");
+  if (cover) meta.push('<meta name="cover" content="cover-image"/>');
+  const opf = '<?xml version="1.0" encoding="utf-8"?>\n' +
+    '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="' + EPUB_LANG + '">\n' +
+    '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n' + meta.join("\n") + "\n</metadata>\n" +
+    '<manifest>\n' + manifest.join("\n") + "\n</manifest>\n" +
+    '<spine toc="ncx">\n' + spine.join("\n") + '\n</spine>\n</package>\n';
+  const navXhtml = xhtmlDoc("目录",
+    '<nav epub:type="toc" id="toc">\n<h1>目录</h1>\n<ol>\n' + navItems + "\n</ol>\n</nav>");
+  const ncx = '<?xml version="1.0" encoding="utf-8"?>\n' +
+    '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">\n<head>\n' +
+    '<meta name="dtb:uid" content="' + xattr(uid) + '"/>\n' +
+    '<meta name="dtb:depth" content="1"/>\n<meta name="dtb:totalPageCount" content="0"/>\n' +
+    '<meta name="dtb:maxPageNumber" content="0"/>\n</head>\n' +
+    "<docTitle><text>" + esc(book.title || "未命名") + "</text></docTitle>\n<navMap>\n" + navPoints + "\n</navMap>\n</ncx>\n";
+  const container = '<?xml version="1.0" encoding="utf-8"?>\n' +
+    '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">\n' +
+    '<rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>\n</container>\n';
+  const files = [
+    { name: "mimetype", data: utf8("application/epub+zip") },
+    { name: "META-INF/container.xml", data: utf8(container) },
+    { name: "OEBPS/content.opf", data: utf8(opf) },
+    { name: "OEBPS/nav.xhtml", data: utf8(navXhtml) },
+    { name: "OEBPS/toc.ncx", data: utf8(ncx) },
+    { name: "OEBPS/style.css", data: utf8(EPUB_CSS) },
+  ];
+  if (cover) {
+    files.push({ name: "OEBPS/cover.xhtml", data: utf8(xhtmlDoc("封面",
+      '<div style="text-align:center"><img src="' + cover.name + '" alt="封面" style="max-width:100%;height:auto"/></div>')) });
+  }
+  docs.forEach((doc) => files.push({ name: "OEBPS/" + doc.href, data: utf8(xhtmlDoc(doc.title, doc.body)) }));
+  ctx.images.forEach((img) => files.push({ name: "OEBPS/" + img.name, data: img.bytes }));
+  if (cover) files.push({ name: "OEBPS/" + cover.name, data: cover.bytes });
+  return { blob: zipStore(files), images: ctx.images.length, failed: ctx.failed };
+}
+function retryableError(err) {
+  const status = err && err.status;
+  if (status === 429) return true;                      // 限流
+  if (status >= 500 && status <= 599) return true;      // 上游/网关瞬时错误
+  // 桥自己换 token 失败的形态：401 + reason=connect_failed（本地链路连不上 Pixiv）
+  return !!(err && (err.reason === "connect_failed" || err.reason === "timeout"));
+}
+async function fetchContentWithRetry(novelId, attempt) {
+  const tries = attempt || 0;
+  try {
+    const data = await callApi("/novel/" + novelId + "/text");
+    const result = extractText(data);
+    return { text: result.text, images: extractImages(data) };
+  } catch (err) {
+    if (retryableError(err) && tries < 3) {
+      await sleep(2000 * (tries + 1));
+      return fetchContentWithRetry(novelId, tries + 1);
+    }
+    throw err;
+  }
+}
+async function fetchTextWithRetry(novelId, attempt) {
+  return (await fetchContentWithRetry(novelId, attempt)).text;
+}
+// 防连点：正文已在内存时下载是同步完成的，单靠 state.busy 挡不住第二次点击，
+// 所以再加一个 1.2 秒的时间窗，避免一次误触导出两份文件。
+function downloadBlocked() {
+  return state.busy || Date.now() - (state.lastDownload || 0) < 1200;
+}
+async function downloadCurrent() {
+  if (downloadBlocked()) return;
+  const cur = state.current;
+  if (!cur || !cur.novel) return;
+  // 系列里的一章不能单独成书：一本书只能有一个文件，所以直接整本导出
+  if (cur.chapters && cur.chapterIndex >= 0) {
+    showToast("这本属于系列，按整本导出 EPUB");
+    return downloadSeries();
+  }
+  state.busy = true;
+  try {
+    const novel = cur.novel;
+    await refreshDownloadMarks();
+    // 「跳过已下载」：整本下过就不再导出（要重下就去设置里关掉）
+    if (skipDownloadedOn() && state.dlMarks[novel.id + "#0"]) {
+      showToast("这本已经下载过（在「书架 → 下载记录」里）。想重下可在「Aa → 书架与下载」里关掉「跳过已下载」");
+      return;
+    }
+    let raw = cur.raw;
+    let images = cur.images || {};
+    if (!raw) {
+      showLoading("正在准备 EPUB…");
+      const content = await fetchContentWithRetry(novel.id);
+      raw = content.text;
+      images = content.images;
+    }
+    showLoading("正在准备 EPUB…");
+    const book = {
+      title: novel.title,
+      author: (novel.user && (novel.user.name || novel.user.account)) || "",
+      units: [{ title: novel.title, raw: raw, images: images }],
+      head: novelHeaderLines(novel),
+      coverUrl: coverUrlOf(novel),
+      sourceUrl: "https://www.pixiv.net/novel/show.php?id=" + novel.id,
+      description: (novel.caption || "").slice(0, 500),
+    };
+    const result = await buildBookEpub(book);
+    const name = safeFileName(novel.title, "");
+    state.lastDownload = Date.now();
+    downloadBlob(name, result.blob);
+    await recordDownload(downloadRecordOf({
+      bookId: novel.id,
+      chapterIndex: 0,
+      chapterId: novel.id,
+      chapterTitle: novel.title,
+      title: novel.title,
+      user: (novel.user && (novel.user.name || novel.user.account)) || "",
+      seriesId: novel.series && novel.series.id,
+      seriesTitle: (novel.series && novel.series.title) || "",
+      mergeKey: mergeKeyOf(novel),
+      file: name,
+      bytes: result.blob.size,
+      chapters: 1,
+    }));
+    await refreshDownloadMarks();
+    showToast("已导出：" + name);
+  } catch (err) {
+    showToast("下载失败：" + err.message);
+  } finally {
+    state.busy = false;
+    hideLoading();
+  }
+}
+async function downloadSeries() {
+  if (downloadBlocked()) return;
+  state.busy = true;
+  try {
+    let detail = null, chapters = null;
+    // 上下文按当前视图取：在系列页时 state.current 可能还留着上一次阅读器的旧章节，
+    // 用它会导致在 A 系列页点「下载全系列」却导出 B 系列。
+    if (state.view === "series" && state.seriesView && state.seriesView.info) {
+      detail = state.seriesView.info.detail; chapters = state.seriesView.info.chapters;
+    } else if (state.current && state.current.chapters && state.current.chapters.length) {
+      detail = state.current.seriesDetail; chapters = state.current.chapters;
+    } else if (state.seriesView && state.seriesView.info) {
+      detail = state.seriesView.info.detail; chapters = state.seriesView.info.chapters;
+    }
+    if (!chapters || !chapters.length) {
+      const seriesId = (state.seriesView && state.seriesView.id) ||
+        (state.current && state.current.novel && state.current.novel.series && state.current.novel.series.id);
+      if (!seriesId) { showToast("这本小说不属于任何系列"); return; }
+      const info = await fetchSeries(seriesId);
+      detail = info.detail; chapters = info.chapters;
+    }
+    if (!chapters || !chapters.length) { showToast("系列没有章节"); return; }
+    const seriesIdResolved = (detail && detail.id) ||
+      (state.seriesView && state.seriesView.id) ||
+      (state.current && state.current.seriesDetail && state.current.seriesDetail.id) || null;
+    await refreshDownloadMarks(seriesIdResolved);
+    if (skipDownloadedOn() && seriesFullyDownloaded(chapters)) {
+      showToast("这个系列已经整本下载过（记录在「书架 → 下载记录」里）。想重下可在「Aa → 书架与下载」里关掉「跳过已下载」");
+      return;
+    }
+    const items = [];
+    const failed = [];
+    for (let i = 0; i < chapters.length; i++) {
+      showLoading("下载第 " + (i + 1) + " / " + chapters.length + " 章…");
+      try {
+        items.push(await fetchContentWithRetry(chapters[i].id));
+      } catch (err) {
+        // 单章失败不再丢掉整本：留空占位，最后在书末说明缺了哪几章
+        items.push({ text: "", images: {} });
+        failed.push("第 " + (i + 1) + " 章 " + chapterTitle(chapters[i], i) + "（" + err.message + "）");
+      }
+      if (i < chapters.length - 1) await sleep(SERIES_FETCH_GAP);
+    }
+    if (!items.some((item) => item.text)) { showToast("下载失败：所有章节都没取到正文"); return; }
+    const notes = [];
+    if (failed.length) notes.push("本次未取到正文的章节：" + failed.join("；"));
+    const units = chapters.map((chapter, i) => {
+      const item = items[i] || {};
+      return {
+        title: "第 " + (i + 1) + " 章　" + chapterTitle(chapter, i),
+        raw: item.text || "",
+        images: item.images || {},
+        html: item.text ? "" : '<p class="ph">（本章未取到正文）</p>',
+      };
+    });
+    const title = (detail && detail.title) || "系列";
+    const user = (detail && detail.user) || {};
+    const head = ["《" + title + "》"];
+    head.push("作者：" + (user.name || "未知") + (user.account ? "（" + user.account + "）" : ""));
+    if (detail && detail.id) head.push("系列页：https://www.pixiv.net/novel/series/" + detail.id);
+    head.push("共 " + chapters.length + " 章");
+    showLoading("正在准备 EPUB…");
+    const result = await buildBookEpub({
+      title: title,
+      author: user.name || user.account || "",
+      units: units,
+      head: head,
+      notes: notes,
+      coverUrl: coverUrlOf(detail || {}),
+      sourceUrl: detail && detail.id ? ("https://www.pixiv.net/novel/series/" + detail.id) : "",
+    });
+    // 缺章只写进书里和提示里，不写进文件名 —— 同一本书重复下载始终是同一个文件
+    const name = safeFileName(title, "（全" + chapters.length + "章）");
+    state.lastDownload = Date.now();
+    downloadBlob(name, result.blob);
+    // 下载记录按章节逐条记：bookId#chapterIndex 是主键，同系列名下两个不同的
+    // 「第一章」（两个不同 book_id）会各留一条，合并导出时都能看见
+    for (let i = 0; i < chapters.length; i++) {
+      if (!items[i] || !items[i].text) continue;   // 没取到正文的章节不记，免得假装下过
+      await recordDownload(downloadRecordOf({
+        bookId: chapters[i].id,
+        chapterIndex: i,
+        chapterId: chapters[i].id,
+        chapterTitle: chapterTitle(chapters[i], i),
+        title: title,
+        user: user.name || user.account || "",
+        seriesId: (detail && detail.id) || null,
+        seriesTitle: title,
+        mergeKey: mergeKeyOf({ series: { title: title } }),
+        file: name,
+        bytes: result.blob.size,
+        chapters: chapters.length,
+      }));
+    }
+    await refreshDownloadMarks(seriesIdResolved);
+    renderSeriesDlState();
+    showToast("已导出：" + name + (failed.length ? ("（缺 " + failed.length + " 章，书末有说明）") : ""));
+  } catch (err) {
+    showToast("下载失败：" + err.message);
+  } finally {
+    state.busy = false;
+    hideLoading();
+  }
+}
+
+/* ---------------- 登录徽章 ---------------- */
+async function loadAuthBadge() {
+  const badge = $("auth-badge");
+  try {
+    const status = await callApi("/auth/status");
+    // 状态随时可能变（refresh token 失效 / 接口 502），绿底必须跟着变
+    badge.classList.toggle("ok", !!status.authenticated);
+    if (status.authenticated) {
+      const name = (status.user && status.user.name) || "";
+      badge.textContent = "已登录" + (name ? "：" + name : "");
+    } else if (status.refresh_token_set) {
+      badge.textContent = "已配置 refresh token（等待首次请求换取 access token）";
+    } else {
+      badge.textContent = "未登录（需配置 refresh token）";
+    }
+  } catch (err) {
+    badge.classList.remove("ok");
+    badge.textContent = "接口不可用";
+  }
+}
+
+/* ---------------- 路由 ---------------- */
+function route() {
+  // 畸形 hash（例如手改出来的 #/read/%）不能让 decodeURIComponent 抛错把路由打死
+  let raw = "";
+  try { raw = decodeURIComponent(location.hash.replace(/^#\/?/, "")).trim(); }
+  catch (e) { raw = ""; }
+  const parts = raw.split("/").filter(Boolean);
+  const kind = parts[0] || "";
+  const id = parts[1] || "";
+  closeDrawers();
+  if (kind === "read" && id) return openReader(id);
+  if (kind === "series" && id) return openSeries(id, "");
+  if (kind === "user" && id) return openUser(id, "");
+  if (kind === "shelf") { state.source = "shelf"; setFilters(); setNavActive(); renderShelf(); return; }
+  if (kind === "bookmarks") { state.source = "bookmarks"; setFilters(); setNavActive(); renderFavs(); return; }
+  showView("list");
+  // 深链直接进详情页（例如书签 #/read/123）后再返回列表时，列表可能一次都没加载过：
+  // 这里补一次默认来源，否则用户看到的是一张空白页。
+  if (!state.loaded) { setNavSource(state.source); return; }
+  // 回来时恢复离开列表前的滚动位置（同样不依赖 rAF：无头/后台环境里 rAF 可能永不触发）
+  const back = state.listScroll || 0;
+  window.scrollTo(0, back);
+  requestAnimationFrame(() => window.scrollTo(0, back));
+}
+function goList() {
+  // 离开阅读页前立刻落盘进度：滚动事件的保存有 500ms 防抖，马上点返回会丢掉最后一次
+  clearTimeout(saveTimer);
+  saveProgress();
+  if (location.hash === "" || location.hash === "#/" || location.hash === "#/shelf") route();
+  else location.hash = "#/";
+}
+
+/* ---------------- 事件绑定 ---------------- */
+function bind() {
+  for (const btn of $("nav").querySelectorAll("button")) {
+    btn.addEventListener("click", () => {
+      const source = btn.dataset.source;
+      closeDrawers();
+      // 书架 / 收藏 有自己的 hash，别在这里覆盖掉（否则 route() 会再跑一遍）
+      if (["", "#/", "#/shelf", "#/bookmarks"].indexOf(location.hash) < 0) location.hash = "#/";
+      showView("list");
+      setNavSource(source);
+    });
+  }
+  $("q-run").addEventListener("click", () => { runQuery("search", false); setAdvOpen(false); });
+  $("q-kind").addEventListener("change", () => {
+    $("q-word").placeholder = $("q-kind").value === "user"
+      ? "搜索作者：昵称 / 账号"
+      : "搜索小说：关键词 / 标签，回车即搜";
+    if (state.source === "search" && $("q-word").value.trim()) runQuery("search", false);
+  });
+  $("q-word").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { runQuery("search", false); setAdvOpen(false); }
+  });
+  $("adv-toggle").addEventListener("click", () => setAdvOpen($("adv-search").hidden));
+  // 已经在搜索结果里时，改排序/日期立即重查（关键词为空则等用户按搜索）
+  for (const id of ["q-sort", "q-start", "q-end"]) {
+    $(id).addEventListener("change", () => {
+      if (state.source === "search" && $("q-word").value.trim()) runQuery("search", false);
+    });
+  }
+  $("q-run-rank").addEventListener("click", () => runQuery("ranking", false));
+  $("q-run-follow").addEventListener("click", () => runQuery("follow", false));
+  $("q-mode").addEventListener("change", () => runQuery("ranking", false));
+  $("q-restrict").addEventListener("change", () => runQuery("follow", false));
+  $("q-my-following").addEventListener("click", () => { closeDrawers(); openFollowing(); });
+  $("user-back").addEventListener("click", goList);
+  $("user-follow").addEventListener("click", toggleFollow);
+  $("user-more").addEventListener("click", userMore);
+  $("btn-more").addEventListener("click", () => runQuery(state.source, true));
+  $("grid").addEventListener("click", (e) => {
+    const rm = e.target.closest("[data-rm]");
+    if (rm) {
+      const id = Number(rm.dataset.rm);
+      saveShelf(loadShelf().filter((it) => Number(it.id) !== id));
+      renderShelf();
+      showToast("已从书架移除");
+      return;
+    }
+    // 下载记录：同系列名归一组，点一下就合并导出
+    const merge = e.target.closest("[data-merge]");
+    if (merge) {
+      const group = (state.dlGroups || []).find((g) => g.key === merge.dataset.merge);
+      if (group) downloadMergeGroup(group);
+      else showToast("找不到这组下载记录，试试重新扫描");
+      return;
+    }
+    if (e.target.closest("[data-dl-clear]")) {
+      callApiPost("/downloads/clear", {})
+        .then(() => { showToast("下载记录已清空"); return renderShelf(); })
+        .catch((err) => showToast("清空失败：" + err.message));
+      return;
+    }
+    if (e.target.closest("[data-libscan]")) { loadLibrary(true).then(() => renderShelf()); return; }
+    const local = e.target.closest("[data-local]");
+    if (local) {
+      const hit = /(\.[^./\\]+)$/.exec(local.dataset.local);
+      openLocal(local.dataset.local, hit ? hit[1] : "");
+      return;
+    }
+    // 作者搜索结果渲染在同一个 #grid 里，点作者卡片进作者页
+    const user = e.target.closest("[data-user]");
+    if (user) { location.hash = "#/user/" + user.dataset.user; return; }
+    const series = e.target.closest("[data-series]");
+    if (series) { location.hash = "#/series/" + series.dataset.series; return; }
+    const card = e.target.closest("[data-id]");
+    if (card && !card.dataset.rm) location.hash = "#/read/" + card.dataset.id;
+  });
+  $("user-grid").addEventListener("click", (e) => {
+    const user = e.target.closest("[data-user]");
+    if (user) { location.hash = "#/user/" + user.dataset.user; return; }
+    const series = e.target.closest("[data-series]");
+    if (series) { location.hash = "#/series/" + series.dataset.series; return; }
+    const card = e.target.closest("[data-id]");
+    if (card) location.hash = "#/read/" + card.dataset.id;
+  });
+  $("series-chapters").addEventListener("click", (e) => {
+    const item = e.target.closest(".chapter");
+    if (item) location.hash = "#/read/" + item.dataset.id;
+  });
+  $("series-back").addEventListener("click", goList);
+  $("series-download").addEventListener("click", () => downloadSeries());
+  $("series-watch").addEventListener("click", () => {
+    const info = (state.seriesView && state.seriesView.info) || {};
+    const detail = info.detail || {};
+    toggleWatch({ series: detail.id ? { id: detail.id, title: detail.title } : null });
+  });
+  $("btn-fav").addEventListener("click", () => {
+    const cur = state.current;
+    if (cur && cur.novel) toggleFav(cur.novel);
+  });
+  $("btn-watch").addEventListener("click", () => {
+    const cur = state.current;
+    if (cur && cur.novel) toggleWatch(cur.novel);
+  });
+  $("reader-back").addEventListener("click", goList);
+  $("btn-copy").addEventListener("click", async () => {
+    const text = (state.current && state.current.text) || "";
+    if (!text) { showToast("还没有正文"); return; }
+    try { await navigator.clipboard.writeText(text); showToast("正文已复制"); }
+    catch (e) { showToast("复制失败，请手动选择文本"); }
+  });
+  $("btn-download").addEventListener("click", () => downloadCurrent());
+  $("btn-toc").addEventListener("click", () => { openDrawer("toc"); });
+  $("btn-prev").addEventListener("click", () => gotoChapter(-1));
+  $("btn-next").addEventListener("click", () => gotoChapter(1));
+  $("chapter-select").addEventListener("change", (e) => { location.hash = "#/read/" + e.target.value; });
+  $("toc-close").addEventListener("click", closeDrawers);
+  $("toc-download").addEventListener("click", () => { closeDrawers(); downloadSeries(); });
+  $("scrim").addEventListener("click", closeDrawers);
+
+  $("btn-settings").addEventListener("click", () => { applySettings(); openDrawer("settings"); });
+  $("set-close").addEventListener("click", closeDrawers);
+  $("set-fs").addEventListener("input", (e) => { settings.fs = Number(e.target.value); saveSettings(); });
+  $("set-lh").addEventListener("input", (e) => { settings.lh = Number(e.target.value); saveSettings(); });
+  $("set-w").addEventListener("input", (e) => { settings.w = Number(e.target.value); saveSettings(); });
+  $("set-theme").addEventListener("change", (e) => { settings.theme = e.target.value; saveSettings(); });
+  $("set-font").addEventListener("change", (e) => { settings.font = e.target.value; saveSettings(); });
+  $("set-reset").addEventListener("click", () => { settings = Object.assign({}, DEFAULT_SETTINGS); saveSettings(); showToast("已恢复默认"); });
+
+  // 书架与下载（写进项目里的 data/settings.json）
+  $("set-libdir-add").addEventListener("click", () => {
+    const input = $("set-libdir");
+    const dir = (input.value || "").trim();
+    if (!dir) { showToast("先填一个目录，例如 D:\\novels"); return; }
+    const cfg = (state.serverConfig && state.serverConfig.config) || {};
+    const dirs = (cfg.library_dirs || []).concat([dir]).filter((v, i, a) => a.indexOf(v) === i);
+    input.value = "";
+    saveServerConfig({ library_dirs: dirs });
+  });
+  $("set-lib-list").addEventListener("click", (e) => {
+    const rm = e.target.closest("[data-librm]");
+    if (!rm) return;
+    const cfg = (state.serverConfig && state.serverConfig.config) || {};
+    saveServerConfig({ library_dirs: (cfg.library_dirs || []).filter((d) => d !== rm.dataset.librm) });
+  });
+  const saveSwitches = () => saveServerConfig({
+    merge_series: $("set-merge").value === "1",
+    skip_downloaded: $("set-skip").value === "1",
+    scan_depth: Number($("set-depth").value),
+  });
+  $("set-save").addEventListener("click", saveSwitches);
+  for (const id of ["set-merge", "set-skip", "set-depth"]) $(id).addEventListener("change", saveSwitches);
+
+  document.addEventListener("keydown", (e) => {
+    // Esc 永远先处理（在抽屉的滑块/下拉上按 Esc 也要能关掉抽屉）
+    if (e.key === "Escape") {
+      const hadDrawer = ["toc", "settings"].some((id) => !$(id).hidden);
+      closeDrawers();
+      if (!hadDrawer && state.view === "reader") goList();
+      return;
+    }
+    if (e.target && /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+    // 抽屉开着时把 Tab 限制在抽屉里（配合 role="dialog" aria-modal="true"）
+    if (e.key === "Tab") {
+      const drawer = ["toc", "settings"].map((id) => $(id)).find((el) => !el.hidden);
+      if (drawer) trapTab(drawer, e);
+      return;
+    }
+    if (state.view !== "reader") return;
+    if (e.key === "ArrowLeft") gotoChapter(-1);
+    if (e.key === "ArrowRight") gotoChapter(1);
+  });
+  window.addEventListener("hashchange", route);
+  // iOS Safari 上 beforeunload 不可靠，pagehide 更稳；两个都挂，重复保存无副作用
+  const leave = () => {
+    saveProgress();
+    const cur = state.current;
+    if (cur && cur.novel && !cur.local) beaconHistory(historyEntry(cur.novel));   // 离页时补最后一条
+  };
+  window.addEventListener("beforeunload", leave);
+  window.addEventListener("pagehide", leave);
+}
+
+/* ---------------- 旧版服务自检 ----------------
+   页面每次都从磁盘读取（改页面刷新即可生效），但**路由**属于服务进程，重启才更新。
+   启动时读一次 /openapi.json：若缺少小说接口，直接在页面上说明该怎么办，
+   省得「打开小说报 404」时靠猜。 */
+async function checkRoutes() {
+  const banner = $("ver-banner");
+  try {
+    const resp = await fetch("/openapi.json", { cache: "no-store" });
+    if (!resp.ok) { banner.hidden = true; return; }
+    const spec = await resp.json();
+    const paths = (spec && spec.paths) || {};
+    const needed = ["/api/novel/{novel_id}", "/api/novel/{novel_id}/text", "/api/history",
+      "/api/bookmarks", "/api/downloads", "/api/config", "/api/library"];
+    const missing = needed.filter((p) => !paths[p]);
+    if (!missing.length) { banner.hidden = true; return; }
+    banner.hidden = false;
+    banner.textContent = "⚠ 后台服务是旧版本：缺少接口 " + missing.join("、") +
+      "。请停止服务、用最新代码重新启动，然后刷新本页（页面本身会自动更新，路由不会）。";
+  } catch (err) {
+    banner.hidden = true;
+  }
+}
+
+/* ---------------- 启动 ---------------- */
+// 手机屏窄，搜索框放不下长提示
+if (window.matchMedia("(max-width:640px)").matches) $("q-word").placeholder = "搜索关键词 / 标签";
+applySettings();
+bind();
+loadAuthBadge();
+checkRoutes();
+hydrateHistory();   // 把项目里的阅读历史并进书架（换浏览器也能看到最近在读）
+loadServerConfig(); // 项目配置（本地书架目录 / 合并 / 跳过已下载）
+loadFavs();         // 收藏台账
+route();
+// 首屏直接给出榜单内容（搜索框固定在页面上方，回车即搜）
+if (!location.hash || location.hash === "#/") {
+  $("list-meta").textContent = "正在加载榜单…";
+  setNavSource("ranking");
+}
+</script>
+</body>
+</html>

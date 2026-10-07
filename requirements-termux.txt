@@ -1,0 +1,20 @@
+# Termux / Android 专用依赖清单。
+#
+# 为什么不能直接用 requirements.txt：
+#   pydantic 2.x 依赖 pydantic-core（Rust 编写）。Termux 用的是 bionic libc，
+#   官方 manylinux wheel 用不了，pip 只能去源码编译，而编译需要 Rust 工具链
+#   （rust + cargo + clang），普通用户装不动。因此这里钉在**纯 Python**的
+#   pydantic 1.x，并配套使用仍兼容 pydantic v1 的 fastapi。
+#   本项目代码只用到 pydantic.BaseModel 的基础用法，两个大版本都能正常工作：
+#   取模型字段统一走 pixiv_bridge/compat.py 的 dump_model()（2.x 用
+#   model_dump()，1.x 退回 dict()），所以 v1 上不会因为缺 model_dump 报 500。
+#   pydantic 1.10.26 + fastapi 0.115.14 + starlette 0.41.3 已实测通过全部
+#   单元测试（217 项）。
+#
+# 手工安装（一般不需要，run.py 会自动用本文件）：
+#   python -m pip install -r requirements-termux.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+pydantic<2
+fastapi<0.116
+uvicorn
+httpx
