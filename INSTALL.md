@@ -6,6 +6,8 @@
 - 安卓 / Termux（以及其它 Linux）走 [第 2 节](#2-安卓--termux以及-其它-linux)
 - 只想给别的程序调用接口：装好、登录好之后，接口地址是 `http://127.0.0.1:8765/api/...`
 
+> **两个入口，别搞混**：一键脚本（`start.bat` / `start.sh`）跑的是**纯接口**版，浏览器打开 `http://127.0.0.1:8765/` 会是 **404**——它压根不带网页；要下面第 5 步那个小说阅读器页面，请用 `python novel\run.py`（Termux：`python3 novel/run.py`）启动。接口本身两个入口完全一样。
+
 ---
 
 ## 0. 先看清楚：什么要自己弄，什么会自动搞定
@@ -87,7 +89,7 @@ python get_token.py
 
 浏览器访问 <http://127.0.0.1:8765/>，能看到小说榜单、点开一本能读正文即全部完成。页面顶部可以直接搜小说，右上角 `Aa` 调字号/主题，正文里的插图会直接显示，「下载 EPUB」「下载全系列（EPUB）」导出的是一本 `.epub`（**一本书只有一个文件**：单本 `<书名>.epub`，系列 `<系列名>（全N章）.epub`），插图作为图片打包进书里、带内置目录，离线打开也能看图。读过的书、下过的章节、收藏了哪些都记在**项目目录下的 `data\` 里**（`data\history.jsonl` 阅读历史、`data\downloads.jsonl` 下载历史、`data\bookmarks.jsonl` 收藏台账，都是一行一条 JSON，个人使用、不区分用户；想清空直接删对应文件即可，也可以在 `.env` 里用 `PIXIV_HISTORY_FILE` / `PIXIV_DOWNLOADS_FILE` / `PIXIV_BOOKMARKS_FILE` 换位置）。老版本的 `tokens.json` / `history.jsonl` 首次启动会自动搬进 `data\`。接口文档在 <http://127.0.0.1:8765/docs>。
 
-**换端口**（默认 8765 被占用时）：`start.bat --port 9000`，然后访问 `http://127.0.0.1:9000/`。
+**换端口**（默认 8765 被占用时）：`start.bat --port 9000`，然后访问 `http://127.0.0.1:9000/`。阅读器入口换端口一样是 `python novel\run.py --port 9000`。
 
 ---
 
@@ -150,8 +152,10 @@ cd ~/pixiv-bridge && python get_token.py
 
 - 关掉 Termux 或手机清理后台会停掉服务。想让它一直活着：在启动前执行 `termux-wake-lock`（获取唤醒锁）。
 - **项目就放在 Termux 家目录里**（`~/pixiv-bridge`）。不要把项目、也不要把数据目录指到 `/sdcard`（`~/storage/...`）那边：那是安卓的 FUSE 目录，经常「读得到、写不进」，表现就是**设置里保存配置报 500**。真指过去了也不会坏：服务会把数据路径自动收回项目里的 `data/`，启动日志和设置页都会逐条提示（详见 README 的「保存配置报『写入失败』」）。
-- 电脑上访问手机的服务：`sh start.sh --host 0.0.0.0`，然后在电脑浏览器打开 `http://手机IP:8765/`（仅限同一局域网；注意这样别人也能访问，必要时加防火墙）。
+- 电脑上访问手机的服务：`sh start.sh --host 0.0.0.0`（要看阅读器就 `python3 novel/run.py --host 0.0.0.0`），然后在电脑浏览器打开 `http://手机IP:8765/`（仅限同一局域网；注意这样别人也能访问，必要时加防火墙）。
 - 其它 Linux（Ubuntu / Debian / 树莓派）和 macOS 用法一样：`sh start.sh`。
+
+> 手机上直接看也一样：用 `python3 novel/run.py` 启动后，手机浏览器开 <http://127.0.0.1:8765/>。用 `start.sh` 的话这个地址是 404（纯接口不带页面）。
 
 ---
 
@@ -175,8 +179,10 @@ cd ~/pixiv-bridge && python get_token.py
 先自检：
 
 ```sh
-python run.py --check
+python run.py --check        # 纯接口入口；看阅读器用 python3 novel/run.py --check
 ```
+
+（两个入口的 `--check` 查的是同一套环境：Python / 依赖 / 项目文件 / 端口 / 网络 / ECH。）
 
 看输出里的 `network` / `ech` 两行：
 
@@ -243,8 +249,8 @@ PIXIV_PROXY=http://127.0.0.1:7890
 
 启动后：
 
-- 网页（小说阅读器）：<http://127.0.0.1:8765/>
-- 自带的交互式接口文档：<http://127.0.0.1:8765/docs>
+- 网页（小说阅读器，**需 `novel/run.py` 入口**）：<http://127.0.0.1:8765/>；用 `start.bat` / `start.sh` 时这里就是 404，属正常
+- 自带的交互式接口文档（两个入口都有）：<http://127.0.0.1:8765/docs>
 - 健康检查：<http://127.0.0.1:8765/api/health>
 - 给别的程序调用，例如：
 

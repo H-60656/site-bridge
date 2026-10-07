@@ -159,7 +159,7 @@ INFO:     Uvicorn running on http://127.0.0.1:8765
 | `port`（监听端口） | **中止启动** | 提示换端口（`--port` 或 `PIXIV_BRIDGE_PORT`） |
 | `network` / `ech` / `proxy`（Pixiv 域名连通性） | 仅警告，不中止 | 三选一：设置 `PIXIV_PROXY` 时真发一次经代理的请求（`proxy` 项）；开启 `PIXIV_BRIDGE_ECH=1` 时真发一次 ECH 请求（`ech` 项）；否则用内置 IP 池 + 无 SNI TLS 探测（`network` 项）。不可达时按当前模式给出改 ECH / 改无 SNI / 改代理的提示，ECH 被 RST 时会直接点明“当前网络在阻断 ECH 扩展” |
 
-跳过端口检查（仅校验登录）：`python run.py --check`。
+跳过端口检查（仅校验登录）：`python run.py --check`（阅读器入口是 `python novel/run.py --check`）。
 
 ### 获取 refresh_token（三种方式任选）
 
@@ -207,9 +207,15 @@ PIXIV_REFRESH_TOKEN=你的refresh_token
 ### 启动
 
 ```bash
+# 纯接口（不带网页）
 .venv/bin/python run.py                    # 默认 127.0.0.1:8765
 .venv/bin/python run.py --host 0.0.0.0 --port 9000
+
+# 接口 + 小说阅读器（同一个 --host / --port 用法）
+.venv/bin/python novel/run.py
 ```
+
+> Windows 的 `start.bat` / Termux 的 `start.sh` 对应的是第一行那个**纯接口**入口。
 
 验证：
 
@@ -218,19 +224,20 @@ curl http://127.0.0.1:8765/api/health
 curl http://127.0.0.1:8765/api/auth/status
 ```
 
-浏览器打开 <http://127.0.0.1:8765/> 直接使用内置的小说阅读器页面（榜单 / 搜索 / 阅读 / 导出，详见下节「Web 页面」）。
+接口就到此可用了。上面这个入口**不带网页**：打开 <http://127.0.0.1:8765/> 会是 404（正常）。要小说阅读器页面，改用另一个入口 `python novel/run.py` 启动，再打开同一个地址（详见「Web 页面」）。
 
 ## 项目结构
 
 ```
 pixiv-bridge/
-├── run.py / pixiv_bridge/__main__.py   启动入口（先自动装依赖，再启动）
-├── start.bat / start.sh                一键启动脚本（Windows / Termux + Linux）
+├── run.py / pixiv_bridge/__main__.py   纯接口入口（先自动装依赖，再启动）
+├── start.bat / start.sh                一键启动脚本（跑的是上面的纯接口入口）
 ├── get_token.py                        交互式获取 refresh_token（浏览器授权 / 账号密码）
 ├── requirements.txt                    依赖清单（Termux 自动改用 requirements-termux.txt）
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── novel/                              小说阅读子项目（依赖 pixiv_bridge，入口 novel/run.py）
+│   ├── __init__.py  说明本子项目依赖主项目；对外入口是 app.create_app
 │   ├── run.py          完整服务入口（接口 + 阅读器；主项目的命令行之上挂自己的路由）
 │   ├── app.py          组装：台账/配置/书架挂到 app.state，再挂本子项目路由
 │   ├── history.py      阅读历史（JsonlStore 子类）
@@ -366,6 +373,8 @@ pixiv-bridge/
 
 所有接口返回 Pixiv 原始 JSON（透传），错误时返回 `{"error": {"message": "...", "reason": "..."}}`。
 
+> 下面「认证」到「其他（接口主项目）」这些，`run.py` 与 `novel/run.py` 两个入口都有；最后一节「台账与书架」只有 `novel/run.py` 才有。
+
 ### 认证
 
 | 方法 | 路径 | 说明 |
@@ -440,7 +449,7 @@ pixiv-bridge/
 | GET | `/api/novel/series?series_id=&next_url=` | 小说系列 |
 | POST | `/api/novel/bookmark/add` / `/api/novel/bookmark/delete` | 小说收藏/取消 |
 
-### 其他
+### 其他（接口主项目）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -448,6 +457,13 @@ pixiv-bridge/
 | POST | `/api/watchlist/novel\|manga/add\|delete?series_id=` | 追更/取消 |
 | GET | `/api/next?url=` | 通用翻页（传任意列表接口返回的 next_url） |
 | GET | `/img?url=完整图片URL` 或 `/img/{path}` | 图片代理 |
+
+### 台账与书架（**仅 `novel/run.py` 提供**）
+
+下面这些不是接口的一部分，而由小说阅读子项目 `novel/` 挂载；用 `run.py`（或 `start.bat` / `start.sh`）启动时它们都返回 **404**，要看下面的说明请改用 `novel/run.py`：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
 | GET | `/api/history?limit=` | 阅读历史（每本小说一条最新记录，按阅读时间倒序；同时返回 `file` 告诉前端文件落在哪里） |
 | POST | `/api/history` | 记一条阅读历史（`{"id": 2001, "title": …, "progress": 0.42, "chapter_index": 1, …}`；字段见「阅读历史落在项目里」，缺 `id` 会被拒绝） |
 | GET | `/api/downloads?limit=&series_id=&book_id=` | 下载历史（一行一条、按章节记；带 `series_id` 时额外返回 `series`：`{"<章节序号>": {at,file,bytes,format}}` 方便判断「这个系列下过哪几章」） |
@@ -612,7 +628,8 @@ tar --exclude=.venv --exclude=venv --exclude=__pycache__ --exclude=.env \
 ```
 
 > 产物也可以像上面那样写进 `dist/`（`dist` 已在排除列表里，不会被 tar 打进包）；写成 `../pixiv-bridge.tar.gz` 也一样，关键是**别写到会被扫到的路径**，否则 tar 会把这个正在写入的压缩包自己也算进去。
-> 仓库里随版本附带的 `dist/pixiv-bridge.zip`、`dist/pixiv-bridge.tar.gz` 就是用这两条命令生成的。
+>
+> `dist/` 已在 `.gitignore` 里，不入库——需要分享包时用上面这两条命令现做一份。**直接从版本库的源码改动生成**，别用旧的包：拆分之前打的包里还是 `web/index.html`、`pixiv_bridge/history.py` 那一套旧结构，拷给别人会跑不起来。
 
 打包后建议确认一眼包内没有 `.env`、`tokens.json`、`history.jsonl`、`data/`、`.venv/`、`__pycache__/`，并且含 `novel/web/index.html`：
 
@@ -677,7 +694,8 @@ cd pixiv-bridge
 cp .env.example .env      # Windows: copy .env.example .env
 # 编辑 .env：填入 PIXIV_REFRESH_TOKEN（以及需要的 PIXIV_BRIDGE_ECH 等）
 python run.py --check     # 期望：python / deps / files / ech(或 network) 全 OK + 登录成功
-python run.py             # 正式启动，浏览器打开 http://127.0.0.1:8765/
+python run.py             # 纯接口启动
+python novel/run.py       # 或：接口 + 小说阅读器，浏览器打开 http://127.0.0.1:8765/
 ```
 
 ## 部署
@@ -692,13 +710,16 @@ docker run -d -p 8765:8765 \
   pixiv-bridge
 ```
 
+> Docker 镜像里跑的是**纯接口**入口（`CMD python run.py`）。想在容器里用阅读器，`docker run` 时把命令换成 `python novel/run.py`（镜像已 `COPY novel novel`，不用改镜像）。
+
 ### 局域网访问
 
 服务持有你的 Pixiv 账号令牌，暴露到局域网有安全风险，默认只监听 `127.0.0.1`。
 确需局域网调用时：
 
 ```bash
-PIXIV_BRIDGE_HOST=0.0.0.0 .venv/bin/python run.py
+PIXIV_BRIDGE_HOST=0.0.0.0 .venv/bin/python run.py          # 纯接口
+PIXIV_BRIDGE_HOST=0.0.0.0 .venv/bin/python novel/run.py     # 接口 + 阅读器（手机浏览器可用）
 ```
 
 建议放在反向代理（Nginx/Caddy）后面并加访问密钥。
