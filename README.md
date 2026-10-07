@@ -626,7 +626,7 @@ Linux / macOS（Windows 10 1803+ 自带的 `tar` 也可以直接用这条命令�
 ```bash
 tar --exclude=.venv --exclude=venv --exclude=__pycache__ --exclude=.env \
     --exclude=tokens.json --exclude=history.jsonl --exclude=data --exclude=dist --exclude=_tmp_tests \
-    --exclude='*.pyc' -czf dist/pixiv-bridge.tar.gz .
+    --exclude=.git --exclude='*.pyc' -czf dist/pixiv-bridge.tar.gz .
 ```
 
 > 产物也可以像上面那样写进 `dist/`（`dist` 已在排除列表里，不会被 tar 打进包）；写成 `../pixiv-bridge.tar.gz` 也一样，关键是**别写到会被扫到的路径**，否则 tar 会把这个正在写入的压缩包自己也算进去。
