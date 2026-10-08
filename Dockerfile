@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir -r iwara/requirements.txt
 COPY pixiv_bridge pixiv_bridge
 COPY novel novel
 COPY iwara iwara
+COPY iwara_web iwara_web
 COPY run.py .
 # 可选：容器里要用 ECH，把 Linux 版库放进 openssl-libs/linux-x86_64/ 后取消下面一行的注释。
 # （COPY 要求源路径存在，仓库目前只带 Windows 与 Android 版，所以默认注释掉，保证镜像能直接构建。）
@@ -32,5 +33,7 @@ EXPOSE 8765
 # 默认只跑纯接口。要在容器里带上小说阅读器，加一个环境变量即可 ——
 # 扩展目录已 COPY 进来，程序会去找 novel/extension.py：
 #   docker run -e PIXIV_BRIDGE_EXTENSIONS=novel ...
-# （iwara 是另一个独立接口项目，容器里改跑 `python iwara/run.py` 即可。）
+# iwara 是另一个独立接口项目，容器里改跑 `python iwara/run.py` 即可；
+# 要 iwara 的视频页面再加上扩展（它调 /api/iwara/*，所以必须跟 iwara 入口一起用）：
+#   docker run -e PIXIV_BRIDGE_EXTENSIONS=iwara_web python iwara/run.py
 CMD ["python", "run.py"]

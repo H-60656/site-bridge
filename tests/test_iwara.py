@@ -1011,13 +1011,11 @@ class IwaraRouteTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json()["detail"], "上游炸了")
 
-    def test_video_page_is_served(self):
+    def test_video_page_is_not_part_of_the_api_project(self):
+        # 视频页面已经拆到独立的扩展包 iwara_web：接口项目本身不提供它。
+        # （页面能不能打开由 IwaraWebExtensionTestCase 验证。）
         client = self._client()
-        response = client.get("/iwara")
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.headers["content-type"].startswith("text/html"))
-        # 页面靠绝对路径调接口，所以根地址挂在哪个路径都行。
-        self.assertIn('"/api/iwara"', response.text)
+        self.assertEqual(client.get("/iwara").status_code, 404)
 
     def test_resolve_reports_chosen_source(self):
         client = self._client()
@@ -1168,25 +1166,27 @@ class IwaraRouteTestCase(unittest.TestCase):
 class IwaraEntryPointTestCase(unittest.TestCase):
     """入口与打包：路由集合、路由超集、依赖清单。"""
 
-    def test_iwara_routers_cover_the_video_api_and_the_page(self):
+    def test_iwara_routers_cover_the_video_api(self):
         from iwara.app import IWARA_ROUTERS, IWARA_STATE_KEYS, iwara_state_factory
 
-        # 视频页面路由 + 视频接口路由。
-        self.assertEqual(len(IWARA_ROUTERS), 2)
+        # 只剩视频接口路由 —— 视频页面拆给了独立的扩展包 iwara_web。
+        self.assertEqual(len(IWARA_ROUTERS), 1)
         # nav_sections 是给主项目导航页（`/`）用的：iwara 不改路由，
-        # 而是把自己的页面加进那一页（见 iwara/app.py 的 IWARA_NAV）。
+        # 而是把自己的接口加进那一页（见 iwara/app.py 的 IWARA_NAV）。
         self.assertEqual(IWARA_STATE_KEYS, ("iwara_client", "nav_sections"))
         self.assertEqual(
             sorted(iwara_state_factory(make_settings())),
             ["iwara_client", "nav_sections"],
         )
 
-    def test_iwara_nav_lists_the_video_page(self):
+    def test_iwara_nav_lists_only_json_apis(self):
         from iwara.app import IWARA_NAV
-        from iwara.routes.web import WEB_PATH
 
-        self.assertEqual(IWARA_NAV.items[0].path, WEB_PATH)
-        self.assertEqual(WEB_PATH, "/iwara")
+        paths = [item.path for item in IWARA_NAV.items]
+        self.assertTrue(all(p.startswith("/api/iwara/") for p in paths), paths)
+        # 页面由 iwara_web 扩展自己声明（EXTENSION_NAV），这里不列，
+        # 否则没挂那个包时导航页会出现一条 404 链接。
+        self.assertNotIn("/iwara", paths)
 
     def test_iwara_adds_routes_to_the_pure_app(self):
         def paths(app):
@@ -1218,8 +1218,6 @@ class IwaraEntryPointTestCase(unittest.TestCase):
                 "/api/iwara/thumbnail/{video_id}",
                 "/api/iwara/me",
                 "/api/iwara/auth",
-                # 视频页面；根地址 `/` 仍是主项目的导航页，所以不在差集里。
-                "/iwara",
             },
         )
 

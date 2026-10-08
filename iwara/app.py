@@ -12,8 +12,13 @@
 与 `novel` 的另一处区别：iwara 不参与扩展机制，它是**自己独立的入口**
 （`iwara/run.py`），因为它要多装编译依赖 `curl_cffi`。所以导航页那一层
 它不改路由（根地址 `/` 仍是主项目的导航页），而是通过
-`app.state.nav_sections` 把自己的页面**加进那一页**，效果就是
-`iwara/run.py` 启动后 `/` 这个导航页会连 iwara 的页面一起列出。
+`app.state.nav_sections` 把自己的接口**加进那一页**，效果就是
+`iwara/run.py` 启动后 `/` 这个导航页会连 iwara 的接口一起列出。
+
+人看的视频页面（`/iwara`）**不在这个包里**：它是独立的扩展包 `iwara_web`，
+按配置挂上去（`PIXIV_BRIDGE_EXTENSIONS=iwara_web`）。这样「接口」与「页面」
+可以分开分发，装了接口包也不必带上页面。这里仍然在导航页里列出那个地址，
+方便挂上页面之后一眼能找到（没挂就是 404，导航页的无障碍降级）。
 """
 
 from contextlib import asynccontextmanager
@@ -24,24 +29,26 @@ from pixiv_bridge.server import create_app as _create_bridge_app
 
 from . import tokens
 from .client import IwaraClient
-from .routes import videos, web
+from .routes import videos
 
-IWARA_ROUTERS = (web.router, videos.router)
+IWARA_ROUTERS = (videos.router,)
 
 IWARA_STATE_KEYS = ("iwara_client", "nav_sections")
 
-# 导航页上露出的 iwara 页面。地址与 `iwara/routes/videos.py` 里的前缀一致，
+# 导航页上露出的 iwara 接口。地址与 `iwara/routes/videos.py` 里的前缀一致，
 # 改成 `/api/iwara/...` 的路径时这里也要跟着改。
+# 视频**页面**（`/iwara`）不在这里列：它由独立的扩展包 `iwara_web` 提供，
+# 没挂那个包时这个地址是 404，列出来反而误导；挂了之后扩展自己会在导航页上
+# 声明那条链接（见 `iwara_web/extension.py` 的 `EXTENSION_NAV`）。
 IWARA_NAV = NavSection(
     title="iwara 视频（本入口独有）",
     items=(
-        NavItem("视频页面", web.WEB_PATH, "浏览 / 搜索 / 播放，带详情页与相关视频"),
         NavItem("视频列表", "/api/iwara/videos", "trending / 最新，支持 rating 过滤"),
         NavItem("搜索", "/api/iwara/search?query=dance", "按关键词搜视频"),
         NavItem("解析直链", "/api/iwara/resolve/{video_id}?probe=true", "拿到可播放的 mp4 直链并探活"),
         NavItem("登录状态", "/api/iwara/auth", "是否配了 token；不配也能匿名看公开内容"),
     ),
-    note="视频页面是给人看的；其余是 JSON 接口，用浏览器打开即可查看返回内容。",
+    note="这些是 JSON 接口，用浏览器打开即可查看返回内容；人看的视频页面在 iwara_web 扩展包里。",
 )
 
 
@@ -63,13 +70,19 @@ def iwara_state_factory(settings):
     }
 
 
-def create_app(settings=None, transport=None):
-    """接口 + iwara 的完整服务（`iwara/run.py` 的入口）。"""
+def create_app(settings=None, transport=None, extensions=()):
+    """接口 + iwara 的完整服务（`iwara/run.py` 的入口）。
+
+    `extensions` 是「接口 + 对应扩展」的组合形态：`iwara/run.py` 读配置
+    （`PIXIV_BRIDGE_EXTENSIONS`）加载扩展后传进来，典型的是 `iwara_web`
+    （人看的视频页面）。不传就是纯接口。
+    """
     app = _create_bridge_app(
         settings,
         transport=transport,
         state_factory=iwara_state_factory,
         extra_routers=IWARA_ROUTERS,
+        extensions=extensions,
     )
     _close_client_on_shutdown(app)
     return app

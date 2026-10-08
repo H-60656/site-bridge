@@ -7,10 +7,11 @@
 1. pixiv_bridge/ 里没有任何模块 import 附属项目（依赖不能倒过来）；
 2. 各附属项目只用主项目 pixiv_bridge，不使用本仓库其它本地包；
 3. 各附属项目都能建出应用，且各自比纯接口多出预期的那几条路由 ——
-   `novel` 走的是**扩展机制**（配置驱动的真实路径，即 `extension.py`），
-   `iwara` 走的是自己独立接口项目的工厂；
-4. 出入口清爽：两个接口项目各留一个 `run.py`，阅读项目不再有专属入口，
-   改为固定文件名 `novel/extension.py`。
+   两个**扩展包**（`novel` 阅读器、`iwara_web` 视频页）走的是扩展机制
+   （配置驱动的真实路径，即目录里的 `extension.py`），`iwara` 走的是
+   自己独立接口项目的工厂；
+4. 出入口清爽：两个接口项目各留一个 `run.py`，扩展包不再有专属入口，
+   改为固定文件名 `<包>/extension.py`。
 """
 
 import ast
@@ -30,14 +31,20 @@ LOCAL_NAMES = {
 MAIN_PACKAGE = "pixiv_bridge"
 
 # 附属项目：主项目永远不认识它们，由运行方式决定怎么挂上来。
-SUB_PACKAGES = ("iwara", "novel")
+#   iwara     —— 独立的接口项目（自己的 create_app + iwara/run.py）
+#   iwara_web —— iwara 的页面扩展（只有路由，没有状态）
+#   novel     —— pixiv 的小说阅读器扩展
+SUB_PACKAGES = ("iwara", "iwara_web", "novel")
+
+# 其中走扩展机制（`<包>/extension.py`）的那些；其余是独立接口项目。
+EXTENSION_SUBPACKAGES = ("iwara_web", "novel")
 
 # 扩展机制约定的固定入口文件名（与 pixiv_bridge/extensions.py 保持一致）。
 EXTENSION_FILENAME = "extension.py"
 
-# 出入口：两个接口项目各留一个入口脚本；阅读项目改由配置启用，不该再有入口。
+# 出入口：两个接口项目各留一个入口脚本；扩展包改由配置启用，不该再有入口。
 ENTRY_POINTS = ("run.py", "iwara/run.py")
-REMOVED_ENTRY_POINTS = ("novel/run.py",)
+REMOVED_ENTRY_POINTS = ("iwara_web/run.py", "novel/run.py")
 
 # 各附属项目相对「纯接口」多出来的路由（同一路径的 GET/POST 各算一条）。
 EXPECTED_EXTRA = {
@@ -52,7 +59,10 @@ EXPECTED_EXTRA = {
         "/api/iwara/thumbnail/{video_id}",
         "/api/iwara/video/{video_id}",
         "/api/iwara/videos",
-        # 视频页面（本入口独有）；根地址 `/` 留给主项目的导航页。
+    },
+    "iwara_web": {
+        # 视频页面。它在 iwara_web 扩展里，不属 iwara 接口包；
+        # 根地址 `/` 留给主项目的导航页。
         "/iwara",
     },
     "novel": {
@@ -98,7 +108,9 @@ def check_imports(errors):
                 + ", ".join(str(p.relative_to(PROJECT_ROOT)) for p in bad)
             )
 
-        allowed = {MAIN_PACKAGE, sub}
+        # 扩展包允许依赖它对应的接口包（页面要调接口），所以「允许清单」里
+        # 除了主项目与自己，还要加上它的宿主接口包。
+        allowed = {MAIN_PACKAGE, sub} | _host_packages(sub)
         for path in iter_py(sub):
             for name in imports_of(path) & LOCAL_NAMES - allowed:
                 errors.append(
@@ -106,22 +118,31 @@ def check_imports(errors):
                 )
 
 
+def _host_packages(sub):
+    """扩展包可以依赖的接口包（iwara_web 的页面调 iwara 的接口）。"""
+    if sub == "iwara_web":
+        return {"iwara"}
+    return set()
+
+
 def check_layout(errors):
-    """出入口：接口项目各留一个入口，阅读项目改由扩展机制启用。"""
+    """出入口：接口项目各留一个入口，扩展包改由扩展机制启用。"""
     for rel in ENTRY_POINTS:
         if not (PROJECT_ROOT / rel).is_file():
             errors.append(f"缺少接口项目入口：{rel}")
 
     for rel in REMOVED_ENTRY_POINTS:
         if (PROJECT_ROOT / rel).exists():
+            name = Path(rel).parent.name
             errors.append(
-                f"附属项目不应再有专属入口 {rel} —— 它现在作为扩展启用："
-                f"在配置里写 PIXIV_BRIDGE_EXTENSIONS=novel"
+                f"扩展包不应再有专属入口 {rel} —— 它现在作为扩展启用："
+                f"在配置里写 PIXIV_BRIDGE_EXTENSIONS={name}"
             )
 
-    entry = PROJECT_ROOT / "novel" / EXTENSION_FILENAME
-    if not entry.is_file():
-        errors.append(f"阅读项目缺少扩展入口：novel/{EXTENSION_FILENAME}")
+    for sub in EXTENSION_SUBPACKAGES:
+        entry = PROJECT_ROOT / sub / EXTENSION_FILENAME
+        if not entry.is_file():
+            errors.append(f"扩展包缺少扩展入口：{sub}/{EXTENSION_FILENAME}")
 
 
 # 路由取法要兼容两种 FastAPI 形态：0.14x 起 include_router() 不再把子路由摊平进
@@ -149,17 +170,19 @@ ROUTE_PROBE = (
     "    return out\n"
     "pure = key(create_app());\n"
     "print(len(pure));\n"
-    # iwara：自己独立的接口项目，用自己 app.py 的工厂。
+    # iwara：自己独立的接口项目，用自己 app.py 的工厂（纯接口，不挂扩展）。
     "from iwara.app import create_app as create_iwara_app\n"
     "iwara = key(create_iwara_app());\n"
     "print(len(iwara));\n"
     "print(','.join(sorted(p for p, _ in iwara - pure)));\n"
-    # novel：走扩展机制（用户实际走的路），顺带验证 extension.py 存在且导出了路由。
     f"settings = Settings.load(r'{PROJECT_ROOT}');\n"
-    f"extensions = load_extension_specs(['novel'], r'{PROJECT_ROOT}');\n"
-    "novel = key(create_app(settings, extensions=extensions));\n"
-    "print(len(novel));\n"
-    "print(','.join(sorted(p for p, _ in novel - pure)));\n"
+    # 两个扩展包：都走扩展机制（用户实际走的路），顺带验证
+    # <包>/extension.py 存在、可导入、导出了路由。
+    "for name in ('iwara_web', 'novel'):\n"
+    f"    exts = load_extension_specs([name], r'{PROJECT_ROOT}')\n"
+    "    app = key(create_app(settings, extensions=exts))\n"
+    "    print(len(app));\n"
+    "    print(','.join(sorted(p for p, _ in app - pure)));\n"
 )
 
 
@@ -183,7 +206,7 @@ def check_apps(errors):
     for index, sub in enumerate(SUB_PACKAGES):
         sub_count = int(lines[1 + index * 2])
         extra_paths = set(filter(None, lines[2 + index * 2].split(",")))
-        label = f"{sub}（扩展）" if sub == "novel" else sub
+        label = f"{sub}（扩展）" if sub in EXTENSION_SUBPACKAGES else sub
         print(f"  {label}: {sub_count} 条路由条目，比纯接口多 {len(extra_paths)} 条")
         expected = EXPECTED_EXTRA[sub]
         if extra_paths != expected:

@@ -4574,6 +4574,16 @@ class ExtensionMountTestCase(unittest.TestCase):
         self.assertNotIn("/", extra)
         self.assertEqual(len(extra), 10)
 
+    def test_iwara_web_extension_adds_exactly_the_video_page(self):
+        # iwara 的视频页面拆成了独立扩展包：它只挂一个路由，接口仍归 iwara 包。
+        settings = make_settings()
+        pure = self.route_paths(create_app(settings))
+        full = self.route_paths(
+            create_app(settings, extensions=load_extension_specs(["iwara_web"], PROJECT_ROOT))
+        )
+        self.assertNotIn("/iwara", pure)
+        self.assertEqual(full - pure, {"/iwara"})
+
     def test_pure_api_keeps_working_with_the_extension_mounted(self):
         settings = make_settings()
         app = create_app(
@@ -4582,6 +4592,18 @@ class ExtensionMountTestCase(unittest.TestCase):
         with TestClient(app) as client:
             self.assertEqual(client.get("/api/health").status_code, 200)
             self.assertEqual(client.get("/api/history").status_code, 200)
+
+    def test_both_extension_packages_can_be_mounted_together(self):
+        settings = make_settings()
+        extensions = load_extension_specs(["iwara_web", "novel"], PROJECT_ROOT)
+        app = create_app(settings, extensions=extensions)
+        with TestClient(app) as client:
+            self.assertEqual(client.get("/api/health").status_code, 200)
+            self.assertEqual(client.get("/novel").status_code, 200)
+            page = client.get("/iwara")
+            self.assertEqual(page.status_code, 200)
+            # 页面靠绝对路径调 iwara 接口，所以挂哪个路径都行。
+            self.assertIn('"/api/iwara"', page.text)
 
     def test_extension_state_factory_runs_inside_lifespan(self):
         directory = self.make_extension_dir(
@@ -4658,8 +4680,10 @@ class ExtensionLayoutTestCase(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue((PROJECT_ROOT / name).is_file(), name)
 
-    def test_novel_has_no_dedicated_entry_point(self):
-        self.assertFalse((PROJECT_ROOT / "novel" / "run.py").exists())
+    def test_extension_packages_have_no_dedicated_entry_point(self):
+        for name in ("novel", "iwara_web"):
+            with self.subTest(name=name):
+                self.assertFalse((PROJECT_ROOT / name / "run.py").exists())
 
     def test_novel_exposes_the_fixed_extension_entry(self):
         entry = PROJECT_ROOT / "novel" / EXTENSION_FILENAME
@@ -4667,6 +4691,19 @@ class ExtensionLayoutTestCase(unittest.TestCase):
         source = entry.read_text(encoding="utf-8")
         self.assertIn("EXTENSION_ROUTERS", source)
         self.assertIn("extension_state_factory", source)
+
+    def test_iwara_web_exposes_the_fixed_extension_entry(self):
+        entry = PROJECT_ROOT / "iwara_web" / EXTENSION_FILENAME
+        self.assertTrue(entry.is_file(), str(entry))
+        source = entry.read_text(encoding="utf-8")
+        self.assertIn("EXTENSION_ROUTERS", source)
+        self.assertIn("EXTENSION_NAV", source)
+        # 只挂路由、没有自己的状态，所以不该真的定义状态工厂/关闭钩子
+        # （文档字符串里提到这两个名字是说明约定，不算）。
+        extension = load_extension_specs(["iwara_web"], PROJECT_ROOT)[0]
+        self.assertIsNone(extension.state_factory)
+        self.assertIsNone(extension.shutdown)
+        self.assertEqual(len(extension.routers), 1)
 
     def test_novel_app_still_offers_the_explicit_assembly_path(self):
         # 测试与脚本依赖 novel.app.create_app 这条老路，不能被整理掉。

@@ -181,6 +181,22 @@ def _print_extensions(extensions):
         print(f"  {ext.name:<8} {ext.entry}（{len(ext.routers)} 个路由）", flush=True)
 
 
+def load_extensions_or_exit(settings):
+    """按配置加载扩展，打印清单；配置写错就退出。
+
+    默认入口用它，自己组装应用的独立入口（`iwara/run.py`）也用它 ——
+    两边对「扩展加载失败」的处理必须一致：给一行可读报错并 `sys.exit(1)`，
+    而不是把栈甩给用户（配置写错目录 / 目录里没有 extension.py 等）。
+    """
+    try:
+        extensions = load_extensions(settings)
+    except ExtensionError as exc:
+        print(f"[扩展] {exc}", file=sys.stderr, flush=True)
+        sys.exit(1)
+    _print_extensions(extensions)
+    return extensions
+
+
 def main(argv=None, app_factory=None, extra_checks=None):
     """启动服务。
 
@@ -190,7 +206,9 @@ def main(argv=None, app_factory=None, extra_checks=None):
     不需要专门的入口脚本。
 
     传了 `app_factory(settings)` 的调用方自己负责组装（`iwara/run.py` 走这条，
-    它不是 pixiv 接口项目的扩展，而是自己独立的接口项目）；这类入口还可以传
+    它不是 pixiv 接口项目的扩展，而是自己独立的接口项目）；这类入口要挂扩展的话，
+    在自己的 factory 里调 `load_extensions_or_exit(settings)` 再传给 `create_app`
+    （`iwara/run.py` 就是这么挂 `iwara_web` 页面扩展的）。这类入口还可以传
     `extra_checks(settings) -> list[CheckResult]`，把自己专属的自检项追加到
     `[环境检查]` 里（`iwara/run.py` 用它报告 curl_cffi、api.iwara.tv 与 iwara 登录态）。
     """
@@ -227,12 +245,7 @@ def main(argv=None, app_factory=None, extra_checks=None):
     if app_factory is None:
         # 扩展只在默认入口这一条路上按配置加载；加载失败给一行可读报错，
         # 而不是把栈甩给用户（配置写错目录 / 目录里没有 extension.py 等）。
-        try:
-            extensions = load_extensions(settings)
-        except ExtensionError as exc:
-            print(f"[扩展] {exc}", file=sys.stderr, flush=True)
-            sys.exit(1)
-        _print_extensions(extensions)
+        extensions = load_extensions_or_exit(settings)
         app_factory = lambda settings: create_app(  # noqa: E731 - 就地绑定已加载的扩展
             settings, extensions=extensions
         )
