@@ -4,10 +4,12 @@ import errno
 import hashlib
 import itertools
 import os
+import platform
 import shutil
 import socket
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -1830,6 +1832,46 @@ class EchEnvCheckTestCase(unittest.TestCase):
         self.assertEqual(result.name, "ech")
         self.assertIn("400", result.detail)
 
+    def test_ech_transport_reports_bundled_library(self):
+        """--check 要说清用的是项目自带那份还是系统装的，便于排错。"""
+        from pixiv_bridge import ech_client
+
+        bundled = ech_client.bundle_root() / "win32-amd64" / "libssl-4-x64.dll"
+        with patch.object(ech_client, "available", return_value=True), patch.object(
+            ech_client, "library_path", return_value=str(bundled)
+        ), patch.object(
+            ech_client, "request", AsyncMock(return_value=httpx.Response(400, json={}))
+        ):
+            result = ech_transport()
+        self.assertTrue(result.ok)
+        self.assertIn("项目自带", result.detail)
+
+    def test_ech_transport_reports_system_library(self):
+        from pixiv_bridge import ech_client
+
+        system = Path(r"C:\Program Files\OpenSSL-Win64\bin\libssl-4-x64.dll")
+        with patch.object(ech_client, "available", return_value=True), patch.object(
+            ech_client, "library_path", return_value=str(system)
+        ), patch.object(
+            ech_client, "request", AsyncMock(return_value=httpx.Response(400, json={}))
+        ):
+            result = ech_transport()
+        self.assertTrue(result.ok)
+        self.assertIn("系统安装", result.detail)
+
+    def test_ech_transport_ok_without_library_path(self):
+        """拿不到库路径（极端情况）不该影响结论，也不该冒出空标签。"""
+        from pixiv_bridge import ech_client
+
+        with patch.object(ech_client, "available", return_value=True), patch.object(
+            ech_client, "library_path", return_value=""
+        ), patch.object(
+            ech_client, "request", AsyncMock(return_value=httpx.Response(400, json={}))
+        ):
+            result = ech_transport()
+        self.assertTrue(result.ok)
+        self.assertNotIn("OpenSSL：", result.detail)
+
     def test_ech_transport_without_openssl(self):
         from pixiv_bridge import ech_client
 
@@ -2074,6 +2116,574 @@ class QueryEncodingTestCase(unittest.TestCase):
         )
         _, _, body = raw.partition("\r\n\r\n")
         self.assertEqual(body, '{"flag": true, "none": null}')
+
+
+class NextUrlQueryForwardingTestCase(unittest.IsolatedAsyncioTestCase):
+    """回归：直连/ECH 传输曾把 next_url 的查询串丢掉，导致「下一页」还是第一页。
+
+    /api/next 与各列表接口的 next_url 分支交给传输层的是一条**完整 URL**
+    （形如 https://app-api.pixiv.net/v1/illust/ranking?offset=30）。两个手写
+    HTTP 传输都只取了 urlparse(url).path，parsed.query 没接回去，于是 offset
+    丢失、上游原样重发第一页。httpx 那条传输自己解析 URL，所以只有
+    ECH / BYPASS_SNI 模式会踩到，且单元测试当时只覆盖了 httpx 分支。
+    """
+
+    class _FakeWriter:
+        def __init__(self, sink):
+            self._sink = sink
+
+        def write(self, chunk):
+            self._sink.append(chunk)
+
+        async def drain(self):
+            pass
+
+        def close(self):
+            pass
+
+        async def wait_closed(self):
+            pass
+
+    class _Reader:
+        def __init__(self, lines):
+            self._lines = list(lines)
+
+        async def readline(self):
+            return self._lines.pop(0) if self._lines else b""
+
+        async def read(self):
+            return b"{}"
+
+    def _ok_reader(self):
+        return self._Reader(
+            [b"HTTP/1.1 200 OK\r\n", b"Content-Length: 2\r\n", b"\r\n"]
+        )
+
+    async def test_sni_transport_keeps_next_url_query(self):
+        from pixiv_bridge import sni_client
+
+        sink = []
+
+        async def fake_open(host, port, ssl=None, server_hostname=None):
+            return self._ok_reader(), self._FakeWriter(sink)
+
+        with patch.object(sni_client, "_open_connection", fake_open):
+            await sni_client.request(
+                "GET",
+                "https://app-api.pixiv.net/v1/illust/ranking"
+                "?mode=day&filter=for_android&offset=30",
+                headers={"Authorization": "Bearer x"},
+                ips=["127.0.0.1"],
+            )
+        request_line = b"".join(sink).decode("latin-1").split("\r\n")[0]
+        self.assertIn("offset=30", request_line)
+        self.assertIn("mode=day", request_line)
+
+    async def test_transport_merges_next_url_query_with_params(self):
+        """显式 params 与 URL 里已有的查询串要能并存（用 & 连接，不能吃掉任一方）。"""
+        from pixiv_bridge import sni_client
+
+        sink = []
+
+        async def fake_open(host, port, ssl=None, server_hostname=None):
+            return self._ok_reader(), self._FakeWriter(sink)
+
+        with patch.object(sni_client, "_open_connection", fake_open):
+            await sni_client.request(
+                "GET",
+                "https://app-api.pixiv.net/v1/illust/ranking?offset=30",
+                params={"mode": "day"},
+                headers={"Host": "app-api.pixiv.net"},
+                ips=["127.0.0.1"],
+            )
+        request_line = b"".join(sink).decode("latin-1").split("\r\n")[0]
+        self.assertIn("offset=30", request_line)
+        self.assertIn("mode=day", request_line)
+
+
+class EchNextUrlQueryTestCase(unittest.TestCase):
+    """ECH 传输同样要保留 next_url 的查询串。
+
+    单独一个同步用例：_request_sync 内部会调 asyncio.run()，放在
+    IsolatedAsyncioTestCase 里会撞上「cannot be called from a running event loop」。
+    """
+
+    def test_ech_transport_keeps_next_url_query(self):
+        from pixiv_bridge import ech_client
+
+        sent = {}
+
+        class FakeConn:
+            def __init__(self, ip, port, timeout):
+                pass
+
+            def handshake(self, hostname, config):
+                return True
+
+            def send(self, raw, deadline):
+                sent["raw"] = raw
+                return None
+
+            def close(self):
+                pass
+
+        def fake_read_raw(conn, deadline):
+            return b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"
+
+        with patch.object(ech_client, "_Connection", FakeConn), patch.object(
+            ech_client, "_read_raw", fake_read_raw
+        ), patch.object(ech_client, "ech_config", lambda *a, **k: b"\xfe\x0d\x00\x00"):
+            ech_client._request_sync(
+                "GET",
+                "https://app-api.pixiv.net/v1/illust/ranking"
+                "?mode=day&filter=for_android&offset=30",
+                None,
+                None,
+                None,
+                {"Authorization": "Bearer x"},
+                5.0,
+                ["1.1.1.1"],
+                Settings(),
+            )
+        request_line = sent["raw"].decode("latin-1").split("\r\n")[0]
+        self.assertIn("offset=30", request_line)
+        self.assertIn("mode=day", request_line)
+
+
+class BundledOpenSslTestCase(unittest.TestCase):
+    """项目自带的 OpenSSL（openssl-libs/）优先于系统安装，载入失败才回退。"""
+
+    def test_bundle_root_is_sibling_of_package(self):
+        from pixiv_bridge import ech_client
+
+        self.assertEqual(
+            ech_client.bundle_root(),
+            PROJECT_ROOT / ech_client.BUNDLE_DIR_NAME,
+        )
+        self.assertEqual(ech_client.BUNDLE_DIR_NAME, "openssl-libs")
+
+    def test_platform_tags_prefer_specific_then_generic(self):
+        from pixiv_bridge import ech_client
+
+        tags = ech_client._platform_tags()
+        # 具体平台-架构 在最前，之后才是松松的兜底名；顺序即查找优先级。
+        self.assertTrue(tags[0].startswith(("win32-", "linux-", "darwin-")))
+        self.assertEqual(tags[-1], tags[0].split("-")[0])
+        self.assertEqual(len(set(tags)), len(tags))
+
+    def test_bundled_dir_precedes_system_dirs(self):
+        from pixiv_bridge import ech_client
+
+        with patch.dict(os.environ, {"PIXIV_BRIDGE_OPENSSL_DIR": ""}):
+            dirs = ech_client._candidate_dirs()
+        bundle = ech_client.bundle_root()
+        bundled = [d for d in dirs if bundle in d.parents or d == bundle]
+        self.assertTrue(bundled, "项目自带目录没有进入候选列表")
+        first_bundled = min(dirs.index(d) for d in bundled)
+        # 系统安装位置（Windows 的 Program Files / 解释器目录）必须排在后面。
+        system_markers = (
+            Path(r"C:\Program Files\OpenSSL-Win64\bin"),
+            Path(sys.prefix) / "bin",
+        )
+        for marker in system_markers:
+            if marker in dirs:
+                self.assertLess(first_bundled, dirs.index(marker))
+
+    def test_explicit_env_dir_still_wins(self):
+        from pixiv_bridge import ech_client
+
+        with patch.dict(os.environ, {"PIXIV_BRIDGE_OPENSSL_DIR": str(PROJECT_ROOT)}):
+            dirs = ech_client._candidate_dirs()
+        self.assertEqual(dirs[0], PROJECT_ROOT)
+        # 显式指定只是排在最前，内置那份仍留在候选里兜底。
+        self.assertIn(ech_client.bundle_root(), dirs)
+
+    def test_library_pairs_yields_every_candidate(self):
+        """候选是逐个产出的，不是只认第一个——载入失败才有下一个可试。"""
+        from pixiv_bridge import ech_client
+
+        dirs = [Path("/dir-a"), Path("/dir-b")]
+        with patch.object(ech_client, "_candidate_dirs", return_value=dirs), patch.object(
+            Path, "is_file", lambda self: True
+        ):
+            pairs = list(ech_client._library_pairs())
+        self.assertEqual(len(pairs), 2)
+        self.assertEqual([ssl.parent for _, ssl in pairs], dirs)
+
+    def test_library_pairs_skips_dirs_without_libcrypto(self):
+        from pixiv_bridge import ech_client
+
+        with patch.object(
+            ech_client, "_candidate_dirs", return_value=[Path("/empty")]
+        ), patch.object(Path, "is_file", lambda self: False):
+            self.assertEqual(list(ech_client._library_pairs()), [])
+
+    def test_find_pair_error_points_at_bundle_dir(self):
+        from pixiv_bridge import ech_client
+
+        with patch.object(ech_client, "_library_pairs", lambda: iter(())), patch.object(
+            ech_client, "_candidate_dirs", return_value=[]
+        ):
+            with self.assertRaises(ech_client.EchUnavailable) as ctx:
+                ech_client.find_library_pair()
+        self.assertIn(ech_client.BUNDLE_DIR_NAME, str(ctx.exception))
+        self.assertIn("PIXIV_BRIDGE_OPENSSL_DIR", str(ctx.exception))
+
+    def test_lib_falls_through_and_reports_reasons(self):
+        """内置库载入失败 → 用系统那份；两份都不行时错误里带上失败原因。"""
+        from pixiv_bridge import ech_client
+
+        class FakeLib:
+            def __init__(self, crypto_path, ssl_path):
+                if "bundle" not in str(ssl_path):
+                    raise OSError("不是有效的 Win32 应用程序")
+                self.ssl_path = str(ssl_path)
+
+        pairs = [
+            (Path("system/libcrypto"), Path("system/libssl")),
+            (Path("bundle/libcrypto"), Path("bundle/libssl")),
+        ]
+        saved = ech_client._lib
+        try:
+            with patch.object(ech_client, "_library_pairs", lambda: iter(pairs)), patch.object(
+                ech_client, "_LibSsl", FakeLib
+            ):
+                ech_client._lib = None
+                lib = ech_client.lib()
+                self.assertEqual(lib.ssl_path, str(Path("bundle/libssl")))
+                # 单例：第二次调用不再重新遍历候选。
+                self.assertIs(ech_client.lib(), lib)
+
+            with patch.object(
+                ech_client,
+                "_library_pairs",
+                lambda: iter([(Path("a/libcrypto"), Path("a/libssl"))]),
+            ), patch.object(ech_client, "_LibSsl", FakeLib):
+                ech_client._lib = None
+                with self.assertRaises(ech_client.EchUnavailable) as ctx:
+                    ech_client.lib()
+            self.assertIn(str(Path("a") / "libssl"), str(ctx.exception))
+            self.assertIn("不是有效的 Win32 应用程序", str(ctx.exception))
+        finally:
+            ech_client._lib = saved
+
+    def test_repo_bundle_layout_if_present(self):
+        """仓库里若带了内置库，目录布局必须符合约定，且能真的载入。"""
+        from pixiv_bridge import ech_client
+
+        bundle = ech_client.bundle_root()
+        if not bundle.is_dir():
+            self.skipTest("仓库没有内置 OpenSSL 目录")
+        for tag in ech_client._platform_tags():
+            directory = bundle / tag
+            if not directory.is_dir():
+                continue
+            names = {item.name for item in directory.iterdir()}
+            self.assertTrue(
+                names & set(ech_client._LIBSSL_NAMES),
+                f"{directory} 里没有 libssl: {sorted(names)}",
+            )
+            self.assertTrue(
+                names & set(ech_client._LIBCRYPTO_NAMES),
+                f"{directory} 里没有 libcrypto: {sorted(names)}",
+            )
+            self.assertTrue(ech_client.available())
+            self.assertIn(str(bundle), ech_client.library_path())
+
+
+class BundledAndroidBundleTestCase(unittest.TestCase):
+    """android-arm64 那份库只能在 Termux 上 dlopen，本机测不了「载入」。
+
+    但它恰恰是 Termux 能开 ECH 的**唯一**来源（Termux 官方源的 OpenSSL 3.6.5
+    实测导出的 ECH 符号数为 0，回退系统库那条路走不通），而开发机通常是
+    Windows/Linux，`test_repo_bundle_layout_if_present` 只会校验当前平台的
+    那个子目录。所以这里对 android-arm64 单独做结构校验：必须是 aarch64 的
+    ELF64，且真的导出 ECH 符号、SONAME 与依赖名能被 Android 链接器解析。
+    一旦有人拿错架构（比如把 x86_64 的库）或错版本（3.x 没有 ECH）替换掉它，
+    只有这个用例能拦住。
+    """
+
+    ANDROID_TAG = "android-arm64"
+    EM_AARCH64 = 183
+
+    def _bundle_dir(self):
+        from pixiv_bridge import ech_client
+
+        directory = ech_client.bundle_root() / self.ANDROID_TAG
+        if not directory.is_dir():
+            self.skipTest(f"仓库没有 {self.ANDROID_TAG} 内置库")
+        return directory
+
+    def _elf(self, path):
+        """极简 ELF64 解析：返回 (e_machine, 导出符号集合, {DT_NEEDED/DT_SONAME: [名字]})。
+
+        section header 字段顺序（<IIQQQQIIQQ）：
+        sh_name, sh_type, sh_flags, sh_addr, sh_offset, sh_size, sh_link, sh_info, ...
+        """
+        import struct
+
+        data = Path(path).read_bytes()
+        self.assertEqual(data[:4], b"\x7fELF", f"{path} 不是 ELF 文件")
+        self.assertEqual(data[4], 2, f"{path} 不是 ELF64")
+        self.assertEqual(data[5], 1, f"{path} 不是小端序")
+
+        e_machine = int.from_bytes(data[18:20], "little")
+        e_shoff = int.from_bytes(data[0x28:0x30], "little")
+        e_shentsize = int.from_bytes(data[0x3A:0x3C], "little")
+        e_shnum = int.from_bytes(data[0x3C:0x3E], "little")
+        e_shstrndx = int.from_bytes(data[0x3E:0x40], "little")
+
+        sections = [
+            struct.unpack_from("<IIQQQQIIQQ", data, e_shoff + i * e_shentsize)
+            for i in range(e_shnum)
+        ]
+        name_tab = self._section_bytes(data, sections[e_shstrndx])
+
+        def section_name(sh):
+            end = name_tab.find(b"\x00", sh[0])
+            return name_tab[sh[0] : end].decode("utf-8", "replace")
+
+        by_name = {section_name(sh): sh for sh in sections}
+
+        def strings_of(name, entry_size):
+            """取某个节引用的字符串表里的全部名字。"""
+            sh = by_name[name]
+            table = self._section_bytes(data, sections[sh[6]])  # sh_link -> 字符串表
+            body = self._section_bytes(data, sh)
+            names = set()
+            for offset in range(0, len(body) - entry_size + 1, entry_size):
+                start = int.from_bytes(body[offset : offset + 4], "little")
+                end = table.find(b"\x00", start)
+                names.add(table[start:end].decode("utf-8", "replace"))
+            return names
+
+        dynsym_names = strings_of(".dynsym", 24) if ".dynsym" in by_name else set()
+
+        dynamic = {}
+        if ".dynamic" in by_name:
+            sh = by_name[".dynamic"]
+            body = self._section_bytes(data, sh)
+            dynstr = self._section_bytes(data, sections[sh[6]])
+            for offset in range(0, len(body) - 15, 16):
+                tag = int.from_bytes(body[offset : offset + 8], "little")
+                value = int.from_bytes(body[offset + 8 : offset + 16], "little")
+                if tag in (1, 14):  # DT_NEEDED / DT_SONAME
+                    end = dynstr.find(b"\x00", value)
+                    dynamic.setdefault(tag, []).append(
+                        dynstr[value:end].decode("utf-8", "replace")
+                    )
+        return e_machine, dynsym_names, dynamic
+
+    @staticmethod
+    def _section_bytes(data, sh):
+        return data[sh[4] : sh[4] + sh[5]]
+
+    def test_android_libs_are_aarch64_elf(self):
+        directory = self._bundle_dir()
+        for name in ("libssl.so", "libcrypto.so"):
+            machine, _, _ = self._elf(directory / name)
+            self.assertEqual(
+                machine, self.EM_AARCH64, f"{name} 不是 aarch64（e_machine={machine}）"
+            )
+
+    def test_android_libssl_exports_ech_symbols(self):
+        directory = self._bundle_dir()
+        _, names, _ = self._elf(directory / "libssl.so")
+        # 项目代码唯一硬依赖的符号，缺了 ECH 模式就完全不可用。
+        self.assertIn("SSL_set1_ech_config_list", names)
+        self.assertIn("SSL_CTX_new", names)
+        # 对照组：3.x 的库这些不存在，能再挡一次「版本退回去」。
+        self.assertIn("SSL_ech_set1_server_names", names)
+
+    def test_android_soname_matches_lookup_names(self):
+        from pixiv_bridge import ech_client
+
+        directory = self._bundle_dir()
+        _, _, dynamic = self._elf(directory / "libssl.so")
+        # SONAME 必须落在 _LIBSSL_NAMES 里，Termux 上才按名字找得到。
+        for soname in dynamic.get(14, []):
+            self.assertIn(soname, ech_client._LIBSSL_NAMES)
+
+        _, _, crypto_dynamic = self._elf(directory / "libcrypto.so")
+        for soname in crypto_dynamic.get(14, []):
+            self.assertIn(soname, ech_client._LIBCRYPTO_NAMES)
+        # libssl 依赖的 libcrypto 用的也是同一个名字，链接时才能解析到自带那份。
+        self.assertIn("libcrypto.so", dynamic.get(1, []))
+
+
+class PlatformDirsTestCase(unittest.TestCase):
+    """别的系统也要能找到系统 OpenSSL，不能只按 x86_64 Linux 写死。"""
+
+    def _dirs_for(self, platform_str, machine, prefix=None, env=None):
+        from pixiv_bridge import ech_client
+
+        real_sp = sys.platform
+        real_machine = platform.machine
+        real_prefix = sys.prefix
+        real_path = os.environ.get("PATH", "")
+        saved_env = {
+            key: os.environ.get(key) for key in ("PREFIX", "TERMUX_VERSION")
+        }
+        try:
+            sys.platform = platform_str
+            platform.machine = lambda: machine
+            os.environ["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+            if prefix is not None:
+                sys.prefix = prefix
+            for key in ("PREFIX", "TERMUX_VERSION"):
+                os.environ.pop(key, None)
+            if env:
+                os.environ.update(env)
+            with patch.object(Path, "is_dir", lambda self: True):
+                dirs = [str(d) for d in ech_client._candidate_dirs()]
+        finally:
+            sys.platform = real_sp
+            platform.machine = real_machine
+            sys.prefix = real_prefix
+            os.environ["PATH"] = real_path
+            for key, value in saved_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        # Windows 上 Path("/usr/lib64") 会渲染成 "\usr\lib64"，比较前统一成正斜杠。
+        return " ".join(dirs).replace("\\", "/")
+
+    def test_system_name_does_not_merge_bsd_into_linux(self):
+        from pixiv_bridge import ech_client
+
+        real = sys.platform
+        try:
+            for value, expected in (
+                ("win32", "win32"),
+                ("cygwin", "win32"),
+                ("linux", "linux"),
+                ("darwin", "darwin"),
+                ("freebsd13", "freebsd"),
+                ("openbsd7", "openbsd"),
+            ):
+                sys.platform = value
+                self.assertEqual(ech_client._system_name(), expected, value)
+        finally:
+            sys.platform = real
+
+    def test_platform_tags_use_real_system_name(self):
+        from pixiv_bridge import ech_client
+
+        real = sys.platform
+        real_machine = platform.machine
+        try:
+            sys.platform = "freebsd13"
+            platform.machine = lambda: "amd64"
+            self.assertEqual(ech_client._platform_tags(), ("freebsd-amd64", "freebsd"))
+        finally:
+            sys.platform = real
+            platform.machine = real_machine
+
+    def test_linux_covers_non_x86_64_multiarch_dirs(self):
+        """ARM 板子上的 libssl 在 /usr/lib/aarch64-linux-gnu，不能只认 x86_64。"""
+        dirs = self._dirs_for("linux", "aarch64")
+        self.assertIn("aarch64-linux-gnu", dirs)
+        self.assertIn("/usr/lib64", dirs)
+        self.assertIn("arm-linux-gnueabihf", self._dirs_for("linux", "armv7l"))
+
+    def test_linux_includes_x86_64_multiarch_and_lib64(self):
+        dirs = self._dirs_for("linux", "x86_64")
+        self.assertIn("x86_64-linux-gnu", dirs)
+        self.assertIn("/usr/lib64", dirs)
+
+    def test_macos_finds_homebrew_keg_only_openssl(self):
+        """Homebrew 的 openssl@3 是 keg-only，库在 opt/ 下而不是 lib/。"""
+        dirs = self._dirs_for("darwin", "arm64")
+        self.assertIn("/opt/homebrew/opt/openssl@3/lib", dirs)
+        self.assertIn("/opt/homebrew/lib", dirs)
+
+    def test_bsd_does_not_get_linux_multiarch_dirs(self):
+        dirs = self._dirs_for("freebsd13", "amd64")
+        self.assertNotIn("linux-gnu", dirs)
+        self.assertIn("/usr/local/lib", dirs)
+
+    def test_windows_dirs_unchanged(self):
+        dirs = self._dirs_for("win32", "AMD64")
+        self.assertIn("OpenSSL-Win64", dirs)
+        self.assertNotIn("linux-gnu", dirs)
+
+
+class TermuxTestCase(unittest.TestCase):
+    """Termux（Android）单列成 android 目标：bionic 库与 glibc 的 Linux 版不通用。"""
+
+    TERMUX = "/data/data/com.termux/files/usr"
+
+    def _env(self, **extra):
+        env = {"PREFIX": self.TERMUX}
+        env.update(extra)
+        return env
+
+    def test_detects_termux_by_prefix(self):
+        from pixiv_bridge import ech_client
+
+        with patch.dict(os.environ, {"PREFIX": self.TERMUX}, clear=False):
+            os.environ.pop("TERMUX_VERSION", None)
+            self.assertTrue(ech_client.is_termux())
+            self.assertEqual(ech_client.termux_prefix(), self.TERMUX)
+
+    def test_detects_termux_by_version_marker(self):
+        from pixiv_bridge import ech_client
+
+        env = dict(os.environ)
+        env.pop("PREFIX", None)
+        env["TERMUX_VERSION"] = "0.118.0"
+        with patch.dict(os.environ, env, clear=True):
+            self.assertTrue(ech_client.is_termux())
+
+    def test_not_termux_on_plain_linux(self):
+        from pixiv_bridge import ech_client
+
+        env = {"PATH": "/usr/bin:/bin", "PREFIX": "/usr"}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertFalse(ech_client.is_termux())
+            self.assertEqual(ech_client.termux_prefix(), "")
+
+    def test_system_name_is_android_not_linux(self):
+        from pixiv_bridge import ech_client
+
+        with patch.dict(os.environ, self._env(), clear=False):
+            self.assertEqual(ech_client._system_name(), "android")
+            self.assertIn("android", ech_client._platform_tags()[0])
+
+    def test_bundle_tag_targets_android_dir(self):
+        from pixiv_bridge import ech_client
+
+        real_machine = platform.machine
+        platform.machine = lambda: "aarch64"  # Termux 上通常是 aarch64
+        try:
+            with patch.dict(os.environ, self._env(), clear=False):
+                tags = ech_client._platform_tags()
+        finally:
+            platform.machine = real_machine
+        self.assertEqual(tags[0], "android-arm64")
+        self.assertIn("android", tags)
+
+    def test_looks_in_termux_prefix_lib(self):
+        from pixiv_bridge import ech_client
+
+        with patch.dict(os.environ, self._env(), clear=False):
+            with patch.object(Path, "is_dir", lambda self: True):
+                dirs = [str(d).replace("\\", "/") for d in ech_client._candidate_dirs()]
+        joined = " ".join(dirs)
+        self.assertIn(self.TERMUX + "/lib", joined)
+        # 安卓上不存在 glibc 的多架构目录，不该混进清单。
+        self.assertNotIn("linux-gnu", joined)
+
+    def test_does_not_use_glibc_linux_dirs_on_termux(self):
+        from pixiv_bridge import ech_client
+
+        with patch.dict(os.environ, self._env(), clear=False):
+            with patch.object(Path, "is_dir", lambda self: True):
+                dirs = [str(d).replace("\\", "/") for d in ech_client._candidate_dirs()]
+        joined = " ".join(dirs)
+        self.assertNotIn("/usr/lib64", joined)
+        self.assertNotIn("/usr/lib/x86_64", joined)
 
 
 class ProjectFilesTestCase(unittest.TestCase):

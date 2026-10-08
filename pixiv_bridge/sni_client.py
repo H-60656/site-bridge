@@ -123,6 +123,12 @@ async def request(
     hostname = parsed.hostname
     port = parsed.port or 443
     path = parsed.path or "/"
+    if parsed.query:
+        # 翻页时传进来的是一条完整 URL（/api/next 与各列表接口的 next_url 分支），
+        # 查询串落在 parsed.query 里：只取 parsed.path 会把它整条丢掉，offset 一没，
+        # 上游就把第一页原样再发一遍——表现为「第二页和第一页一模一样」。
+        # httpx 那条传输不走这里（它自己解析 URL），所以只有直连/ECH 会踩到。
+        path = f"{path}?{parsed.query}"
     candidates = ips or (hostname,)
     ctx = tls_context()
     headers = dict(headers or {})

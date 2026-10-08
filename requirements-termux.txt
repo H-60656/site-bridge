@@ -9,7 +9,7 @@
 #   取模型字段统一走 pixiv_bridge/compat.py 的 dump_model()（2.x 用
 #   model_dump()，1.x 退回 dict()），所以 v1 上不会因为缺 model_dump 报 500。
 #   pydantic 1.10.26 + fastapi 0.115.14 + starlette 0.41.3 已实测通过全部
-#   单元测试（217 项）。
+#   单元测试。
 #
 # 手工安装（一般不需要，run.py 会自动用本文件）：
 #   python -m pip install -r requirements-termux.txt -i https://pypi.tuna.tsinghua.edu.cn/simple

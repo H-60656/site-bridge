@@ -54,7 +54,7 @@ PIXIV_BRIDGE_BYPASS_SNI=1
 Pixiv 的 API 与图片 CDN 都在 Cloudflare 后面，而 **Cloudflare 的 ECH 公钥是按 anycast 集群下发、与站点无关**，因此本项目可以用 Cloudflare 的 ECH 配置连任意 Cloudflare 前置的 Pixiv 域名：
 
 1. **取 ECH 配置**：依次向 `cloudflare-dns.com` → `dns.alidns.com` → `223.5.5.5` 发 DoH 查询（`type=65`），取 `cloudflare-ech.com` 的 `ech=` 字段（国内一般只有后两个可达）；全部失败才回退到内置配置（`ech_client.py` 的 `DEFAULT_ECH_CONFIG`，**会过期**）。配置在进程内缓存 30 分钟，并在“TLS 层握手失败”时强制刷新一次重试
-2. **调用 OpenSSL 3.5+ 的 `SSL_set1_ech_config_list`**：Python 自带的 `ssl` 模块尚未暴露 ECH，故用 `ctypes` 直接调用系统 libssl（`ech_client.py`）
+2. **调用 OpenSSL 4.0+ 的 `SSL_set1_ech_config_list`**：Python 自带的 `ssl` 模块尚未暴露 ECH，故用 `ctypes` 直接调用 libssl（`ech_client.py`）。库优先取**项目自带的 `openssl-libs/`**（见下），没有或载入失败才去找系统安装的 OpenSSL。注意 ECH 是 **OpenSSL 4.0.0** 才加入的，3.x 全系（含 3.5/3.6）都没有——所以系统里装的是 3.x 时回退必然失败
 3. **只提供 TLS 1.3**：Cloudflare 对含 ECH 且允许 TLS 1.2 的 ClientHello 直接回 `illegal_parameter`，因此必须把 `SSL_CTX` 的 min/max 版本都钉在 TLS1.3
 4. **外层用 `cloudflare-ech.com`、内层用真实域名**：certificate 校验按真实域名做（`SSL_set1_host`）
 5. **加密 SNI 里的目标域名仍会被中间设备看到吗**——不会；但外层名字仍需能通过，故入口 IP 用 Cloudflare 的 anycast 地址（内置池 `104.18.10.118,104.18.11.118,104.18.42.239,104.16.132.229`）
@@ -66,7 +66,9 @@ PIXIV_BRIDGE_ECH=1
 PIXIV_BRIDGE_BYPASS_SNI=0     # 两者只需开一个，ECH 优先
 ```
 
-前提：系统里存在 **OpenSSL 3.5 及以上**的 libssl（Windows 装 OpenSSL 3.5 后默认在 `C:\Program Files\OpenSSL-Win64\bin`；Linux 需 `libssl.so.3`，Debian/Ubuntu 24.04 之后自带；macOS 可用 `brew install openssl@3`）。程序按 `PIXIV_BRIDGE_OPENSSL_DIR` → PATH → 常见安装路径 的顺序查找。启动检查里的 `ech` 一项显示 `ECH 传输可用` 即表示可用；若显示未找到 libssl，请改装 OpenSSL 3.5+ 或改用无 SNI 模式 / 代理。
+前提：有一份带 ECH 的 libssl（**OpenSSL 4.0 及以上**；3.x 全系没有 ECH）。**项目已经自带**：`openssl-libs/` 目录里随包附带 OpenSSL 4.x 的 `libssl` / `libcrypto`，Windows（`win32-amd64`，4.0.2）与安卓 Termux（`android-arm64`，4.0.3）都已带对应子目录，所以拷到一台完全没装 OpenSSL 的机器上也能直接开 ECH，不需要先装任何东西。程序查找顺序是 `PIXIV_BRIDGE_OPENSSL_DIR`（你明确指定的）→ **项目自带的 `openssl-libs/`** → `openssl` 可执行文件旁边 → PATH → 常见安装路径（Windows `C:\Program Files\OpenSSL-Win64\bin`、Linux `/usr/lib/x86_64-linux-gnu` 等）；候选逐个尝试，前一个载入失败（架构不符、缺运行库、版本太老）自动换下一个，全都不行才报错并列出每个候选的失败原因。
+
+启动检查里的 `ech` 一项显示 `ECH 传输可用` 即表示可用。若显示未找到或载入失败，再按系统装的思路补救：Windows 装 OpenSSL **4.x** 后默认在 `C:\Program Files\OpenSSL-Win64\bin`；Linux/macOS 的发行版与 Homebrew 目前多为 3.x，**装了也没有 ECH**，需要自备 4.0+ 的 `libssl`。也可以直接改用无 SNI 模式 / 代理。
 
 > ECH 模式经本机实测（中国大陆家宽 + DNS 污染 + SNI 阻断）：`run.py --check` 能完成真实 refresh token 刷新，40 余个读接口与 `/img` 图片流全部 200。
 
@@ -633,11 +635,12 @@ tar --exclude=.venv --exclude=venv --exclude=__pycache__ --exclude=.env \
 >
 > `dist/` 已在 `.gitignore` 里，不入库——需要分享包时用上面这两条命令现做一份。**直接从版本库的源码改动生成**，别用旧的包：拆分之前打的包里还是 `web/index.html`、`pixiv_bridge/history.py` 那一套旧结构，拷给别人会跑不起来。
 
-打包后建议确认一眼包内没有 `.env`、`tokens.json`、`history.jsonl`、`data/`、`.venv/`、`__pycache__/`，并且含 `novel/web/index.html`：
+打包后建议确认一眼包内没有 `.env`、`tokens.json`、`history.jsonl`、`data/`、`.venv/`、`__pycache__/`，并且含 `novel/web/index.html` 与 `openssl-libs/`：
 
 ```bash
 tar -tzf ../pixiv-bridge.tar.gz | grep -E '\.env$|tokens\.json$|history\.jsonl$|downloads\.jsonl$|bookmarks\.jsonl$|settings\.json$|^\./data/|\.venv/|__pycache__/'   # 无输出最好
 tar -tzf ../pixiv-bridge.tar.gz | grep -E 'novel/web/index\.html'                                                                                    # 应该有
+tar -tzf ../pixiv-bridge.tar.gz | grep -E 'openssl-libs/.*(libssl|libcrypto)'                                                                        # 要用 ECH 就该有
 ```
 
 （Windows PowerShell 里把 `grep -E` 换成 `Select-String -Pattern`。）
@@ -654,7 +657,7 @@ tar -tzf ../pixiv-bridge.tar.gz | grep -E 'novel/web/index\.html'               
 | 本地 wheel 离线包 | ✅ 离线可用 | 见下节「完全离线部署」 |
 | Pixiv refresh_token | ❌ **必须自行提供** | 用户凭据，见 [获取 refresh_token](#获取-refreshtoken三种方式任选) |
 | 能访问 Pixiv | ❌ 需环境配合 | 直连 / SNI 绕过 / ECH / 代理四选一，见 [原理](#原理) |
-| **OpenSSL 3.5+**（仅 ECH 模式需要） | ❌ **无法 pip 安装** | ECH 需要系统 `libssl`/`libcrypto` 提供 `SSL_set1_ech_config_list`（Python 自带的 ssl 模块没有 ECH）；不开 ECH 时完全不需要 |
+| **OpenSSL 4.0+**（仅 ECH 模式需要） | ✅ **项目自带** | ECH 需要 libssl 提供 `SSL_set1_ech_config_list`（Python 自带的 ssl 模块没有 ECH；该 API 是 **4.0.0** 才加入的，3.x 全系没有）。`openssl-libs/` 里已经带了 Windows 与安卓 Termux 两个平台的 4.x 库，拷包即用，不必在目标机器安装；也可另装系统 OpenSSL 4.0+ 作为后备。不开 ECH 时完全不需要 |
 | Docker（仅容器部署需要） | ❌ 需自行安装 | 见 [Docker](#docker) |
 
 ### 完全离线部署
@@ -678,14 +681,25 @@ python -m pip download -r requirements.txt -d wheels
 >
 > 最省事的做法是**直接在目标机器上**执行一次 `pip download`（先手动装好 pip），或让目标机器联网自动安装。
 
-### OpenSSL 3.5+ 安装（仅 ECH 模式）
+### OpenSSL 4.0+（仅 ECH 模式，通常不用管）
 
-`pip install` 拿不到 ECH 能力，必须让系统里有 OpenSSL 3.5+：
+**项目自带，一般不需要做任何事。** `openssl-libs/` 里按 `平台-架构` 存放了 OpenSSL 4.x 的 `libssl` / `libcrypto`（Windows 是 `openssl-libs/win32-amd64/`，安卓/Termux 是 `openssl-libs/android-arm64/`），`ech_client.py` 会优先加载它。真正需要动手的只有两种情况：
 
-- **Windows**：安装 [Win64 OpenSSL v3.5+](https://slproweb.com/products/Win32OpenSSL.html)（默认 `C:\Program Files\OpenSSL-Win64`，程序会自动找到）；便携版或自定义目录用 `PIXIV_BRIDGE_OPENSSL_DIR` 指向其 `bin` 目录，或把该目录加进 `PATH`
-- **Ubuntu / Debian**：`sudo apt install libssl3`（发行版自带 ≥ 3.5 即可；较老的发行版需升级系统、加官方源或自行编译）
-- **macOS**：`brew install openssl@3`（版本不足 3.5 需先 `brew upgrade`），必要时 `export PIXIV_BRIDGE_OPENSSL_DIR=$(brew --prefix openssl@3)/lib`
-- **Docker**：`python:3.12-slim` 这类 Debian bookworm 基础镜像自带 OpenSSL 3.0，**不含 ECH**；容器内要用 ECH 需换自带 OpenSSL 3.5+ 的基础镜像，或改用 `PIXIV_BRIDGE_BYPASS_SNI=1` / `PIXIV_PROXY`
+- **目标平台没有对应的子目录**（例如包里只有 `win32-amd64`，却要跑在 Linux 上）：要么在该机器上装 OpenSSL **4.0+** 让程序自动找到，要么自己补一份——把目标平台的 `libssl` / `libcrypto` 放进 `openssl-libs/<系统>-<架构>/` 即可，命名沿用 `libssl-4-x64.dll` / `libssl.so.4` / `libssl.4.dylib` 这类常见名（完整认名列表见 `ech_client.py` 的 `_LIBSSL_NAMES` / `_LIBCRYPTO_NAMES`）。
+  - 目录名就是 `<系统>-<架构>`：`sys.platform` 的字母前缀（`win32`、`linux`、`darwin`、`android`、`freebsd`…）配 `platform.machine()`，例如 `linux-arm64`、`darwin-arm64`；架构别名会一并尝试（`aarch64` ↔ `arm64`、`x86_64` ↔ `amd64`），也可以只写系统名（`linux/`）当作该系统的通用兜底。
+  - **Termux 特例**：`sys.platform` 在 Termux 上是 `linux`，但程序识别 `$PREFIX` 后会按 **`android`** 找目录，因此用的是 `android-arm64/`。**不要**指望 `pkg install openssl`——官方源是 3.6.5，实测导出的 ECH 符号数为 0。
+- **自带的这份载入失败**（架构不符、缺 VC 运行库等）：程序会自动往系统安装的位置继续找，不会直接判死；`python run.py --check` 失败时会列出每个候选各自的失败原因。
+
+系统安装（作为后备）的常规做法——**注意发行版仓库里目前基本都是 3.x，装了也没有 ECH**：
+
+- **Windows**：安装 [Win64 OpenSSL **v4.x**](https://slproweb.com/products/Win32OpenSSL.html)（默认 `C:\Program Files\OpenSSL-Win64`，程序会自动找到）；便携版或自定义目录用 `PIXIV_BRIDGE_OPENSSL_DIR` 指向其 `bin` 目录，或把该目录加进 `PATH`
+- **Ubuntu / Debian / Fedora / RHEL**：仓库里的 `libssl3` / `openssl-libs` 都是 3.x，**不含 ECH**；要用 ECH 只能自备 4.0+ 的 `libssl` 并放进 `openssl-libs/linux-<架构>/`（程序会按当前架构找 `/usr/lib/x86_64-linux-gnu`、`/usr/lib/aarch64-linux-gnu`、`/usr/lib64` 等位置，若要装进系统目录则需自行编译）
+- **macOS**：`brew install openssl@4`，必要时 `export PIXIV_BRIDGE_OPENSSL_DIR=$(brew --prefix openssl@4)/lib`；Homebrew 的 `openssl@4` 是 keg-only、不会链进 `lib/`，但程序会主动去 `$(brew --prefix)/opt/openssl@4/lib` 找
+- **BSD**：`pkg install openssl`（若有 4.0+ 版本），库在 `/usr/local/lib`
+- **Arch / 其它**：库在 `/usr/lib`、`/lib`、`/usr/local/lib` 等常规位置，但要确认是 4.0+
+- **Docker**：`python:3.12-slim` 这类 Debian bookworm 基础镜像自带 OpenSSL 3.0，**不含 ECH**；容器里要用 ECH 要么把 Linux 版的库放进 `openssl-libs/linux-x86_64/` 再 COPY 进镜像（当前仓库带的是 `win32-amd64` 与 `android-arm64`），要么换自带 OpenSSL 4.0+ 的基础镜像，或改用 `PIXIV_BRIDGE_BYPASS_SNI=1` / `PIXIV_PROXY`
+
+> `openssl-libs/` 里的库来自 [OpenSSL 官方发行版](https://slproweb.com/products/Win32OpenSSL.html) 与 [TaurusTLS OpenSSL-Distribution](https://github.com/TaurusTLS-Developers/OpenSSL-Distribution)，许可证是 **Apache License 2.0**，各子目录随包附带了 `LICENSE.txt`。
 
 装好后 `python run.py --check` 的 `ech` 项应为 `OK`；找不到时会显示 `WARN` 并在提示里指回本节。
 

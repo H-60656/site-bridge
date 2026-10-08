@@ -17,7 +17,11 @@ API_BASE = "https://app-api.pixiv.net"
 CONNECT_TIMEOUT = 5.0
 # 接口项目自身的文件（阅读器页面属于 novel/ 子项目，不在接口项目的必需清单里）
 REQUIRED_FILES = ("run.py", "requirements.txt")
-ECH_HINT = "；ECH 模式需要系统安装 OpenSSL 3.5+ 的 libssl（pip 装不了），见 README「ECH 模式」"
+ECH_HINT = (
+    "；项目自带 openssl-libs/（随包附带的 OpenSSL 4.x，Windows 与 Termux 都已带对应子目录），"
+    "若该平台没有对应子目录、或自带库载入失败，再安装系统 OpenSSL 4.0+ 的 libssl"
+    "（pip 装不了；注意 3.x 全系都没有 ECH），见 README「ECH 模式」"
+)
 # 链路阻断 ECH 时的典型特征：握手在 ClientHello 之后被 RST（SSL_ERROR_SYSCALL=5）。
 ECH_BLOCKED_HINT = (
     "；握手被重置通常说明本机到 Cloudflare 这一段在阻断 ECH 扩展"
@@ -107,6 +111,21 @@ def port_available(port):
             return CheckResult("port", False, f"{port} 已被占用")
 
 
+def _openssl_source_label():
+    """说明这次 ECH 用的是哪份 OpenSSL：项目自带还是系统装的。
+
+    载入失败时 `library_path()` 返回空串，此时退回「找不到」的提示。
+    """
+    path = ech_client.library_path()
+    if not path:
+        return ""
+    try:
+        inside_bundle = ech_client.bundle_root() in Path(path).resolve().parents
+    except OSError:  # pragma: no cover - 路径解析失败不该影响自检结论
+        inside_bundle = False
+    return "项目自带" if inside_bundle else f"系统安装 {Path(path).parent}"
+
+
 def ech_transport(ech_config="", ech_ips="", api_base=API_BASE):
     """真正做一次 ECH 请求：ECH 模式下这才是「能不能用」的判据。
 
@@ -117,11 +136,12 @@ def ech_transport(ech_config="", ech_ips="", api_base=API_BASE):
     try:
         if not ech_client.available():
             return CheckResult(
-                "ech", False, "未找到支持 ECH 的 OpenSSL（需要 3.5+ 的 libssl）" + ECH_HINT
+                "ech", False, "未找到支持 ECH 的 OpenSSL（需要 4.0+ 的 libssl）" + ECH_HINT
             )
     except ech_client.EchUnavailable as exc:
         return CheckResult("ech", False, str(exc) + ECH_HINT)
     host = urlparse(api_base).hostname
+    source = _openssl_source_label()
     probe = types.SimpleNamespace(ech_config=ech_config)
     try:
         resp = asyncio.run(
@@ -141,7 +161,10 @@ def ech_transport(ech_config="", ech_ips="", api_base=API_BASE):
         if "SSL_get_error=5" in detail or "SyscallError" in detail:
             detail += ECH_BLOCKED_HINT
         return CheckResult("ech", False, detail[:400])
-    return CheckResult("ech", True, f"ECH 传输可用（{host} 返回 HTTP {resp.status_code}）")
+    suffix = f"，OpenSSL：{source}" if source else ""
+    return CheckResult(
+        "ech", True, f"ECH 传输可用（{host} 返回 HTTP {resp.status_code}{suffix}）"
+    )
 
 
 def proxy_transport(proxy, timeout=10.0, api_base=API_BASE):

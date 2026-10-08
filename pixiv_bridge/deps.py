@@ -56,13 +56,20 @@ def project_root_of(project_root=None):
 def is_termux():
     """是否运行在 Termux（Android）里。
 
-    Termux 的特征：``sys.platform`` 为 ``android`` 或 ``linux``，解释器路径与环境
-    变量 ``PREFIX`` 指向 ``/data/data/com.termux/files/usr``，并会设置
-    ``TERMUX_VERSION``。
+    Termux 的特征：``sys.platform`` 为 ``android``，或环境变量 ``PREFIX`` /
+    解释器路径指向 ``/data/data/com.termux/files/usr``，或设置了
+    ``TERMUX_VERSION``（Termux 自己导出的，普通 Linux 不会有）。
     """
-    prefix = os.environ.get("PREFIX", "")
-    markers = (prefix, sys.executable, os.environ.get("TERMUX_VERSION", ""))
-    return sys.platform == "android" or any("com.termux" in item for item in markers)
+    if sys.platform == "android":
+        return True
+    markers = (
+        os.environ.get("PREFIX", ""),
+        sys.executable or "",
+    )
+    if any("com.termux" in item for item in markers):
+        return True
+    # TERMUX_VERSION 是 Termux 专有变量，设了就是 Termux（deps 里靠它挑依赖清单）。
+    return bool(os.environ.get("TERMUX_VERSION"))
 
 
 def requirements_path(project_root=None, termux=None):

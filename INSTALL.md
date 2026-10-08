@@ -203,13 +203,17 @@ PIXIV_BRIDGE_ECH=1
 PIXIV_BRIDGE_BYPASS_SNI=0
 ```
 
-需要系统里有 **OpenSSL 3.5+**：Termux 自带（`pkg install openssl` 后是 3.6.5）✅；Windows 需要从 <https://slproweb.com/products/Win32OpenSSL.html> 安装（选完整版），装完在 `.env` 里指向它的 `bin` 目录：
+需要 **OpenSSL 4.0+**（ECH 是 4.0.0 才加入的，3.x 全系没有）——**项目自带的 `openssl-libs/` 里已经有了，Windows 与安卓 Termux 上都不用装任何东西**，程序会自动优先用这一份。
+
+只有两种情况才需要自己动手：包里没有当前平台的子目录（比如把 Windows 版拷到 Linux 上），或自带的那份载入失败。这时程序会自动退去找系统安装的 OpenSSL（Windows 的 `C:\Program Files\OpenSSL*`、Debian 系的多架构目录 `/usr/lib/<架构>-linux-gnu`、Fedora 的 `/usr/lib64`、macOS Homebrew 的 `opt/openssl@4/lib`、BSD 的 `/usr/local/lib` 等，按当前系统与架构挑）；也可以自己装一份 4.0+，并在 `.env` 里指过去：
 
 ```ini
 PIXIV_BRIDGE_OPENSSL_DIR=C:\Program Files\OpenSSL-Win64\bin
 ```
 
-Ubuntu 24.04+ / Debian 13+ 自带；macOS 用 `brew install openssl@3`。
+想在包里补一份本平台的库，放到 `openssl-libs/<系统>-<架构>/` 即可（如 `linux-arm64/`、`darwin-arm64/`），命名沿用 `libssl.so.4`、`libssl.4.dylib` 这类常见名。
+
+系统安装来源：Windows 从 <https://slproweb.com/products/Win32OpenSSL.html> 装 **4.x** 完整版；Ubuntu/Debian 需要自行编译或取预编译的 4.0+（**发行版自带的都是 3.x，没有 ECH**）；Fedora/RHEL 同理；macOS 用 `brew install openssl@4`。**Termux 上不要用 `pkg install openssl`**——官方源是 3.6.5，实测导出的 ECH 符号数为 0，项目自带的 `openssl-libs/android-arm64/`（4.0.3）才是可用的那份。
 
 **方式二：SNI 绕过（不需要 OpenSSL，但可能被服务器拒绝）**
 
@@ -291,6 +295,6 @@ PIXIV_PROXY=http://127.0.0.1:7890
 1. **Python 3.10+**：Windows 从 python.org 装；Termux `pkg install python`。
 2. **能访问 Pixiv 的网络**：被墙时需要代理，或依赖 ECH/SNI 绕过（不一定成功）。
 3. **你自己的 Pixiv 登录**：`python get_token.py`（需要能连上 Pixiv 才能完成）。
-4. **OpenSSL 3.5+**：只有用 ECH 模式才需要，且**不能用 pip 安装**（Termux 自带，Windows 需另装）。
+4. **OpenSSL 4.0+**：只有用 ECH 模式才需要；**项目自带 `openssl-libs/`，Windows 与安卓 Termux 版都直接可用**，其它平台缺对应子目录时再自行准备 4.0+（注意 3.x 全系没有 ECH，Termux 官方源也是 3.x，不能用 pip 装）。
 5. 完全离线的机器：提前在能上网的同类机器上执行
    `pip download -r requirements.txt -d wheels`，把 `wheels/` 一起拷过去。

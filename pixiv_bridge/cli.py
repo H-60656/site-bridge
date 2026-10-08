@@ -77,7 +77,7 @@ def _warn_network(results, settings):
             "与服务端无关；同一台机器也可能时通时断），可重试、换网络/手机热点，"
             "或设置 PIXIV_PROXY=http://127.0.0.1:7890 走代理；"
             "也可检查 PIXIV_BRIDGE_ECH_CONFIG / PIXIV_BRIDGE_ECH_IPS，"
-            "或安装带 ECH 支持的 OpenSSL（3.5+）",
+            "或安装带 ECH 支持的 OpenSSL（4.0+）",
             flush=True,
         )
     elif settings.bypass_sni:

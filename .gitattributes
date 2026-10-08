@@ -1,0 +1,10 @@
+# 让 Git 明确把这些二进制当成二进制看待：
+# 一旦被当成文本，core.autocrlf 会在检出时插入 CR/LF，动态库会当场损坏。
+# （Git 目前靠内容启发式也能认出来，这里是防止启发式失效或有人改配置。）
+*.so   binary
+*.so.* binary
+*.dll  binary
+*.dylib binary
+*.deb  binary
+*.zip  binary
+*.png  binary

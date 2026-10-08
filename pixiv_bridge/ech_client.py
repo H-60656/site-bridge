@@ -15,8 +15,9 @@ OpenSSL 不接受的形状（不发扩展）或干脆不带 ECH，握手就能�
 本应回落到外层 ClientHello，所以这个重置来自链路中间盒，而不是 Cloudflare——**这种情况下
 客户端无法绕过**，只能换网络/等它恢复，或改用代理（`PIXIV_PROXY`，见 config.Settings.proxy）。
 
-Python 自带的 OpenSSL 3.0.x 没有 ECH API，这里用 ctypes 驱动系统安装的 OpenSSL 4.x（或 3.5+）
-的 libssl。两个实测约束：
+Python 自带的 OpenSSL 3.0.x 没有 ECH API，这里用 ctypes 驱动 OpenSSL **4.0+** 的 libssl
+（ECH 是 OpenSSL 4.0.0 才加入的能力，3.x 全系都没有，包括 3.5/3.6——所以「回退系统自带
+OpenSSL」在只有 3.x 的机器上一定失败，必须用项目自带的 `openssl-libs/`）。两个实测约束：
   * 必须只协商 TLS 1.3：同时提供 TLS 1.2 时 Cloudflare 会以 illegal_parameter 中止握手；
   * fd 必须保持阻塞：socket.create_connection 的 timeout 会把 fd 设成非阻塞，导致
     SSL_connect 返回 SSL_ERROR_WANT_READ。
@@ -25,12 +26,15 @@ Python 自带的 OpenSSL 3.0.x 没有 ECH API，这里用 ctypes 驱动系统安
 import asyncio
 import base64
 import ctypes
+import ctypes.util
 import os
+import platform
 import re
 import shutil
 import socket
 import struct
 import sys
+import sysconfig
 import threading
 import time
 from pathlib import Path
@@ -78,13 +82,21 @@ READ_CHUNK = 65536
 # 104.18.42.239 5/8、172.64.145.17 3/8 成功），所以建连超时压到 5s，失败就换下一个 IP。
 CONNECT_TIMEOUT = 5.0
 
+# 项目自带的 OpenSSL 动态库目录（与 pixiv_bridge/ 同级，随项目一起拷贝）。
+# 这样在没有装 OpenSSL 4.0+ 的机器上也能直接开 ECH，不必让用户先去装 OpenSSL。
+# 里面的库按 平台-架构 分子目录存放，见 _platform_tags()。
+# 当前已带：win32-amd64（4.0.2）、android-arm64（4.0.3，给 Termux 用）。
+BUNDLE_DIR_NAME = "openssl-libs"
+
 _LIBSSL_NAMES = (
     "libssl-4-x64.dll",
     "libssl-4.dll",
     "libssl-3-x64.dll",
     "libssl-3.dll",
+    "libssl.so.4",
     "libssl.so.3",
     "libssl.so",
+    "libssl.4.dylib",
     "libssl.3.dylib",
     "libssl.dylib",
 )
@@ -93,8 +105,10 @@ _LIBCRYPTO_NAMES = (
     "libcrypto-4.dll",
     "libcrypto-3-x64.dll",
     "libcrypto-3.dll",
+    "libcrypto.so.4",
     "libcrypto.so.3",
     "libcrypto.so",
+    "libcrypto.4.dylib",
     "libcrypto.3.dylib",
     "libcrypto.dylib",
 )
@@ -108,7 +122,165 @@ class EchConnectError(RuntimeError):
     """ECH 握手/传输失败。"""
 
 
+def bundle_root():
+    """项目自带的 OpenSSL 目录（与 ``pixiv_bridge/`` 同级，随项目一起拷贝）。"""
+    return Path(__file__).resolve().parent.parent / BUNDLE_DIR_NAME
+
+
+def termux_prefix():
+    """Termux（Android）的安装前缀，如 ``/data/data/com.termux/files/usr``。
+
+    Termux 的 Python 报告的 ``sys.platform`` 是 ``linux``，和普通 Linux 分不出来，
+    但它的 OpenSSL 是 bionic libc 版的、放在 ``$PREFIX/lib`` 下，且**不能**加载
+    glibc 的 Linux 版库。所以这里单独认一下，好把库目录和自带子目录都指对。
+    """
+    prefix = os.environ.get("PREFIX", "")
+    if "com.termux" in prefix:
+        return prefix
+    if is_termux():
+        return prefix or "/data/data/com.termux/files/usr"
+    return ""
+
+
+def is_termux():
+    """是否运行在 Termux（Android）里。
+
+    判定逻辑与 ``deps.is_termux()`` 同源，避免两处标准不一致（那里据此挑依赖清单）。
+    """
+    from . import deps
+
+    return deps.is_termux()
+
+
+def _system_name():
+    """``openssl-libs/`` 里用的系统名。
+
+    只对 Windows 做归并（``cygwin`` 也当 ``win32``，因为 Cygwin 用的是 Win32 版 dll），
+    其余取 ``sys.platform`` 的字母前缀，这样 ``freebsd13`` → ``freebsd``、
+    ``linux`` → ``linux``、``darwin`` → ``darwin``，不会把 BSD 误当成 Linux。
+    Termux 单列成 ``android``：它的库是 bionic 版，跟 glibc 的 Linux 版不通用，
+    两者混在一起会加载到不能用的那一份。
+    """
+    if is_termux():
+        return "android"
+    if sys.platform in ("win32", "cygwin"):
+        return "win32"
+    match = re.match(r"[a-z]+", sys.platform or "")
+    return match.group(0) if match else (sys.platform or "unknown")
+
+
+def _multiarch_triple():
+    """Debian/Ubuntu 的多架构三元组，例如 ``x86_64-linux-gnu``、``aarch64-linux-gnu``。
+
+    Python 自己带着这个变量（Debian 打补丁的 CPython 会设置 ``MULTIARCH``），拿不到
+    就按 ``platform.machine()`` 推一个最常见的形状。
+    """
+    try:
+        value = sysconfig.get_config_var("MULTIARCH")
+    except Exception:  # pragma: no cover - sysconfig 极少出问题
+        value = None
+    if value:
+        return value
+    machine = (platform.machine() or "").lower()
+    guess = {
+        "x86_64": "x86_64-linux-gnu",
+        "amd64": "x86_64-linux-gnu",
+        "aarch64": "aarch64-linux-gnu",
+        "arm64": "aarch64-linux-gnu",
+        "armv7l": "arm-linux-gnueabihf",
+        "armv6l": "arm-linux-gnueabihf",
+        "i386": "i386-linux-gnu",
+        "i686": "i386-linux-gnu",
+        "riscv64": "riscv64-linux-gnu",
+        "ppc64le": "powerpc64le-linux-gnu",
+        "s390x": "s390x-linux-gnu",
+    }.get(machine)
+    return guess or ""
+
+
+def _linux_library_dirs():
+    """Linux 上要找的库目录，按「本机专属 → 通用」排序。
+
+    不止 ``/usr/lib/x86_64-linux-gnu`` 一个：Fedora/RHEL 用 ``/usr/lib64``，
+    Ubuntu/Debian 的 ARM 板子用 ``/usr/lib/aarch64-linux-gnu`` 或
+    ``/usr/lib/arm-linux-gnueabihf``，得按当前架构挑，否则非 x86_64 的机器
+    会漏掉系统那份 OpenSSL。
+    """
+    triple = _multiarch_triple()
+    machine = (platform.machine() or "").lower()
+    arch = {"amd64": "x86_64", "arm64": "aarch64", "i386": "i686", "i686": "i686"}.get(
+        machine, machine
+    )
+    dirs = []
+    for candidate in (
+        f"/usr/lib/{triple}" if triple else "",
+        f"/lib/{triple}" if triple else "",
+        f"/usr/lib/{arch}-linux-gnu",
+        f"/usr/lib/{machine}-linux-gnu",
+        "/usr/lib64",
+        "/usr/local/lib64",
+        "/usr/local/lib",
+        f"/usr/lib/{arch}",
+        "/usr/lib",
+        "/lib64",
+        "/lib",
+    ):
+        if candidate and candidate not in dirs:
+            dirs.append(candidate)
+    return dirs
+
+
+def _macos_library_dirs():
+    """macOS 上要找的库目录：Homebrew 的 openssl 单独放在 opt/ 下，不在 lib/ 里。
+
+    优先 openssl@4（只有 4.0+ 才有 ECH），也保留 openssl@3 —— 后者留着是为了
+    让「装了 3.x 但没有 ECH」这种情况能被找到并给出准确的失败原因，而不是静默跳过。
+    """
+    dirs = []
+    for prefix in ("/opt/homebrew", "/usr/local"):  # Apple Silicon / Intel
+        for candidate in (
+            f"{prefix}/opt/openssl@4/lib",
+            f"{prefix}/opt/openssl@3/lib",
+            f"{prefix}/opt/openssl/lib",
+            f"{prefix}/lib",
+        ):
+            if candidate not in dirs:
+                dirs.append(candidate)
+    return dirs
+
+
+def _platform_tags():
+    """当前平台在 ``openssl-libs/`` 下的候选子目录名（先精确、后宽松）。
+
+    约定布局：``openssl-libs/<系统>-<架构>/``，例如 ``win32-amd64``、
+    ``linux-x86_64``、``darwin-arm64``；直接把库文件丢在 ``openssl-libs/``
+    根下也能识别。
+    """
+    system = _system_name()
+    machine = (platform.machine() or "").lower()
+    arch = {
+        "amd64": "amd64",
+        "x86_64": "x86_64",
+        "x64": "amd64",
+        "arm64": "arm64",
+        "aarch64": "arm64",
+        "i386": "x86",
+        "i686": "x86",
+    }.get(machine, machine)
+    tags = []
+    for item in (f"{system}-{arch}", f"{system}-{machine}", system):
+        if item and item not in tags:
+            tags.append(item)
+    return tuple(tags)
+
+
 def _candidate_dirs():
+    """按优先级返回要搜索 libssl/libcrypto 的目录。
+
+    顺序 = 显式覆盖（``PIXIV_BRIDGE_OPENSSL_DIR``）→ **项目自带** → 系统安装。
+    项目自带的那份排在系统前面，这样拷到一台没装 OpenSSL 的机器上也能直接开 ECH；
+    显式指定的目录仍放最前，是因为那是用户明确点名的位置，不该被内置那份悄悄顶掉。
+    """
     dirs = []
 
     def add(path):
@@ -121,7 +293,14 @@ def _candidate_dirs():
         if candidate.is_dir() and candidate not in dirs:
             dirs.append(candidate)
 
+    # 1) 显式指定的目录（用户手动覆盖）。
     add(os.environ.get("PIXIV_BRIDGE_OPENSSL_DIR"))
+    # 2) 项目自带（首选：不依赖目标机器装 OpenSSL 4.0+）。
+    bundle = bundle_root()
+    for tag in _platform_tags():
+        add(bundle / tag)
+    add(bundle)
+    # 3) 系统安装：openssl 可执行文件旁边 → 常见安装路径 → PATH → 解释器目录。
     exe = shutil.which("openssl")
     if exe:
         add(Path(exe).resolve().parent)
@@ -129,24 +308,46 @@ def _candidate_dirs():
         add(r"C:\Program Files\OpenSSL-Win64\bin")
         add(r"C:\Program Files\OpenSSL\bin")
         add(r"C:\Program Files (x86)\OpenSSL-Win32\bin")
+    # dlsym 探测：有些系统把库放在非标准位置（Homebrew keg-only、conda、Nix），
+    # find_library 能问出真实路径，比硬编码清单更可靠。
+    for probe in ("ssl", "crypto"):
+        try:
+            found = ctypes.util.find_library(probe)
+        except Exception:  # pragma: no cover - 探测失败不影响其它候选
+            continue
+        if found and os.path.sep in found:
+            add(Path(found).resolve().parent)
     add(Path(sys.prefix) / "bin")
     add(Path(sys.prefix) / "lib")
     add(Path(sys.prefix) / "DLLs")
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         add(entry)
-    for entry in (
-        "/usr/lib/x86_64-linux-gnu",
-        "/usr/local/lib",
-        "/opt/homebrew/lib",
-        "/usr/lib",
-        "/lib",
-    ):
-        add(entry)
+    prefix = termux_prefix()
+    if prefix:
+        # Termux：库在 $PREFIX/lib，是 bionic 版，**不能**套用 glibc 的 Linux 清单
+        # （/usr/lib/x86_64-linux-gnu 之类在安卓上根本不存在，混进去没意义）。
+        add(Path(prefix) / "lib")
+        add(Path(prefix) / "libexec")
+    elif sys.platform == "darwin":
+        for entry in _macos_library_dirs():
+            add(entry)
+    elif sys.platform.startswith("linux"):
+        for entry in _linux_library_dirs():
+            add(entry)
+    elif sys.platform.startswith(("freebsd", "openbsd", "netbsd", "dragonfly")):
+        # BSD 的 ports 装在 /usr/local 下，顺序与 Linux 不同，别套 Linux 的清单。
+        for entry in (
+            "/usr/local/lib",
+            "/usr/local/lib64",
+            "/usr/lib",
+            "/lib",
+        ):
+            add(entry)
     return dirs
 
 
-def find_library_pair():
-    """返回内置 ECH 能力的 (libcrypto, libssl) 路径，找不到抛 EchUnavailable。"""
+def _library_pairs():
+    """按优先级产出 (libcrypto, libssl) 候选路径，逐个尝试而不是只认第一个。"""
     for directory in _candidate_dirs():
         crypto = next(
             (directory / name for name in _LIBCRYPTO_NAMES if (directory / name).is_file()),
@@ -159,10 +360,17 @@ def find_library_pair():
             None,
         )
         if ssl_path is not None:
-            return crypto, ssl_path
+            yield crypto, ssl_path
+
+
+def find_library_pair():
+    """返回第一个带 ECH 能力的 (libcrypto, libssl) 路径，找不到抛 EchUnavailable。"""
+    pair = next(_library_pairs(), None)
+    if pair is not None:
+        return pair
     raise EchUnavailable(
-        "未找到带 ECH 支持的 OpenSSL 动态库（需要 libssl 3.5+/4.x），"
-        "可安装 OpenSSL 4 并用 PIXIV_BRIDGE_OPENSSL_DIR 指定其 bin 目录"
+        "未找到带 ECH 支持的 OpenSSL 动态库（需要 OpenSSL 4.0+ 的 libssl）。"
+        f"可把库文件放进 {bundle_root()}，或用 PIXIV_BRIDGE_OPENSSL_DIR 指定其所在目录"
     )
 
 
@@ -188,12 +396,26 @@ class _LibSsl:
             os.environ["PATH"] = (
                 str(Path(crypto_path).parent) + os.pathsep + os.environ.get("PATH", "")
             )
-        ctypes.CDLL(str(crypto_path))
-        self.ssl = ctypes.CDLL(str(ssl_path))
-        self.ssl_path = str(ssl_path)
-        if not hasattr(self.ssl, "SSL_set1_ech_config_list"):
-            raise EchUnavailable(f"{ssl_path} 不支持 ECH（需要 OpenSSL 3.5+）")
+        try:
+            ctypes.CDLL(str(crypto_path))
+            self.ssl = ctypes.CDLL(str(ssl_path))
+            self.ssl_path = str(ssl_path)
+            if not hasattr(self.ssl, "SSL_set1_ech_config_list"):
+                raise EchUnavailable(f"{ssl_path} 不支持 ECH（需要 OpenSSL 4.0+）")
+        except BaseException:
+            # 这个候选不可用（文件损坏、架构不符、版本没有 ECH）：先收回 dll 目录句柄
+            # 再让上层换下一个候选，免得逐个失败时把句柄一路攒着。
+            self._release_dll_dir()
+            raise
         self._declare()
+
+    def _release_dll_dir(self):
+        if self._dll_dir is not None:
+            try:
+                self._dll_dir.close()
+            except Exception:  # pragma: no cover - 关闭失败不值得影响主流程
+                pass
+            self._dll_dir = None
 
     def _declare(self):
         lib = self.ssl
@@ -260,12 +482,28 @@ _context = None
 
 
 def lib():
-    """进程内单例加载 OpenSSL 动态库，失败抛 EchUnavailable。"""
+    """进程内单例加载 OpenSSL 动态库，失败抛 EchUnavailable。
+
+    逐个候选尝试：项目自带那份若因为架构不符、缺少运行库或版本过低而载入失败，
+    就继续往系统安装的位置找，最后才报错。失败原因全部记进异常信息，方便排查
+    到底是内置的坏了还是机器上根本没有。
+    """
     global _lib
     with _lib_lock:
         if _lib is None:
-            crypto_path, ssl_path = find_library_pair()
-            _lib = _LibSsl(crypto_path, ssl_path)
+            errors = []
+            for crypto_path, ssl_path in _library_pairs():
+                try:
+                    _lib = _LibSsl(crypto_path, ssl_path)
+                except (OSError, EchUnavailable) as exc:
+                    errors.append(f"{ssl_path}: {exc}")
+                    continue
+                break
+            if _lib is None:
+                detail = "；".join(errors) if errors else "没有找到任何候选 OpenSSL 动态库"
+                raise EchUnavailable(
+                    f"未找到可用的 ECH OpenSSL 动态库（需要 OpenSSL 4.0+ 的 libssl）：{detail}"
+                )
         return _lib
 
 
@@ -566,6 +804,10 @@ def _request_sync(method, url, params, data, json_body, headers, timeout, ips, s
         raise EchConnectError(f"非法地址: {url}")
     port = parsed.port or 443
     path = parsed.path or "/"
+    if parsed.query:
+        # 同 sni_client：翻页传进来的是完整 URL，查询串在 parsed.query 里，
+        # 只取 parsed.path 会把 offset 丢掉，导致「下一页」返回的还是第一页。
+        path = f"{path}?{parsed.query}"
     candidates = ips or (hostname,)
     headers = dict(headers or {})
     # 与无 SNI 路径一致：ECH 只保护握手，Host 仍是服务端定位虚拟主机的依据。
