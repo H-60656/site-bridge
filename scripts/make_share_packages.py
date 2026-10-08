@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""生成分享包：把项目按「接口包 / 扩展包 / 接口+扩展组合包」打成 6 个 zip。
+"""生成分享包：把项目按「接口包 / 扩展包 / 接口+扩展组合包」打成若干 zip。
+
+包的构成（几个接口包、几个扩展包）跟着 ``scripts/sites.py`` 注册表走，
+当前清单与数量以 ``--list`` 的输出为准。
 
 用法::
 
-    python scripts/make_share_packages.py            # 生成全部 6 个包到 dist/
+    python scripts/make_share_packages.py            # 生成全部包到 dist/
     python scripts/make_share_packages.py --check     # 只做内容与结构检查，不写 zip
     python scripts/make_share_packages.py pixiv-api novel-extension
 
@@ -585,10 +588,20 @@ def inspect_zip(target: Path) -> tuple:
     return len(names), total, problems
 
 
+def _kind_counts() -> str:
+    """把包清单按 kind 归纳成一句话，供 ``--help`` 使用（不再写死数量）。"""
+    labels = {"api": "接口包", "extension": "扩展包", "bundle": "接口+扩展"}
+    counts: dict[str, int] = {}
+    for spec in PACKAGES:
+        counts[spec.kind] = counts.get(spec.kind, 0) + 1
+    parts = [f"{labels.get(kind, kind)} {counts[kind]} 个" for kind in labels if kind in counts]
+    return "、".join(parts) or "无"
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="make_share_packages",
-        description="把项目打成 6 个分享包（接口包两个、扩展包两个、接口+扩展两个）。",
+        description=f"把项目打成 {len(PACKAGES)} 个分享包（{_kind_counts()}）。",
     )
     parser.add_argument(
         "keys",
