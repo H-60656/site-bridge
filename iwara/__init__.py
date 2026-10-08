@@ -1,4 +1,4 @@
-"""iwara.tv 子项目。
+"""iwara.tv 接口站点：视频浏览、搜索、直链解析与代转播放（自带 curl_cffi 客户端）。
 
 依赖方向与 `novel` 一致：本包只 import 主项目 `pixiv_bridge`，
 主项目不认识 `iwara`，单向依赖不会倒过来。

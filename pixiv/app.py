@@ -123,6 +123,7 @@ SITE = Site(
     title=TITLE,
     create_app=create_app,
     version=VERSION,
+    nav_order=1,
     settings_class=PixivSettings,
     required_files=("run.py",),
     checks=extra_checks,

@@ -2,16 +2,23 @@
 rem Pixiv Bridge / Iwara Bridge one-click launcher (Windows)
 rem
 rem Usage:
-rem   double-click start.bat        start the API project found in this folder
+rem   double-click start.bat        open the project navigation, pick one, start it
+rem   start.bat iwara               start that API project directly
 rem   start.bat --port 9000          use another port
 rem   start.bat --host 0.0.0.0       allow other devices on your LAN
 rem   start.bat --check              check environment/login only, do not serve
-rem   set BRIDGE_SITE=iwara          pick the API project explicitly
+rem   set BRIDGE_SITE=iwara          skip the question, always start iwara
 rem
 rem The two API projects pixiv/ and iwara/ are siblings: each one has its own
-rem run.py and neither loads the other. This launcher starts ONE of them:
-rem   * BRIDGE_SITE=pixiv / iwara when set
-rem   * otherwise the first of pixiv\run.py, iwara\run.py that exists
+rem run.py and neither loads the other. This launcher does NOT pick one itself;
+rem it hands over to the framework navigation (`python -m pixiv_bridge`), which:
+rem   * uses BRIDGE_SITE when set (environment variable, or a BRIDGE_SITE= line
+rem     in .env);
+rem   * starts the only API project straight away when there is just one;
+rem   * lists every API project (and every extension) and asks which one when a
+rem     console is available - type the number, Enter = the default (pixiv);
+rem   * starts the first one instead when there is no console to ask (piped
+rem     stdin), so it never waits forever.
 rem
 rem To add an extension directory (novel / iwara_web) put a line in .env:
 rem   PIXIV_BRIDGE_EXTENSIONS=novel          (for the pixiv project)
@@ -60,35 +67,17 @@ if errorlevel 1 (
     exit /b 1
 )
 
-rem ---------- 3. pick the API project (pixiv and iwara are siblings) ----------
-set "SITE=%BRIDGE_SITE%"
-if not defined SITE if exist "pixiv\run.py" set "SITE=pixiv"
-if not defined SITE if exist "iwara\run.py" set "SITE=iwara"
-
-if not defined SITE (
-    echo [x] No API project found here: expected pixiv\run.py or iwara\run.py.
-    echo     Start this launcher from the folder that contains them.
-    pause
-    exit /b 1
-)
-
-set "ENTRY=%SITE%\run.py"
-if not exist "%ENTRY%" (
-    echo [x] API project "%SITE%" not found: %ENTRY% is missing.
-    pause
-    exit /b 1
-)
-
-rem ---------- 4. create .env on first run ----------
+rem ---------- 3. create .env on first run ----------
 if not exist ".env" if exist ".env.example" (
     copy /y ".env.example" ".env" >nul
     echo [i] Created .env from .env.example
 )
 
-rem ---------- 5. start (missing dependencies are installed automatically) ----------
-echo [i] Starting API project: %SITE% ^(%ENTRY%^)
-echo [i] The first run downloads dependencies, please wait 1-3 minutes...
-%PY% "%ENTRY%" %*
+rem ---------- 4. start through the framework's project navigation ----------
+rem Which API project runs is decided in ONE place: `python -m pixiv_bridge`
+rem (see the header of this file). Nothing here knows about pixiv/ or iwara/.
+echo [i] Starting through the project navigation...
+%PY% -m pixiv_bridge %*
 
 if errorlevel 1 (
     echo.

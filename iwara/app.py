@@ -113,6 +113,7 @@ SITE = Site(
     title=TITLE,
     create_app=create_app,
     version=VERSION,
+    nav_order=2,
     # iwara 没有额外配置字段，用框架的 Settings 就够（data_dir 等路径都在里面）。
     required_files=("run.py", "requirements.txt"),
     checks=extra_checks,

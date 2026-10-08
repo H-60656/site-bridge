@@ -192,6 +192,7 @@ else:                   # 普通路径
 直连能力是**可选增强**，不能反过来成为负担：
 
 - **站点隔离，单向依赖。** `pixiv_bridge/` 是纯框架，永远不认识 `pixiv/`、`iwara/`、`novel/`、`iwara_web/`；站点与扩展只能 `import pixiv_bridge.*`（两个站点之间也互不依赖）。`scripts/check_boundary.py` 用 AST + 子进程探路由来强制这条边界，`scripts/sites.py` 是构建侧的登记表。
+- **挑选站点也只写一次。** 根目录的启动就是**项目导航**：`pixiv_bridge/__main__.py` 发现「有 `run.py` 的目录＝接口项目、只有 `extension.py` 的目录＝扩展」，用 `ast` 从站点自己的文件里读导航用的字面量（标题、简介、`Site.nav_order`），**不 import 也不执行站点代码**，选完才 `runpy.run_path` 交给它的 `run.py`。`start.bat` / `start.sh` 因此只是转发器（在 sh/bat 里各抄一套发现＋排序＋询问必然与 Python 侧漂移，而且 shell 读不到 `nav_order`）。
 - **重依赖不进根清单。** `curl_cffi` 是编译包，只有 iwara 需要，所以写在 `iwara/requirements.txt` 里，由 `pixiv_bridge/deps.py` 的通用 `ensure_packages(names, requirements)` 按需安装，站点在自己 `run.py` 里先 `bootstrap(partial(ensure_packages, ...))` 再用它。只跑 Pixiv 的用户完全不必碰它。
 - **可选能力要有回退，且失败要安静。** 登录态失效不该让整站不可用 —— iwara 的 `_prepare_auth`（`iwara/client.py:465-485`）换不出 access token 时只把原因记进 `auth_error` 并退回匿名，因为「iwara 的绝大部分内容匿名就能看，为了一个失效的 token 让整站不可用是本末倒置」。
 - **能力自检要暴露给用户。** `/api/iwara/auth` 匿名时刻意不去打 `/user`（那返回 401，看着像报错），所以它永远 200；只有真拿到 access token 才问一次 `/user` 填 `username_hint` —— 顺带一条教训：token 载荷里**没有**用户名字段（只有 `exp`/`id`/`role`），早期直接读载荷的 `username` 于是恒为 `None`，而当时的测试替身自己往载荷里塞了 `username`，正好把这个 bug 盖住了。

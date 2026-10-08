@@ -2876,6 +2876,329 @@ class PipBootstrapTestCase(unittest.TestCase):
         self.assertEqual(deps_module.bootstrap(lambda: ["fastapi"]), ["fastapi"])
 
 
+class _FakeTty(io.StringIO):
+    """假的终端：``choose_site`` 只问 ``isatty()``。"""
+
+    def isatty(self):
+        return True
+
+
+class NavigationTestCase(unittest.TestCase):
+    """``python -m pixiv_bridge`` 就是整个项目的导航：列站点与扩展、挑一个、再执行入口。
+
+    导航信息必须**只靠读字面量**（:mod:`ast`）拿到，不能 import 站点代码 ——
+    框架不认识任何站点，那几个假项目树里连 ``Site`` 都没定义，解析失败时
+    也必须退回目录名而不是崩掉。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import pixiv_bridge.__main__ as module
+
+        cls.nav = module
+
+    def _fake_root(self):
+        # 放在工作区的 _tmp_tests/ 下：系统 TEMP 里新建子目录会被沙箱拒绝
+        directory = make_temp_dir("nav")
+        self.addCleanup(drop_temp_dir, directory)
+        return directory
+
+    def _keep_argv(self):
+        saved = list(sys.argv)
+        self.addCleanup(lambda: sys.argv.__setitem__(slice(None), saved))
+
+    # ---------------- 列出真实项目里的接口项目与扩展 ----------------
+
+    def test_the_real_project_lists_both_api_projects_in_nav_order(self):
+        sites = self.nav.site_items()
+        self.assertEqual([item.name for item in sites], ["pixiv", "iwara"])
+        self.assertEqual([item.order for item in sites], [1, 2])
+        self.assertEqual([item.kind for item in sites], ["site", "site"])
+        self.assertEqual(sites[0].title, "Pixiv Bridge")
+        self.assertEqual(sites[0].entry, PROJECT_ROOT / "pixiv" / "run.py")
+        self.assertTrue(sites[0].description.startswith("Pixiv 接口站点"))
+        self.assertTrue(sites[1].description.startswith("iwara.tv 接口站点"))
+
+    def test_the_real_project_lists_extensions_that_are_not_entries(self):
+        extensions = self.nav.extension_items()
+        self.assertEqual([item.name for item in extensions], ["iwara_web", "novel"])
+        for item in extensions:
+            with self.subTest(extension=item.name):
+                self.assertEqual(item.kind, "extension")
+                self.assertEqual(item.entry, PROJECT_ROOT / item.name / "extension.py")
+                self.assertTrue(item.title)
+        self.assertEqual(self.nav.site_names(), ["pixiv", "iwara"])
+
+    def test_render_navigation_shows_numbers_extensions_and_hints(self):
+        text = self.nav.render_navigation()
+        self.assertIn("项目导航", text)
+        self.assertIn("1) pixiv", text)
+        self.assertIn("2) iwara", text)
+        self.assertIn("PIXIV_BRIDGE_EXTENSIONS", text)
+        self.assertIn("--list", text)
+        self.assertIn("BRIDGE_SITE=pixiv", text)
+        self.assertIn("iwara_web", text)
+        self.assertIn("novel", text)
+
+    # ---------------- 只读字面量，不 import 站点 ----------------
+
+    def test_site_metadata_comes_from_literals_in_app_py(self):
+        root = self._fake_root()
+        demo = root / "demo"
+        demo.mkdir()
+        (demo / "run.py").write_text("", encoding="utf-8")
+        (demo / "__init__.py").write_text(
+            '"""演示项目简介。\n\n第二段不该出现。"""\n', encoding="utf-8"
+        )
+        # 没有 import Site，也没有 create_app：导航只看字面量，不会执行这里
+        (demo / "app.py").write_text(
+            'TITLE = "演示站点"\n'
+            'SITE = Site(name="demo", title=TITLE, nav_order=3, create_app=create_app)\n',
+            encoding="utf-8",
+        )
+
+        sites = self.nav.site_items(root)
+        self.assertEqual([item.name for item in sites], ["demo"])
+        self.assertEqual(sites[0].title, "演示站点")
+        self.assertEqual(sites[0].order, 3)
+        self.assertEqual(sites[0].description, "演示项目简介。")
+        self.assertEqual(sites[0].entry, demo / "run.py")
+        self.assertEqual(sites[0].kind, "site")
+
+    def test_extension_metadata_comes_from_nav_literals(self):
+        root = self._fake_root()
+        demoext = root / "demoext"
+        demoext.mkdir()
+        (demoext / "extension.py").write_text(
+            'EXTENSION_NAV = (\n'
+            '    {"title": "演示扩展", "description": "扩展说明", "path": "/demo"},\n'
+            ")\n",
+            encoding="utf-8",
+        )
+        doc_only = root / "doconly"
+        doc_only.mkdir()
+        (doc_only / "extension.py").write_text(
+            '"""文档里写的扩展。\n\n第二段。"""\n', encoding="utf-8"
+        )
+        both = root / "both"
+        both.mkdir()
+        (both / "run.py").write_text("", encoding="utf-8")
+        (both / "extension.py").write_text("EXTENSION_NAV = ()\n", encoding="utf-8")
+
+        items = {item.name: item for item in self.nav.extension_items(root)}
+        self.assertEqual(sorted(items), ["demoext", "doconly"])
+        self.assertEqual(items["demoext"].title, "演示扩展")
+        self.assertEqual(items["demoext"].description, "扩展说明")
+        self.assertEqual(items["demoext"].entry, demoext / "extension.py")
+        self.assertEqual(items["doconly"].title, "文档里写的扩展。")
+        self.assertEqual(items["doconly"].description, "")
+        # 目录里同时有 run.py 时算接口项目，不当扩展
+        self.assertEqual(self.nav.site_names(root), ["both"])
+
+    def test_broken_or_missing_metadata_falls_back_to_the_directory_name(self):
+        root = self._fake_root()
+        broken = root / "broken"
+        broken.mkdir()
+        (broken / "run.py").write_text("", encoding="utf-8")
+        (broken / "app.py").write_text("SITE = Site(\n", encoding="utf-8")
+        (broken / "__init__.py").write_text("", encoding="utf-8")
+
+        plain = root / "plain"
+        plain.mkdir()
+        (plain / "run.py").write_text("", encoding="utf-8")
+
+        sites = self.nav.site_items(root)
+        self.assertEqual([item.name for item in sites], ["broken", "plain"])
+        self.assertEqual([item.title for item in sites], ["broken", "plain"])
+        self.assertEqual([item.order for item in sites], [100, 100])
+
+        empty_root = self._fake_root()
+        (empty_root / "empty").mkdir()
+        text = self.nav.render_navigation(empty_root)
+        self.assertIn("（没有找到：本目录下需要有 <接口项目>/run.py）", text)
+        self.assertIn("（没有找到：扩展目录里需要有 extension.py）", text)
+        self.assertNotIn("BRIDGE_SITE=", text)
+
+    # ---------------- 挑站点：BRIDGE_SITE → 单个 → 问 → 默认 ----------------
+
+    def test_non_interactive_stream_starts_the_first_site(self):
+        printed = []
+        name = self.nav.choose_site(
+            self.nav.site_items(), stream=io.StringIO(), out=printed.append
+        )
+        self.assertEqual(name, "pixiv")
+        self.assertTrue(any("没有可交互的终端" in line for line in printed))
+
+    def test_interactive_choice_by_number_name_and_default(self):
+        sites = self.nav.site_items()
+        for answer, expected in (("2", "iwara"), ("iwara", "iwara"), ("1", "pixiv"), ("", "pixiv")):
+            with self.subTest(answer=answer):
+                self.assertEqual(
+                    self.nav.choose_site(
+                        sites,
+                        stream=_FakeTty(),
+                        ask=lambda _prompt, given=answer: given,
+                        out=lambda *_: None,
+                    ),
+                    expected,
+                )
+
+    def test_interactive_choice_asks_again_after_bad_input(self):
+        answers = iter(["???", "0", "iwara"])
+        printed = []
+        name = self.nav.choose_site(
+            self.nav.site_items(),
+            stream=_FakeTty(),
+            ask=lambda _prompt: next(answers),
+            out=printed.append,
+        )
+        self.assertEqual(name, "iwara")
+        self.assertEqual(sum("没听懂" in line for line in printed), 2)
+
+    def test_interactive_choice_prints_the_navigation_before_asking(self):
+        printed = []
+        self.nav.choose_site(
+            self.nav.site_items(), stream=_FakeTty(), ask=lambda _p: "2", out=printed.append
+        )
+        self.assertTrue(any("项目导航" in line for line in printed))
+
+    def test_single_api_project_is_never_asked_about(self):
+        asked = []
+
+        def ask(prompt):
+            asked.append(prompt)
+            return "x"
+
+        name = self.nav.choose_site(
+            self.nav.site_items()[:1], stream=_FakeTty(), ask=ask, out=lambda *_: None
+        )
+        self.assertEqual(name, "pixiv")
+        self.assertEqual(asked, [])
+
+    def test_bridge_site_wins_and_a_bad_value_is_reported(self):
+        sites = self.nav.site_items()
+        asked = []
+
+        def ask(prompt):
+            asked.append(prompt)
+            return "pixiv"
+
+        with patch.object(self.nav, "_explicit_site", return_value="iwara"):
+            self.assertEqual(
+                self.nav.choose_site(sites, stream=_FakeTty(), ask=ask, out=lambda *_: None),
+                "iwara",
+            )
+
+        errors = []
+        with patch.object(self.nav, "_explicit_site", return_value="nope"):
+            self.assertIsNone(
+                self.nav.choose_site(
+                    sites,
+                    stream=_FakeTty(),
+                    ask=ask,
+                    out=lambda *_: None,
+                    err=errors.append,
+                )
+            )
+        self.assertEqual(asked, [])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("BRIDGE_SITE=nope", errors[0])
+        self.assertIn("pixiv, iwara", errors[0])
+
+    def test_explicit_site_prefers_the_environment_variable(self):
+        with patch.dict(os.environ, {"BRIDGE_SITE": "iwara"}):
+            self.assertEqual(self.nav._explicit_site(), "iwara")
+
+    # ---------------- 启动：把入口交给 runpy ----------------
+
+    def test_launch_runs_the_entry_as_main_with_the_given_arguments(self):
+        self._keep_argv()
+        entry = str(PROJECT_ROOT / "pixiv" / "run.py")
+        with patch.object(self.nav.runpy, "run_path") as run_path:
+            self.assertEqual(self.nav._launch("pixiv", ["--check"]), 0)
+        run_path.assert_called_once_with(entry, run_name="__main__")
+        self.assertEqual(sys.argv, [entry, "--check"])
+
+    def test_main_dispatches_a_named_site_to_its_entry(self):
+        root = self._fake_root()
+        (root / "demo").mkdir()
+        (root / "demo" / "run.py").write_text("", encoding="utf-8")
+        self._keep_argv()
+        with patch.object(self.nav, "ROOT", root), patch.object(self.nav, "runpy") as runpy_module:
+            self.assertEqual(self.nav.main(["demo", "--check"]), 0)
+        runpy_module.run_path.assert_called_once_with(
+            str(root / "demo" / "run.py"), run_name="__main__"
+        )
+        self.assertEqual(sys.argv, [str(root / "demo" / "run.py"), "--check"])
+
+    def test_main_without_arguments_starts_the_default_site(self):
+        """没有终端可以问（管道 / Docker）时也必须真的启动，而不是打印用法后退出。"""
+        root = self._fake_root()
+        for name in ("beta", "alpha"):
+            (root / name).mkdir()
+            (root / name / "run.py").write_text("", encoding="utf-8")
+        self._keep_argv()
+        with patch.object(self.nav, "ROOT", root), patch.object(
+            self.nav, "_explicit_site", return_value=""
+        ), patch.object(sys, "stdin", io.StringIO()), patch.object(
+            self.nav, "runpy"
+        ) as runpy_module:
+            self.assertEqual(self.nav.main([]), 0)
+        runpy_module.run_path.assert_called_once_with(
+            str(root / "alpha" / "run.py"), run_name="__main__"
+        )
+
+    def test_main_reports_an_unknown_site_and_an_empty_project(self):
+        errors = io.StringIO()
+        with patch.object(sys, "stderr", errors), patch.object(self.nav, "runpy") as runpy_module:
+            self.assertEqual(self.nav.main(["nosuch"]), 2)
+        runpy_module.run_path.assert_not_called()
+        self.assertIn("没有这个接口项目: nosuch", errors.getvalue())
+        self.assertIn("pixiv", errors.getvalue())
+
+        root = self._fake_root()
+        (root / "empty").mkdir()
+        errors = io.StringIO()
+        with patch.object(self.nav, "ROOT", root), patch.object(
+            sys, "stderr", errors
+        ), patch.object(sys, "stdin", io.StringIO()), patch.object(
+            self.nav, "runpy"
+        ) as runpy_module:
+            self.assertEqual(self.nav.main([]), 2)
+        runpy_module.run_path.assert_not_called()
+        self.assertIn("没有找到任何接口项目", errors.getvalue())
+
+    def test_help_prints_the_usage_before_the_navigation(self):
+        printed = io.StringIO()
+        with patch.object(sys, "stdout", printed):
+            self.assertEqual(self.nav.main(["--help"]), 0)
+        text = printed.getvalue()
+        self.assertIn("用法:", text)
+        self.assertIn("项目导航", text)
+        self.assertLess(text.index("用法:"), text.index("项目导航"))
+
+    def test_list_only_prints_the_navigation(self):
+        printed = io.StringIO()
+        with patch.object(sys, "stdout", printed):
+            self.assertEqual(self.nav.main(["--list"]), 0)
+        self.assertIn("项目导航", printed.getvalue())
+
+    # ---------------- 两个启动脚本都只转发给导航 ----------------
+
+    def test_start_scripts_delegate_to_the_module_navigation(self):
+        bat = (PROJECT_ROOT / "start.bat").read_text(encoding="utf-8")
+        sh = (PROJECT_ROOT / "start.sh").read_text(encoding="utf-8")
+        for name, text in (("start.bat", bat), ("start.sh", sh)):
+            with self.subTest(script=name):
+                self.assertIn("-m pixiv_bridge", text)
+                self.assertNotIn("$SITE/run.py", text)
+        # .bat 必须是纯 ASCII：中文会被 cmd 的 936 代码页错解
+        self.assertTrue(bat.isascii(), "start.bat 必须保持纯 ASCII")
+        self.assertNotIn('set "SITE=', bat)
+        self.assertIn("BRIDGE_SITE", bat)
+        self.assertIn("BRIDGE_SITE", sh)
+
+
 class BodyValidationTestCase(unittest.TestCase):
     """POST 请求体校验（原测试集里所有请求都是 GET，这块完全没覆盖）。
 

@@ -2,16 +2,19 @@
 # Pixiv Bridge / Iwara Bridge 一键启动脚本（Termux / Linux / macOS）
 #
 # 用法：
-#   sh start.sh                  启动本目录里的接口项目
+#   sh start.sh                  打开项目导航，挑一个接口项目启动（回车＝默认的 pixiv）
+#   sh start.sh iwara            直接启动指定的接口项目
 #   sh start.sh --port 9000      换个端口
 #   sh start.sh --host 0.0.0.0   允许同一局域网的其他设备访问
 #   sh start.sh --check          只检查环境和登录，不启动服务
-#   BRIDGE_SITE=iwara sh start.sh  明确指定跑哪个接口项目
+#   BRIDGE_SITE=iwara sh start.sh  跳过询问，直接跑 iwara
 #
 # 两个接口项目 pixiv/ 与 iwara/ 是**同级**的：各自一个 run.py，互不加载。
-# 本脚本只启动其中一个：
-#   * 设了 BRIDGE_SITE 就用它；
-#   * 否则取 pixiv/run.py、iwara/run.py 里先存在的那个。
+# 本脚本不做挑选，只把参数转发给框架的项目导航（`python -m pixiv_bridge`）：
+#   * 设了 BRIDGE_SITE 就用它（环境变量，其次根目录 .env 里的同名行）；
+#   * 只有一个接口项目就直接启动；
+#   * 有终端就列出来问一句（回车＝第一个，也就是默认站点）；
+#   * 没有终端（Docker / 计划任务 / 管道）就用第一个，不会挂着等输入。
 #
 # 想连扩展目录一起用（novel / iwara_web），在 .env 里加一行：
 #   PIXIV_BRIDGE_EXTENSIONS=novel          （配 pixiv 接口项目）
@@ -50,35 +53,20 @@ if ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; t
     exit 1
 fi
 
-# ---------- 3. 选接口项目（pixiv 与 iwara 同级） ----------
-SITE="${BRIDGE_SITE:-}"
-if [ -z "$SITE" ]; then
-    if [ -f pixiv/run.py ]; then
-        SITE=pixiv
-    elif [ -f iwara/run.py ]; then
-        SITE=iwara
-    fi
-fi
-
-if [ -z "$SITE" ] || [ ! -f "$SITE/run.py" ]; then
-    echo "[x] 没有找到接口项目：本目录下应该有 pixiv/run.py 或 iwara/run.py。"
-    echo "    请在包含它们的目录里运行：sh start.sh"
-    exit 1
-fi
-
-# ---------- 4. 首次运行时生成 .env ----------
+# ---------- 3. 首次运行时生成 .env ----------
 if [ ! -f .env ] && [ -f .env.example ]; then
     cp .env.example .env
     echo "[i] 已从 .env.example 生成配置文件 .env"
 fi
 
-if [ "$SITE" = "pixiv" ] && [ -f .env ] \
+# ---------- 4. 首次使用提醒（只跑 iwara 时不需要 Pixiv 登录） ----------
+if [ "${BRIDGE_SITE:-pixiv}" = "pixiv" ] && [ -f .env ] \
     && ! grep -q '^PIXIV_REFRESH_TOKEN=..*' .env && [ ! -f data/tokens.json ]; then
     echo "[!] 还没有 Pixiv 登录凭据：请编辑 .env 填入 PIXIV_REFRESH_TOKEN，"
     echo "    或启动后按 INSTALL.md「获取 refresh_token」用网页授权登录。"
     echo "    （只跑 iwara 接口项目时不需要 Pixiv 登录。）"
 fi
 
-# ---------- 5. 启动（依赖缺失会自动安装） ----------
-echo "[i] 使用 $PY $("$PY" -c 'import sys; print(sys.version.split()[0])') 启动接口项目 $SITE；首次运行会自动安装依赖…"
-exec "$PY" "$SITE/run.py" "$@"
+# ---------- 5. 启动（依赖缺失会自动安装；站点挑选交给框架的导航） ----------
+echo "[i] 使用 $PY $("$PY" -c 'import sys; print(sys.version.split()[0])') 启动；首次运行会自动安装依赖…"
+exec "$PY" -m pixiv_bridge "$@"

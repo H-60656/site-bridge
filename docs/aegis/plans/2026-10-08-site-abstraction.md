@@ -217,7 +217,7 @@ if __name__ == "__main__":
 
 实测记录（2026-10-08，Windows / Python 3.13.15 / cwd = 项目根）：
 
-- **全量测试**：`.venv\Scripts\python.exe -m unittest discover -s tests` → `Ran 457 tests in 11.241s` / `OK`（`test_bridge` 314 + `test_iwara` 98 + `test_packaging` 45）；`discover -t . -s tests` 同样 457 项 OK。
+- **全量测试**：`.venv\Scripts\python.exe -m unittest discover -s tests` → `Ran 457 tests in 11.241s` / `OK`（`test_bridge` 314 + `test_iwara` 98 + `test_packaging` 45）；`discover -t . -s tests` 同样 457 项 OK。（**后续追加**：加完第 12 节的 `NavigationTestCase` 20 项后为 477 项 —— 框架与站点 334 + iwara 98 + 打包 45，复跑仍全绿。）
   - 偏差：本机 `.venv` 里**没有 pytest**，`python -m pytest` 不可用；`tests/` 原先没有 `__init__.py`，`unittest discover -s tests` 会报 `ImportError: Start directory is not importable`，已补 `tests/__init__.py`。
 - **边界检查**：`.venv\Scripts\python.exe scripts\check_boundary.py` → `框架外壳 6 条路由` / `pixiv 60 条路由（其中站点自己的 54 条）` / `iwara 16 条路由（其中站点自己的 10 条）` / `novel（扩展，宿于 pixiv）: 比宿主多 10 条路由` / `iwara_web（扩展，宿于 iwara）: 比宿主多 1 条路由` / **边界检查通过**。
 - **打包自检**：`.venv\Scripts\python.exe scripts\make_share_packages.py --check` → 六个包内容就绪：`pixiv-api` 59、`iwara-api` 43、`novel-extension` 17、`iwara_web-extension` 8、`pixiv-novel` 72、`iwara-iwara_web` 47 个文件 → `分享包处理完成`。
@@ -225,15 +225,15 @@ if __name__ == "__main__":
 - **入口烟测**（全部 `--check`）：
   - `.venv\Scripts\python.exe pixiv\run.py --check` → 表里 `python/deps/files/port/ech` 五项 OK（ECH：`app-api.pixiv.net 返回 HTTP 400，OpenSSL：项目自带`）→ `登录成功: huangee (user_mcys7857)` → exit 0。
   - `.venv\Scripts\python.exe iwara\run.py --check` → 前三项 + `iwara 依赖 OK curl_cffi 0.16.3` / `iwara 网络 OK api.iwara.tv 可达（共 2 个视频）` / `iwara 登录 OK token 有效：huanghe19512` → exit 0；`IWARA_REFRESH_TOKEN=definitely-not-a-real-token` 时该行变 `WARN token 不可用：刷新 token 失败（403）` 且 exit 1。
-  - `.venv\Scripts\python.exe -m pixiv_bridge` → `用法: python -m pixiv_bridge <站点> [入口参数...]` / `可选站点: iwara, pixiv` → exit 2；`python -m pixiv_bridge iwara --check` 与 `iwara\run.py --check` 输出一致（同一 `SITE`）。
+  - `.venv\Scripts\python.exe -m pixiv_bridge` → `用法: python -m pixiv_bridge <站点> [入口参数...]` / `可选站点: iwara, pixiv` → exit 2；`python -m pixiv_bridge iwara --check` 与 `iwara\run.py --check` 输出一致（同一 `SITE`）。**（已被第 12 节取代**：无参现在是项目导航 —— 有终端就列菜单、没有终端就打一行提示并直接启动默认接口项目，不再打印用法后 exit 2；`--list` / `--help` 只看导航。**）**
   - 站点隔离：`Get-ChildItem -Recurse -Filter run.py -Depth 2` 只列出 `iwara\run.py`、`pixiv\run.py`（根 `run.py`、`novel\run.py`、`iwara_web\run.py` 都不存在）。
 - **旧引用残留检查**：`pixiv_bridge.(api|oauth|image_proxy|ech_client|sni_client|hoster)` / `from pixiv_bridge.routes.(auth|illust|search|feed|user|pixiv_novel|misc)` / `pixiv_bridge.server import create_app` 在 `*.py,*.md,*.txt,*.bat,*.sh,scripts/,pixiv/,iwara/,novel/,iwara_web/,pixiv_bridge/,tests/` 全库扫描 **0 命中**；`scripts/*.py` 里残留的 `"run.py"` 都是站点目录内的（`sites.py:41` 的 `files=("run.py",)`、`sites.py:173` 注释「根目录不再有入口」、`make_share_packages.py:410` 的 `target/name/"run.py"`、`check_boundary.py:107` 的 `rel == "run.py"`）。
 - **分享包抽检**（解压到临时目录，**cwd 设为包根**再跑，否则会读到工作区的 `.env`）：
   - `iwara-api.zip` → 包内 `iwara\run.py --check`：`[环境检查]` 七项全 OK、无扩展挂载（包内没有 `.env`）、`iwara 登录 OK 匿名模式…` → exit 0；包内不含 `pixiv/`。
   - `pixiv-api.zip` → 包内 `pixiv\run.py --check`：五项 + `network OK 可达 3/3: app-api.pixiv.net, oauth.secure.pixiv.net, i.pximg.net`，随后是新装的提示（`缺少 refresh_token…` + 让跑 `python pixiv/get_token.py`）→ exit 1（预期：尚未登录）；包内没有根 `run.py`，`pixiv_bridge\api.py` 不存在。
 - **顺带修掉的一个重复**：`iwara --check` 原先会打印两次 `iwara 登录 OK …`（`Site.checks` 一次、`Site.login_check` 一次）并真的刷两次 token；现在 `iwara/envcheck.py` 用进程内 `_AUTH_MEMO`（元素 `(token, CheckResult)`）缓存，`extra_checks()` 每次开头清空缓存、`login_check()` 只复用不重跑也不再重复打印。`tests.test_iwara` 98 项在此改动后复跑仍 OK。
-- **顺带修掉的一个打包缺陷（Dockerfile）**：旧 Dockerfile 无条件 `COPY pixiv pixiv` / `COPY novel novel` / `COPY iwara/requirements.txt …`，而 `iwara-api.zip` 里根本没有 `pixiv/`、`novel/`，`pixiv-api.zip` 里没有 `iwara/` —— 两份分享包里的 Dockerfile 都构建不起来。现在改成「`COPY requirements.txt .` → 装框架依赖 → `COPY . .`（框架 + 镜像里**实际存在**的站点与扩展）→ 有 `iwara/requirements.txt` 才装 `curl_cffi`」，`CMD` 改成 `["sh", "start.sh"]`（与一键脚本同一套站点选择逻辑：有 `pixiv/` 跑 pixiv，否则 iwara；`-e BRIDGE_SITE=iwara` 可显式指定）。实测：四个 API/组合包里的 Dockerfile 末行都是 `CMD ["sh", "start.sh"]`，扩展包（`novel-extension` / `iwara_web-extension`）**不含** Dockerfile，只带 `README.md` + 扩展目录 + `手册/`。**未做**：本机 Docker Desktop 守护进程没运行（`docker --version` → 29.7.2，但 `docker images` 报 `failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`），所以没有真跑 `docker build` 验证。
-- README 的 Docker 段同步改为「镜像入口是 `CMD ["sh", "start.sh"]`，由它挑站点」，并把 ECH 那段「再 COPY 进镜像」改成「放进 `openssl-libs/linux-x86_64/`，`COPY . .` 会一起带进去」。
+- **顺带修掉的一个打包缺陷（Dockerfile）**：旧 Dockerfile 无条件 `COPY pixiv pixiv` / `COPY novel novel` / `COPY iwara/requirements.txt …`，而 `iwara-api.zip` 里根本没有 `pixiv/`、`novel/`，`pixiv-api.zip` 里没有 `iwara/` —— 两份分享包里的 Dockerfile 都构建不起来。现在改成「`COPY requirements.txt .` → 装框架依赖 → `COPY . .`（框架 + 镜像里**实际存在**的站点与扩展）→ 有 `iwara/requirements.txt` 才装 `curl_cffi`」，`CMD` 改成 `["sh", "start.sh"]`（启动脚本现在只是转发给框架的项目导航：容器里没有可交互终端，所以它不声不响直接启动默认接口项目 —— 无 `pixiv/` 的包里默认就是 iwara，`-e BRIDGE_SITE=iwara` 可显式指定；见第 12 节）。实测：四个 API/组合包里的 Dockerfile 末行都是 `CMD ["sh", "start.sh"]`，扩展包（`novel-extension` / `iwara_web-extension`）**不含** Dockerfile，只带 `README.md` + 扩展目录 + `手册/`。**未做**：本机 Docker Desktop 守护进程没运行（`docker --version` → 29.7.2，但 `docker images` 报 `failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`），所以没有真跑 `docker build` 验证。
+- README 的 Docker 段同步改为「镜像入口是 `CMD ["sh", "start.sh"]`，它转发给框架的项目导航；容器里没有可交互终端，所以直接启动默认接口项目」，并把 ECH 那段「再 COPY 进镜像」改成「放进 `openssl-libs/linux-x86_64/`，`COPY . .` 会一起带进去」。
 
 ## 9. Risks
 
@@ -277,3 +277,31 @@ if __name__ == "__main__":
 ### 测试（待测试影响面审计补齐）
 
 已知锚点：`tests/test_bridge.py:27-65`（import 块）、`:3258`/`:3266`（jsonl/userdata import）、`:2714` `ProjectFilesTestCase`、`:4675` `ExtensionLayoutTestCase`、`:4727` `NavigationPageTestCase`、`:4915` `CliCheckTestCase`、`:1846` `EchEnvCheckTestCase`、`:2017` `RefreshHintTestCase`、`:3955` `SettingsDataDirTestCase`；`tests/test_iwara.py:27-28`（import 块）、`:1166`/`:1246`/`:1376` 三个入口/自检用例、`:1380` 读 `iwara/run.py`；`tests/test_packaging.py` 全量期望。
+
+---
+
+## 12. 后续追加：根目录启动＝项目导航（用户 m01107）
+
+需求原文（m01107）："提交git，根目录启动是整个项目的导航"。做法由用户选定（m01121）：**启动器 / 菜单** —— 根目录启动时列出全部接口项目（+扩展），选一个再启动。被否掉的两种：门户服务（一个进程挂全部站点 + `/` 导航页）、只打印导航说明后退出。
+
+### 12.1 设计（四条，都是取舍）
+
+1. **挑选逻辑只写一份**，放在 `pixiv_bridge/__main__.py`：`start.bat` / `start.sh` 退化成转发器（`exec "$PY" -m pixiv_bridge "$@"` / `%PY% -m pixiv_bridge %*`）。理由：在 sh/bat 里各抄一套「发现＋排序＋询问」必然与 Python 侧漂移，而且 shell 读不到 `nav_order`。
+2. **框架仍然不认识任何站点**：导航要的元数据全部用 `ast` 从站点/扩展**自己的文件**里读**字面量**（`<站点>/app.py` 的 `SITE = Site(...)` 取 `title` / `nav_order`；`<扩展>/extension.py` 的 `EXTENSION_NAV` 取标题与简介，读不到就用模块 docstring 第一段），**不 import、不执行站点代码**；选完才 `runpy.run_path(<站点>/run.py, run_name="__main__")`。站点顺序因此由站点自己声明：`Site` 契约新增 `nav_order: int = 100`（`pixiv/app.py` 写 `nav_order=1`、`iwara/app.py` 写 `nav_order=2`），框架里没有一个站点名。
+3. **发现规则**：有 `run.py` 的目录＝接口项目；只有 `extension.py`（没有 `run.py`）的目录＝扩展。两者都按 `(nav_order, 目录名)` / 目录名排序。
+4. **没有可交互终端时不挂住、也不退出**：`sys.stdin.isatty()` 为假时打一行 `[i] 没有可交互的终端：启动默认接口项目 <第一个>（--list 看全部，BRIDGE_SITE 可指定）` 然后直接启动第一项；只有一个接口项目时直接启动、连问都不问。理由：`Dockerfile` 的 `CMD ["sh", "start.sh"]` 没有 TTY，报错退出会让容器起不来。老行为（无参打印用法后 exit 2）由这条取代。
+5. `BRIDGE_SITE` 最优先：先环境变量，再读项目根 `.env` 的同名行（复用框架自己的 `pixiv_bridge/config.py:_load_dotenv`，它用 `os.environ.setdefault`，所以环境变量赢）；写错就打 stderr 一行并以 exit 2 退出，而不是默默启动别的。
+
+接口：`python -m pixiv_bridge`（导航）、`python -m pixiv_bridge <接口项目> [入口参数...]`（直启）、`python -m pixiv_bridge --list`（只打印）、`-h` / `--help`（用法 + 导航）。
+
+改动文件：`pixiv_bridge/__main__.py`（重写）、`pixiv_bridge/site.py`（+`nav_order`）、`pixiv/app.py`、`iwara/app.py`、`iwara/__init__.py`（docstring 第一段就是导航简介）、`start.bat`、`start.sh`、`tests/test_bridge.py`（+`NavigationTestCase` 20 项，含 `_FakeTty`）、`README.md`、`INSTALL.md`、`DIRECT.md` §6、`scripts/make_share_packages.py`（`BASE_NOTES` 加一条「双击 `start.bat` 走的是项目导航，本包只有一个接口项目所以直接启动」）。
+
+### 12.2 实测（2026-10-08，Windows / Python 3.13.15 / cwd = 项目根）
+
+- **全量测试**：`.venv\Scripts\python.exe -m unittest discover -s tests` → `Ran 477 tests in 11.431s` / `OK`（第 8 节的 457 + 本节的 20）。**边界检查**：`scripts\check_boundary.py` → 外壳 6 / pixiv 60（自己 54）/ iwara 16（自己 10）/ novel +10 / iwara_web +1 → `边界检查通过`。**打包自检**：`scripts\make_share_packages.py --check` → 59 / 43 / 17 / 8 / 72 / 47 → `分享包处理完成`。
+- **`--list`**：exit 0，输出 `pixiv-bridge —— 项目导航（E:\github\pixiv-bridge）` → `1) pixiv     Pixiv Bridge —— Pixiv 接口站点：…`、`2) iwara     Iwara Bridge —— iwara.tv 接口站点：…` → 扩展一段 `iwara_web iwara 视频页 —— …`、`novel     小说阅读器 —— …` → 用法 → `提示: BRIDGE_SITE=pixiv 可让 start.bat / start.sh 跳过询问、直接启动它`。
+- **选择逻辑 10 条**（`choose_site` 注入 `ask` / 非 TTY 流）：非 TTY → `[i] 没有可交互的终端：启动默认接口项目 pixiv（--list 看全部，BRIDGE_SITE 可指定）` 并返回第一项；答 `2` → iwara、答 `iwara` → iwara、答空 → pixiv、答 `1` → pixiv；答 `xxx` / `9` → `没听懂「…」：输入编号 1-2，或接口项目名（pixiv, iwara）` 并重问（连错两次后答对仍能起）；`BRIDGE_SITE=iwara` → iwara，`BRIDGE_SITE=nope` → stderr `BRIDGE_SITE=nope 不是本目录里的接口项目（可选：pixiv, iwara）` + 返回 None；`main(["nosuch"])` → exit 2 + stderr `没有这个接口项目: nosuch（可选：pixiv, iwara）`；单站点列表直接返回、不询问；`--help` 先用法后导航、`--list` 只打印。
+- **脚本**：`start.bat` 3781 字符、仍**纯 ASCII**（无 `[^\x00-\x7F]` 命中）、含 `python -m pixiv_bridge`、不再有 `set "SITE=`；`start.sh` 末尾 `exec "$PY" -m pixiv_bridge "$@"`（`bash -n start.sh` 在本机沙箱被拒 `E_ACCESSDENIED`，改人工逐行核对 + 测试断言两个脚本都含 `-m pixiv_bridge`）。踩过的坑：PowerShell 里 `Get-Content -Encoding Byte` 在 PS7 报 `'Byte' is not a supported encoding name`，会让 ASCII 检查假通过；要用 `Get-Content -Raw` + `-match '[^\x00-\x7F]'`。
+- **分享包抽检**（解压到临时目录、**cwd 设为包根**，包内顶层是 `<包名>/`）：`iwara-api` 里 `python -m pixiv_bridge --check` → 无参非 TTY 直接选 iwara（唯一接口项目），七项全 OK（`iwara 网络 OK api.iwara.tv 可达（共 2 个视频）`、`iwara 登录 OK 匿名模式…`）→ exit 0；`pixiv-api` 里 `--list` → 只有 `1) pixiv`、扩展那行是 `（没有找到：扩展目录里需要有 extension.py）`、提示 `BRIDGE_SITE=pixiv` → exit 0；包内 `start.bat` 纯 ASCII 且含 `python -m pixiv_bridge`，包内没有根 `run.py`。
+- **`dist/` 重建**：`.venv\Scripts\python.exe scripts\make_share_packages.py`（无参）→ `pixiv-api` 59 文件 15.99 MB（压缩 5.82 MB）、`iwara-api` 43 / 0.32 MB（0.14）、`novel-extension` 17 / 0.32 MB、`iwara_web-extension` 8 / 0.17 MB、`pixiv-novel` 72 / 16.16 MB（5.88）、`iwara-iwara_web` 47 / 0.35 MB；`dist/` 下无旧 key 名 zip、无 `.stage/` 残留。
+- **仍未验证**：Docker 只做静态核对（本机守护进程没运行，`docker build` 未跑），与第 8 节同一限制。

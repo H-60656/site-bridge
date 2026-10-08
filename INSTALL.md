@@ -6,7 +6,7 @@
 - 安卓 / Termux（以及其它 Linux）走 [第 2 节](#2-安卓--termux以及-其它-linux)
 - 只想给别的程序调用接口：装好、登录好之后，接口地址是 `http://127.0.0.1:8765/api/...`
 
-> **入口只有两个，别搞混**：一键脚本（`start.bat` / `start.sh`）和 `python pixiv/run.py` 跑的是**同一个接口项目**（Pixiv），浏览器打开 `http://127.0.0.1:8765/` 会看到**导航页**（不挂扩展时列出接口文档等自带入口）；要下面第 5 步那个小说阅读器页面，请在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel` 后**还是用原来那个启动方式**（阅读器没有自己的入口脚本了，见「附属项目（扩展）」），阅读器在 `/novel`。第二个入口 `python iwara\run.py` 是**与 `pixiv/` 同级的另一个接口项目**（iwara.tv）：它只提供 `/api/iwara/*`、不挂任何 Pixiv 路由（视频页面 `iwara_web` 是扩展、默认不挂，见第 5 节）。一键脚本会自动挑一个：目录里有 `pixiv/` 就起 Pixiv，否则起 iwara（也可以用环境变量 `BRIDGE_SITE=iwara` 指定）。
+> **入口只有两个，别搞混**：一键脚本（`start.bat` / `start.sh`）和 `python pixiv/run.py` 跑的是**同一个接口项目**（Pixiv），浏览器打开 `http://127.0.0.1:8765/` 会看到**导航页**（不挂扩展时列出接口文档等自带入口）；要下面第 5 步那个小说阅读器页面，请在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel` 后**还是用原来那个启动方式**（阅读器没有自己的入口脚本了，见「附属项目（扩展）」），阅读器在 `/novel`。第二个入口 `python iwara\run.py` 是**与 `pixiv/` 同级的另一个接口项目**（iwara.tv）：它只提供 `/api/iwara/*`、不挂任何 Pixiv 路由（视频页面 `iwara_web` 是扩展、默认不挂，见第 5 节）。**一键脚本第一次会先列出项目导航**（接口项目 + 扩展）让你挑：直接回车＝默认的 Pixiv，输入 `2` 或 `iwara` 就起 iwara；设了环境变量 `BRIDGE_SITE=iwara` 就跳过询问直接起 iwara。
 
 ---
 
@@ -48,7 +48,7 @@
 
 **第 3 步：启动**
 
-双击目录里的 **`start.bat`**（就是这个黑色窗口，别关它）——这是**Pixiv 接口**那一版（不挂阅读器）。
+双击目录里的 **`start.bat`**（就是这个黑色窗口，别关它）——这会打开**项目导航**（列出接口项目与扩展），**直接回车**起的就是 Pixiv 接口那一版（不挂阅读器）；想跑 iwara 就输入 `2` 或 `iwara`。
 
 > 想直接看小说阅读器页面（本文第 5 步要开的那个网页），**不需要换启动方式**，只要在 `.env` 里加一行再照常用 `start.bat` 启动：
 >
@@ -71,7 +71,7 @@
   [server] http://127.0.0.1:8765
   ```
 
-> `start.bat` 里的提示文字是英文的：Windows 批处理里写中文在各种系统编码下都会乱码甚至报错，所以英文提示 + 后面的中文说明（由 Python 输出，不会乱码）。
+> `start.bat` 自己的提示文字是英文的：Windows 批处理里写中文在各种系统编码下都会乱码甚至报错，所以英文提示 + 后面的中文说明（**项目导航、环境检查这些都由 Python 输出，中文正常**）。
 > 如果 Windows 防火墙弹窗询问，选「允许访问」即可（只监听本机时选「取消」也不影响使用）。
 
 **第 4 步：登录一次**
@@ -122,7 +122,7 @@ cd pixiv-bridge
 sh start.sh
 ```
 
-> 这条命令跑的是默认（只跑 Pixiv 接口、不挂扩展）那一版（Windows 的 `start.bat` 同此），要看**小说阅读器页面**（第 5 步要开的那个网页）**不用换命令**，在 `.env` 里加一行再照常启动即可：
+> 这条命令先打开**项目导航**（列出接口项目与扩展）：直接回车跑的是默认那一版（只跑 Pixiv 接口、不挂扩展；Windows 的 `start.bat` 同此），输入 `2` 或 `iwara` 就换成 iwara。要看**小说阅读器页面**（第 5 步要开的那个网页）**不用换命令**，在 `.env` 里加一行再照常启动即可：
 >
 > ```sh
 > nano .env            # 没有就先跑一次 sh start.sh 让它生成
@@ -252,10 +252,10 @@ PIXIV_PROXY=http://127.0.0.1:7890
 
 | 平台 | 启动 |
 | --- | --- |
-| Windows | 只需 Pixiv 接口：`start.bat`（目录里有 `pixiv/` 就自动起它；只有 iwara 包时会自动起 iwara，也可用 `BRIDGE_SITE=iwara` 指定）；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `start.bat`；要用 iwara：`python iwara\run.py`（要 iwara 视频页面再加 `iwara_web`） |
-| Termux / Linux | 只需接口：`cd pixiv-bridge && sh start.sh`；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `sh start.sh`；要用 iwara 视频：`python3 iwara/run.py`（要 iwara 视频页面再加 `iwara_web`） |
+| Windows | 只需 Pixiv 接口：`start.bat` 然后回车（导航里的默认项就是它）；只有 iwara 包时导航里只剩 iwara、回车即起它，也可用 `BRIDGE_SITE=iwara` 跳过询问；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `start.bat`；要用 iwara：`start.bat iwara` 或 `python iwara\run.py`（要 iwara 视频页面再加 `iwara_web`） |
+| Termux / Linux | 只需接口：`cd pixiv-bridge && sh start.sh` 然后回车；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `sh start.sh`；要用 iwara 视频：`sh start.sh iwara` 或 `python3 iwara/run.py`（要 iwara 视频页面再加 `iwara_web`） |
 
-> 差别只在多挂了什么：默认（`pixiv/run.py`，含 `start.bat` / `start.sh`）只跑 Pixiv 接口、不挂扩展，浏览器打开 `/` 是**导航页**（列出接口文档、健康检查等自带入口）；在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 就在同一个入口上多挂了小说阅读器页面（`http://127.0.0.1:8765/novel`，导航页上也会多一段链接）与阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara/run.py` 提供的是 `/api/iwara/*`（视频浏览、解析直链、代转播放），它的 `/` 也是导航页、额外多一段 iwara 自己的入口。命令行参数（`--host` / `--port` / `--reload` / `--check`）都一样。
+> 差别只在多挂了什么：一键脚本先给一个**项目导航**（直接回车＝默认的 `pixiv/run.py`）——默认只跑 Pixiv 接口、不挂扩展，浏览器打开 `/` 是**导航页**（列出接口文档、健康检查等自带入口）；在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 就在同一个入口上多挂了小说阅读器页面（`http://127.0.0.1:8765/novel`，导航页上也会多一段链接）与阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara/run.py` 提供的是 `/api/iwara/*`（视频浏览、解析直链、代转播放），它的 `/` 也是导航页、额外多一段 iwara 自己的入口。命令行参数（`--host` / `--port` / `--reload` / `--check`）都一样，`python -m pixiv_bridge --list` 可以只看导航不启动。
 
 > **阅读器为什么没有自己的启动命令？** 它现在按「扩展」的方式挂到接口项目上：配置里写目录名（`PIXIV_BRIDGE_EXTENSIONS=novel`），程序自己去找 `novel/extension.py`。这样两个接口项目各留一个入口，阅读器不再需要单独的脚本。写错目录名不会静默降级——启动前会打印一条错误并退出。
 

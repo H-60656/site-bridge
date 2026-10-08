@@ -140,12 +140,13 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 
 | 启动方式 | 提供什么 |
 | --- | --- |
+| `python -m pixiv_bridge`（`start.bat` / `start.sh` 走的也是它） | **项目导航**：列出下面的接口项目与扩展，选一个再启动（回车＝默认的 `pixiv`）。没有终端可问时（Docker / 计划任务 / 管道）直接用默认项启动，`--list` 只看不启动，`BRIDGE_SITE` 指定就直接跳过询问 |
 | `pixiv/run.py` | Pixiv 接口项目（`pixiv/`）：认证、插画、搜索、动态、用户、`/api/novel/*`、图片代理，以及 `/` 上的**导航页**（`/api/health` 由框架提供） |
 | `pixiv/run.py` + `PIXIV_BRIDGE_EXTENSIONS=novel` | 上面那些，再挂上小说阅读扩展（`novel`）：阅读器页面 `/novel` 与 `/api/history`、`/api/downloads`、`/api/bookmarks`、`/api/config`、`/api/library`（导航页上也会多出一段指向阅读器） |
 | `iwara/run.py` | iwara.tv 接口项目（`iwara/`）：**只有**那十个 `/api/iwara/*`（浏览 / 搜索 / 详情 / 相关 / 直链解析 / 代转播放 / 图片 / 缩略图 / 登录态 / 授权），外加 `/` 上的**导航页**；它不挂任何 Pixiv 路由 |
 | `iwara/run.py` + `PIXIV_BRIDGE_EXTENSIONS=iwara_web` | 上面那些，再挂上 iwara 视频页面扩展（`iwara_web`）：`/iwara` 上的播放页（浏览 / 搜索 / 播放 / 相关视频） |
 
-两个接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3 项 iwara 专属自检（见「环境检查说明」）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
+两个接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3 项 iwara 专属自检（见「环境检查说明」）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
 
 首次运行输出示例：
 
@@ -241,7 +242,7 @@ PIXIV_REFRESH_TOKEN=你的refresh_token
 .venv/bin/python iwara/run.py
 ```
 
-> Windows 的 `start.bat` / Termux 的 `start.sh` 跑的都是第一行那个入口；默认不挂任何扩展。
+> Windows 的 `start.bat` / Termux 的 `start.sh` 会打开**项目导航**：直接回车就是第一行那个入口（Pixiv），也可以输入编号（如 `2`）或名字（`iwara`）启动别的；`BRIDGE_SITE=pixiv` / `iwara` 可跳过询问。默认不挂任何扩展。
 
 验证：
 
@@ -302,7 +303,7 @@ pixiv-bridge/
 │   ├── web.py          页面路由（`/iwara`），靠绝对路径调 /api/iwara/*
 │   └── index.html      内置 Web 页面：视频浏览 / 搜索 / 播放（详情页 + 相关视频 + 清晰度切换）
 ├── pixiv_bridge/                       框架（启动 / 配置 / 环境自检 / 扩展机制 / 导航页；不含任何站点知识）
-│   ├── __main__.py     模块入口：派发到某个站点的 run.py（`python -m pixiv_bridge pixiv`）
+│   ├── __main__.py     项目导航：列出接口项目与扩展、选一个再启动（`python -m pixiv_bridge` / `--list`）
 │   ├── site.py         Site 契约（站点交给框架的东西：入口工厂、标题、配置类、自检钩子）
 │   ├── cli.py          命令行入口（两个站点共用：--host / --port / --reload / --check / --env；在这里按配置挂扩展）
 │   ├── server.py       FastAPI 应用组装（create_bridge_app：lifespan + 异常处理 + 健康检查 + 导航页 + 站点/扩展路由）
@@ -324,12 +325,12 @@ pixiv-bridge/
 │   ├── iwara_tokens.json               iwara 登录态（只有跑过 iwara/get_token.py 才有）
 │   ├── settings.json                   页面配置（本地书架目录、合并/跳过开关、扫描层数）
 │   └── history.jsonl / downloads.jsonl / bookmarks.jsonl   阅读历史 / 下载历史 / 收藏台账（各一行一条 JSON）
-├── start.bat / start.sh                一键启动脚本（自动选接口项目：有 pixiv/ 就起 pixiv，否则起 iwara；可用 BRIDGE_SITE 指定）
+├── start.bat / start.sh                一键启动脚本（走框架的项目导航：有终端就列菜单问一句，没有终端就用默认站点；BRIDGE_SITE 指定就直接启动它）
 ├── requirements.txt                    框架依赖清单（Termux 自动改用 requirements-termux.txt）
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
-├── tests/                              单元测试（457 项：框架与站点 314 + iwara 98 + 打包 45）
+├── tests/                              单元测试（477 项：框架与站点 334 + iwara 98 + 打包 45）
 ├── openssl-libs/                       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -612,7 +613,7 @@ main(site=SITE)
 
 ### 台账与书架（**仅启用 `novel` 扩展后提供**）
 
-下面这些不是接口的一部分，而由 `novel/` 扩展挂载；不启用扩展时（`python pixiv/run.py` / `start.bat` / `start.sh` 的默认状态）它们都返回 **404**（阅读器页面在 `/novel`，不在 `/`——`/` 是导航页），要看下面的说明请先在配置里写 `PIXIV_BRIDGE_EXTENSIONS=novel`：
+下面这些不是接口的一部分，而由 `novel/` 扩展挂载；不启用扩展时（`python pixiv/run.py` 或 `start.bat` / `start.sh` 导航里的默认项）它们都返回 **404**（阅读器页面在 `/novel`，不在 `/`——`/` 是导航页），要看下面的说明请先在配置里写 `PIXIV_BRIDGE_EXTENSIONS=novel`：
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -753,7 +754,7 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 457 项应全绿（框架与站点 314 + iwara 98 + 打包 45）
+python -m unittest discover -s tests       # 477 项应全绿（框架与站点 334 + iwara 98 + 打包 45）
 python scripts/check_boundary.py           # 拆分边界自检
 python scripts/make_share_packages.py --check   # 分享包内容自检（不写 zip）
 ```
@@ -936,7 +937,7 @@ docker run -d -p 8765:8765 \
   pixiv-bridge
 ```
 
-> 镜像里的入口是 `CMD ["sh", "start.sh"]`，由它挑站点：目录里有 `pixiv/` 就跑 Pixiv 接口项目，否则跑 `iwara/`（`docker run -e BRIDGE_SITE=iwara ...` 可显式指定）。所以镜像里默认是**只跑接口、不挂扩展**。想在容器里用阅读器，`docker run` 时加一个环境变量 `-e PIXIV_BRIDGE_EXTENSIONS=novel`（扩展目录跟着 `COPY . .` 一起进镜像，不用改镜像）；阅读器在 `/novel`。iwara 的视频页面同理，配 `-e PIXIV_BRIDGE_EXTENSIONS=iwara_web -e BRIDGE_SITE=iwara`。
+> 镜像里的入口是 `CMD ["sh", "start.sh"]`，也就是框架的项目导航：容器里**没有可交互的终端**，所以它会不声不响地直接启动默认的那个接口项目（有 `pixiv/` 就是 Pixiv，否则 iwara）——不会挂在菜单上等输入。要指定跑哪个就 `docker run -e BRIDGE_SITE=iwara ...`。所以镜像里默认是**只跑接口、不挂扩展**。想在容器里用阅读器，`docker run` 时加一个环境变量 `-e PIXIV_BRIDGE_EXTENSIONS=novel`（扩展目录跟着 `COPY . .` 一起进镜像，不用改镜像）；阅读器在 `/novel`。iwara 的视频页面同理，配 `-e PIXIV_BRIDGE_EXTENSIONS=iwara_web -e BRIDGE_SITE=iwara`。
 
 ### 局域网访问
 

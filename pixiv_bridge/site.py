@@ -23,6 +23,8 @@ from .envcheck import CheckResult
 #   checks(settings)                     -> list[CheckResult]
 #   login_check(settings)                -> int（进程退出码，0 = 通过）
 #   network_hint(results, settings)      -> None
+#
+# 另外 ``nav_order`` 只影响导航里的排序（见 ``pixiv_bridge.__main__``），与运行无关。
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,9 @@ class Site:
     #: 组装应用的工厂：create_app(settings, extensions=())
     create_app: Callable[..., Any]
     version: str = "1.0.0"
+    #: ``python -m pixiv_bridge`` 导航里的排序（小的在前，也是默认启动的那个）；
+    #: 不写就是 100，排在写了 ``nav_order`` 的站点后面、彼此按目录名排
+    nav_order: int = 100
     #: 站点自己的配置类（默认框架的 Settings；Pixiv 用 PixivSettings）
     settings_class: type = Settings
     #: 站点目录下必须随包拷齐的文件
