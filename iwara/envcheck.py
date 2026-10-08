@@ -1,13 +1,14 @@
 """iwara 站点的启动自检与登录校验。
 
 框架的通用检查查的是公共环境（Python / 依赖 / 项目文件 / 端口）。这一份补
-iwara 自己那三样，通过 ``Site.checks`` 挂进同一张 ``[环境检查]`` 表：
+iwara 自己那几样，通过 ``Site.checks`` 挂进同一张 ``[环境检查]`` 表：
 
     iwara 依赖   curl_cffi 在不在（编译包，框架 REQUIRED 不含它）
     iwara 网络   api.iwara.tv 通不通（本机 DNS 对 *.iwara.tv 有污染，走种子 IP 池）
+    iwara ECH    开了 IWARA_BRIDGE_ECH 才跑：加密 SNI 能不能握手
     iwara 登录   有 token 就验一次；没有就说明匿名模式够用
 
-三个自检项以及 ``login_check`` 都**不中止启动**：没装 curl_cffi 时启动本身会走
+四个自检项以及 ``login_check`` 都**不中止启动**：没装 curl_cffi 时启动本身会走
 ``deps.bootstrap`` 自动补，登录态失效也只是退回匿名（iwara 公开内容含 R18 本来就
 不需要登录）。``login_check`` 只在 ``--check`` 里用：没配 token 也算通过。
 """
@@ -22,12 +23,16 @@ from pixiv_bridge.envcheck import CheckResult
 # 与主项目那五项并列，前缀统一成 iwara，一眼能看出是哪来的。
 DEPS_NAME = "iwara 依赖"
 NET_NAME = "iwara 网络"
+ECH_NAME = "iwara ECH"
 AUTH_NAME = "iwara 登录"
 
 # 整个网络检查的上限：里面还含 DoH 汇总与边缘 IP 探测，别卡太久。
 NETWORK_TIMEOUT = 25.0
+# ECH 只判握手，不需要把整个列表请求跑完，给短一点。
+ECH_TIMEOUT = 15.0
 
 _HINT_DEPS = "启动时会自动安装；手动：pip install -r iwara/requirements.txt"
+_HINT_ECH = "关掉：.env 里 IWARA_BRIDGE_ECH=0；或配代理 PIXIV_PROXY=..."
 
 
 def deps_check() -> CheckResult:
@@ -80,6 +85,60 @@ async def _network_check() -> CheckResult:
     count = page.get("count") if isinstance(page, dict) else None
     detail = "api.iwara.tv 可达" + (f"（共 {count} 个视频）" if count is not None else "")
     return CheckResult(NET_NAME, True, detail)
+
+
+async def _ech_check(settings) -> CheckResult:
+    """开了 ECH 才跑：拿一次 ECH 配置，跟 www.iwara.tv 握手看 SNI 是否真加密。
+
+    判据用 ``/cdn-cgi/trace``：Cloudflare 会在里面回显它看到的 ``sni=``，
+    明文是 ``plaintext``，加密成功才是 ``encrypted``。这比「能拿到 JSON」更
+    直接 —— 后者在 ECH 没生效、只靠 TLS 冒充时也成立。
+    """
+    try:
+        from . import ech as ech_module
+        from .client import IwaraClient, IwaraError
+        from .config import as_iwara_settings, split_ips
+    except Exception as exc:  # noqa: BLE001 - curl_cffi 缺失时退化
+        return CheckResult(ECH_NAME, False, f"跳过（{exc.__class__.__name__}: {exc}）")
+
+    if not ech_module.available():
+        return CheckResult(
+            ECH_NAME,
+            False,
+            "当前 curl_cffi 的 libcurl 不支持 ECH（需要 CURLOPT_ECH）；" + _HINT_ECH,
+        )
+
+    options = as_iwara_settings(settings)
+    client = IwaraClient(
+        ech=True, ech_config=options.ech_config, ech_ips=split_ips(options.ech_ips)
+    )
+    try:
+        if not client.ech:
+            return CheckResult(ECH_NAME, False, "ECH 未启用；" + _HINT_ECH)
+        resp = await asyncio.wait_for(
+            client.request("GET", "/cdn-cgi/trace", host=client.site),
+            timeout=ECH_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        return CheckResult(ECH_NAME, False, f"ECH 握手超过 {ECH_TIMEOUT:.0f} 秒；" + _HINT_ECH)
+    except IwaraError as exc:
+        return CheckResult(ECH_NAME, False, f"ECH 不可用：{exc}；" + _HINT_ECH)
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            ECH_NAME, False, f"ECH 探测失败（{exc.__class__.__name__}: {exc}）；" + _HINT_ECH
+        )
+    finally:
+        await client.aclose()
+
+    body = getattr(resp, "text", "") or ""
+    encrypted = "sni=encrypted" in body
+    if encrypted:
+        return CheckResult(ECH_NAME, True, "ECH 可用（www.iwara.tv 回显 sni=encrypted）")
+    if getattr(resp, "status_code", 0) >= 400:
+        return CheckResult(
+            ECH_NAME, False, f"ECH 请求返回 HTTP {resp.status_code}；" + _HINT_ECH
+        )
+    return CheckResult(ECH_NAME, False, "ECH 未生效（SNI 仍是明文）；" + _HINT_ECH)
 
 
 # 进程内缓存上一次登录校验的结果，元素是 (token, CheckResult)。
@@ -147,7 +206,7 @@ async def _auth_check_once(token: str) -> CheckResult:
 
 
 def extra_checks(settings) -> list[CheckResult]:
-    """``Site.checks`` 要的钩子：iwara 自己的三项自检。
+    """``Site.checks`` 要的钩子：iwara 自己的自检（开了 ECH 是四项）。
 
     同步返回，内部自己起一次事件循环（``--check`` 路径本来就是同步的）。每次
     都清掉登录缓存，好让紧接着的 ``login_check``（只复用、不重跑）用上这次的
@@ -162,7 +221,11 @@ def extra_checks(settings) -> list[CheckResult]:
 
 
 async def _async_checks(settings) -> list[CheckResult]:
-    return list(await asyncio.gather(_network_check(), _auth_check(settings)))
+    checks = [_network_check()]
+    if getattr(settings, "ech", False):
+        checks.append(_ech_check(settings))
+    checks.append(_auth_check(settings))
+    return list(await asyncio.gather(*checks))
 
 
 def login_check(settings) -> int:

@@ -24,12 +24,14 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Iterable, Mapping
+from typing import Any, AsyncIterator, Iterable, Mapping, Sequence
 from urllib.parse import urlparse
 
 import httpx
 from curl_cffi import requests as curl_requests
 from curl_cffi.const import CurlOpt
+
+from . import ech as _ech
 
 API_HOST = "api.iwara.tv"
 SITE = "www.iwara.tv"
@@ -88,6 +90,12 @@ DEFAULT_IMPERSONATE = "chrome"
 # `is_cdn_host` 按后缀放行，不在这里穷举。
 IMAGE_HOSTS = ("files.iwara.tv", "filesq.iwara.tv", "i.iwara.tv")
 
+# ECH 只对**在 Cloudflare 后面**的主机生效：这些主机的证书是 Google Trust /
+# WE1（SAN iwara.tv,*.iwara.tv），外层 SNI 用 cloudflare-ech.com 能握手成功。
+# files / filesq / i 与各花名视频主机是 Let's Encrypt 的证书，不在 CF 后面，
+# 给它们开 ECH 会得到 60: SSL certificate problem: Hostname mismatch。
+ECH_HOSTS = (API_HOST, SITE, "iwara.tv")
+
 _CDN_SUFFIX = ".iwara.tv"
 
 _BROWSER_HEADERS = {
@@ -133,6 +141,17 @@ def is_cdn_host(host: str) -> bool:
     if not host:
         return False
     return host == "iwara.tv" or host.endswith(_CDN_SUFFIX)
+
+
+def is_ech_host(host: str) -> bool:
+    """这个主机能不能走 ECH（即它是不是在 Cloudflare 后面）。
+
+    只有 ``api`` / ``www`` / 裸域这三个：它们的证书由 Cloudflare 边缘签发，
+    用 ``cloudflare-ech.com`` 那份通用配置能握手成功。视频与图片的 CDN
+    主机（``files`` / ``filesq`` / ``i`` 与各花名子域）不在 Cloudflare
+    后面，给它们开 ECH 只会握手失败。
+    """
+    return host in ECH_HOSTS
 
 
 # 缩略图固定放在 files.iwara.tv（i.iwara.tv 是同一份存储，但会对
@@ -268,6 +287,9 @@ class IwaraClient:
         access_token: str | None = None,
         refresh_token: str | None = None,
         doh_endpoints: Iterable[str] = DOH_ENDPOINTS,
+        ech: bool = False,
+        ech_config: str = "",
+        ech_ips: Sequence[str] = (),
     ) -> None:
         self.site = site
         self.impersonate = impersonate
@@ -278,6 +300,11 @@ class IwaraClient:
         self.access_token = access_token
         self.refresh_token = refresh_token
         self._doh_endpoints = tuple(doh_endpoints)
+        # ECH：只对 Cloudflare 后面的主机开（见 is_ech_host），默认关。
+        # available() 在 session_for 里再判一次（参数名 ech 在这里遮蔽了模块）。
+        self.ech = bool(ech)
+        self.ech_config = ech_config
+        self.ech_ips = tuple(ech_ips)
         # refresh token 是坏的时候，别在每个请求上重复撞墙：失败一次就记下
         # 原因并停手，退回匿名；/api/iwara/auth 会把 auth_error 报给用户。
         self.auth_error: str = ""
@@ -331,6 +358,10 @@ class IwaraClient:
 
             for ip in SEED_HOSTS.get(host, ()):
                 add(ip)
+            # ECH 模式下额外给的那批 IP 排在种子之后、DoH 之前。
+            if is_ech_host(host):
+                for ip in self.ech_ips:
+                    add(ip)
             if host not in SEED_HOSTS:
                 # 未登记的主机（各视频的花名 CDN 子域）走整池。
                 for ip in SEED_IPS:
@@ -399,18 +430,31 @@ class IwaraClient:
         session = self._sessions.get(host)
         if session is None:
             ip = await self.pick_ip(host)
-            session = curl_requests.AsyncSession(
-                curl_options={
-                    # 只固定这一个 IP（CurlOpt.RESOLVE 不是候选列表！
-                    # 同一 host:port 传多条时 libcurl 只认最后一条），
-                    # SNI/Host 仍按真实域名走。
-                    CurlOpt.RESOLVE: [f"{host}:443:{ip}"],
-                    # 部分视频 CDN 主机不通，别每次都干等 21 秒。
-                    CurlOpt.CONNECTTIMEOUT: int(self.connect_timeout),
-                }
-            )
+            options: dict = {
+                # 只固定这一个 IP（CurlOpt.RESOLVE 不是候选列表！
+                # 同一 host:port 传多条时 libcurl 只认最后一条），
+                # SNI/Host 仍按真实域名走。
+                CurlOpt.RESOLVE: [f"{host}:443:{ip}"],
+                # 部分视频 CDN 主机不通，别每次都干等 21 秒。
+                CurlOpt.CONNECTTIMEOUT: int(self.connect_timeout),
+            }
+            value = self.ech_option(host)
+            if value:
+                options[CurlOpt.ECH] = value
+            session = curl_requests.AsyncSession(curl_options=options)
             self._sessions[host] = session
         return session
+
+    def ech_option(self, host: str) -> str | None:
+        """这个 host 该不该带 ECH；带的话返回给 CURLOPT_ECH 的取值。
+
+        会话级 ``curl_options`` 每次请求都会重新下发（curl_cffi 的
+        ``_request_once`` 把它传给 ``set_curl_options``），所以只需在建会话时
+        设一次，四个 ``impersonate=`` 调用点都不用动。
+        """
+        if not self.ech or not _ech.available() or not is_ech_host(host):
+            return None
+        return _ech.ech_option(override=self.ech_config)
 
     def pinned_ip(self, host: str) -> str | None:
         """当前这个 host 固定用的 IP（仅用于日志/诊断）。"""

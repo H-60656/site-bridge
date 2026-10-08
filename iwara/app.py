@@ -25,6 +25,7 @@ from pixiv_bridge.site import Site
 
 from . import tokens
 from .client import IwaraClient
+from .config import IwaraSettings, as_iwara_settings, split_ips
 from .envcheck import extra_checks, login_check
 from .routes import videos
 
@@ -64,8 +65,15 @@ def iwara_state_factory(settings):
     refresh_token = tokens.resolve(
         data_dir, env_token=os.environ.get(tokens.ENV_VAR, "")
     )
+    client_settings = as_iwara_settings(settings)
     return {
-        "iwara_client": IwaraClient(refresh_token=refresh_token or None),
+        "iwara_client": IwaraClient(
+            refresh_token=refresh_token or None,
+            ech=client_settings.ech,
+            ech_config=client_settings.ech_config,
+            # ech_ips 是逗号/空白分隔的字符串，与 pixiv 那几个 *_ips 一致。
+            ech_ips=split_ips(client_settings.ech_ips),
+        ),
         # 框架的导航页会读这个属性，把 iwara 的接口列进去。
         "nav_sections": (IWARA_NAV,),
     }
@@ -114,7 +122,8 @@ SITE = Site(
     create_app=create_app,
     version=VERSION,
     nav_order=2,
-    # iwara 没有额外配置字段，用框架的 Settings 就够（data_dir 等路径都在里面）。
+    # iwara 只有 ECH 三个开关是自己的，其余（data_dir 等路径）都在框架 Settings 里。
+    settings_class=IwaraSettings,
     required_files=("run.py", "requirements.txt"),
     checks=extra_checks,
     login_check=login_check,

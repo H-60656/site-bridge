@@ -2,7 +2,12 @@
 #
 # 刻意不放进根目录的 requirements.txt：curl_cffi 是带编译产物的包，
 # 而它只是 iwara 站点绕过 Cloudflare 的手段；只跑 pixiv 接口的用户
-# 不该被要求装它（Termux 上尤其可能装不动）。
+# 不该被要求装它。
+#
+# Termux（安卓）上装不装得动，取决于 Python 版本：官方从 0.15.0 起才发
+# 安卓轮子（android_24_arm64_v8a，cp313-abi3），所以 Python 3.13 及以上
+# 装的是现成轮子；3.12 及以下没有对应轮子，会退回源码编译（要 Rust +
+# C 工具链），那才容易装不动。
 #
 # 为什么必须要它：iwara 的 API 在 Cloudflare 后面，普通 Python 的 TLS
 # 指纹会被判定为机器人（403 + cf-mitigated: challenge）。curl_cffi 用

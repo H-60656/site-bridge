@@ -11,6 +11,8 @@ iwara 依赖 ``curl_cffi``（Cloudflare 只认浏览器 TLS 指纹），而它�
 
 import asyncio
 import base64
+import contextlib
+import io
 import itertools
 import json
 import os
@@ -20,37 +22,51 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlparse
 
 import httpx
 from fastapi.testclient import TestClient
 
 from pixiv_bridge.config import Settings
+from pixiv_bridge.extensions import load_extension_specs
 from pixiv_bridge.server import create_bridge_app as _create_bridge_app
 
 # 与 test_bridge.py 同一约定：临时的东西放工作区 _tmp_tests/，别用系统 TEMP。
-TEST_TMP_ROOT = Path(__file__).resolve().parent.parent / "_tmp_tests"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+TEST_TMP_ROOT = PROJECT_ROOT / "_tmp_tests"
 _TEMP_COUNTER = itertools.count(1)
 
 try:
     from curl_cffi.const import CurlOpt
 
+    from iwara import ech as iwara_ech
     from iwara import tokens
-    from iwara.app import create_app as create_iwara_app
+    from iwara.app import SITE, create_app as create_iwara_app
+    from iwara.app import iwara_state_factory
     from iwara.client import (
+        ECH_HOSTS,
         SEED_HOSTS,
         SEED_IPS,
         THUMBNAIL_HOST,
         IwaraAuthError,
+        IwaraChallengeError,
         IwaraClient,
         IwaraError,
         Resolved,
         Source,
         decorate_video,
         is_cdn_host,
+        is_ech_host,
         jwt_payload,
         thumbnail_url,
         x_version,
     )
+    from iwara.config import (
+        IwaraSettings,
+        as_iwara_settings,
+        split_ips,
+    )
+    from iwara.envcheck import extra_checks
 
     HAVE_IWARA = True
     IWARA_IMPORT_ERROR = ""
@@ -62,6 +78,10 @@ except ImportError as exc:  # pragma: no cover - 只在没装 curl_cffi 时走�
 def _mock_handler(request: httpx.Request) -> httpx.Response:
     """pixiv 侧的最小桩：这些用例不关心 pixiv 接口。"""
     return httpx.Response(200, json={"ok": True})
+
+
+# 一个有意义的 ECH 配置：前两字节是长度，所以是「合法」的 ECHConfigList。
+GOOD_ECH_B64 = base64.b64encode(b"\x00\x06hello!").decode("ascii")
 
 
 def make_settings():
@@ -1205,7 +1225,7 @@ class IwaraEntryPointTestCase(unittest.TestCase):
                         collected.add(path)
             return collected
 
-        # 基准是框架外壳（`create_bridge_app`）：两个接口项目同级，
+        # 基准是框架外壳（`create_bridge_app`）：各接口项目同级，
         # iwara 的入口只往外壳上挂自己的那 10 条路由，不挂 Pixiv 的任何路由。
         shell = paths(_create_bridge_app(make_settings()))
         full = paths(create_iwara_app(make_settings()))
@@ -1243,7 +1263,7 @@ class IwaraEntryPointTestCase(unittest.TestCase):
         self.assertNotIn("curl_cffi", root_requirements.read_text(encoding="utf-8"))
 
     def test_shell_and_iwara_app_do_not_expose_pixiv_routes(self):
-        # 两个接口项目同级：框架外壳里没有任何站点路由；
+        # 各接口项目同级：框架外壳里没有任何站点路由；
         # iwara 入口只挂 `/api/iwara/*`，Pixiv 的路由一条都不在。
         pixiv_paths = ("/api/ranking", "/api/trending-tags", "/api/search/illust")
         shell = TestClient(_create_bridge_app(make_settings()))
@@ -1436,6 +1456,1342 @@ class IwaraEntryWiringTestCase(unittest.TestCase):
 
         self.assertIn("create_app", iwara.__all__)
         self.assertIs(iwara.tokens, sys.modules["iwara.tokens"])
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：%s" % IWARA_IMPORT_ERROR)
+class IwaraWebExtensionTestCase(unittest.TestCase):
+    """iwara_web 页面挂在 iwara 宿主上时能不能真的打开。
+
+    `IwaraRouteTestCase.test_video_page_is_not_part_of_the_api_project` 只钉住
+    「裸接口 app 上没有 /iwara」；这里补另一半：挂载扩展后页面确实是 HTML。
+    """
+
+    @staticmethod
+    def _paths(app) -> set[str]:
+        paths = set()
+        for route in app.routes:
+            inner = getattr(route, "original_router", None)
+            for sub in getattr(inner, "routes", None) or (route,):
+                paths.add(getattr(sub, "path", ""))
+        return paths
+
+    def _app(self, extensions=()):
+        return create_iwara_app(make_settings(), extensions=extensions)
+
+    def test_the_mounted_page_is_served_as_html(self):
+        app = self._app(load_extension_specs(["iwara_web"], PROJECT_ROOT))
+        with TestClient(app) as client:
+            page = client.get("/iwara")
+
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("text/html", page.headers["content-type"])
+        self.assertTrue(page.text.lstrip().lower().startswith("<!doctype html"))
+        self.assertIn("<title>iwara 视频</title>", page.text)
+        self.assertIn('"/api/iwara"', page.text)
+
+    def test_the_page_adds_exactly_one_route(self):
+        pure = self._paths(self._app())
+        full = self._paths(self._app(load_extension_specs(["iwara_web"], PROJECT_ROOT)))
+
+        self.assertEqual(full - pure, {"/iwara"})
+        self.assertNotIn("/novel", full)
+
+    def test_the_page_shows_up_in_the_navigation(self):
+        app = self._app(load_extension_specs(["iwara_web"], PROJECT_ROOT))
+        with TestClient(app) as client:
+            home = client.get("/")
+
+        self.assertIn("/iwara", home.text)
+        self.assertIn("iwara 视频（本入口独有）", home.text)
+
+    def test_the_api_keeps_working_with_the_page_mounted(self):
+        fake = _FakeIwaraClient()
+        app = self._app(load_extension_specs(["iwara_web"], PROJECT_ROOT))
+        with TestClient(app) as client:
+            client.app.state.iwara_client = fake
+            videos = client.get("/api/iwara/videos")
+
+        self.assertEqual(videos.status_code, 200)
+        self.assertEqual(videos.json()["count"], 1)
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：%s" % IWARA_IMPORT_ERROR)
+class IwaraClientCoverageTestCase(unittest.TestCase):
+    """补上 `get_json` / `login` / `probe_range`：三个出入边界都没钉住过。"""
+
+    def _client(self, **kwargs):
+        return IwaraClient(**kwargs)
+
+    def _patched(self, responses, **kwargs):
+        """把 `request` 换成按队列吐响应，返回 (client, seen)。"""
+        client = self._client(**kwargs)
+        queue = list(responses)
+        seen = []
+
+        async def fake_request(method, path, **kw):
+            seen.append({"method": method, "path": path, **kw})
+            return queue.pop(0)
+
+        client.request = fake_request  # type: ignore[assignment]
+        return client, seen
+
+    def test_get_json_returns_the_parsed_body(self):
+        client, seen = self._patched([_FakeResp(200, {"ok": True, "n": 1})])
+
+        self.assertEqual(asyncio.run(client.get_json("/anything")), {"ok": True, "n": 1})
+        self.assertEqual(seen[0]["method"], "GET")
+
+    def test_get_json_raises_with_the_status_and_a_body_snippet(self):
+        client, _ = self._patched([_FakeResp(418, "I am a teapot")])
+
+        with self.assertRaises(IwaraError) as caught:
+            asyncio.run(client.get_json("/teapot"))
+
+        self.assertEqual(caught.exception.status, 418)
+        self.assertIn("418", str(caught.exception))
+        self.assertIn("I am a teapot", str(caught.exception))
+
+    def test_login_returns_both_tokens_and_refreshes(self):
+        client = self._client()
+        calls = []
+
+        async def fake_request(method, path, **kw):
+            calls.append((method, path, kw.get("json_body")))
+            if path == "/user/login":
+                return _FakeResp(200, {"token": "refresh-from-login"})
+            return _FakeResp(200, {"accessToken": "access-fresh"})
+
+        async def fake_refresh():
+            client.access_token = "access-fresh"
+            return "access-fresh"
+
+        client.request = fake_request  # type: ignore[assignment]
+        client.refresh_access = fake_refresh  # type: ignore[assignment]
+
+        result = asyncio.run(client.login("me@example.com", "secret"))
+
+        self.assertEqual(
+            result, {"refresh_token": "refresh-from-login", "access_token": "access-fresh"}
+        )
+        self.assertEqual(calls[0][0], "POST")
+        self.assertEqual(calls[0][1], "/user/login")
+        self.assertEqual(calls[0][2], {"email": "me@example.com", "password": "secret"})
+        self.assertEqual(client.refresh_token, "refresh-from-login")
+
+    def test_login_reports_rate_limiting_with_429(self):
+        client, _ = self._patched([_FakeResp(429, {"message": "tooManyRequests"})])
+
+        with self.assertRaises(IwaraError) as caught:
+            asyncio.run(client.login("me@example.com", "secret"))
+
+        self.assertEqual(caught.exception.status, 429)
+        self.assertEqual(caught.exception.reason, "too_many_requests")
+        self.assertNotIsInstance(caught.exception, IwaraAuthError)
+
+    def test_login_rejects_a_bad_password(self):
+        client, _ = self._patched([_FakeResp(400, {"message": "errors.invalidLogin"})])
+
+        with self.assertRaises(IwaraAuthError) as caught:
+            asyncio.run(client.login("me@example.com", "wrong"))
+
+        self.assertIn("invalidLogin", str(caught.exception))
+
+    def test_login_rejects_a_response_without_a_token(self):
+        client, _ = self._patched([_FakeResp(200, {"user": {}})])
+
+        with self.assertRaises(IwaraAuthError) as caught:
+            asyncio.run(client.login("me@example.com", "secret"))
+
+        self.assertIn("登录未返回 token", str(caught.exception))
+
+    def _probe(self, body: bytes, headers=None, status=206):
+        """把重试层换成「直接跑一次」，返回 (probe, seen)。"""
+        client = self._client()
+        seen: dict = {}
+
+        class _Resp:
+            status_code = status
+            content = body
+
+        _Resp.headers = headers or {}
+
+        class _Session:
+            async def get(self, url, **kw):
+                seen["url"] = url
+                seen["headers"] = kw.get("headers")
+                return _Resp()
+
+        async def fake_call(host, call, *, retry_statuses=()):
+            seen["host"] = host
+            return await call(_Session())
+
+        client._call_with_ip_retry = fake_call  # type: ignore[assignment]
+        return client, seen
+
+    def test_probe_range_reports_the_headers_and_mp4_magic(self):
+        client, seen = self._probe(
+            MP4_HEAD, {"content-type": "video/mp4", "content-range": "bytes 0-1023/9999"}
+        )
+
+        probe = asyncio.run(client.probe_range(VIDEO_URL))
+
+        self.assertEqual(probe["status"], 206)
+        self.assertTrue(probe["is_mp4"])
+        self.assertEqual(probe["bytes"], len(MP4_HEAD))
+        self.assertEqual(probe["content_type"], "video/mp4")
+        self.assertEqual(probe["content_range"], "bytes 0-1023/9999")
+        self.assertEqual(seen["host"], "firefly.iwara.tv")
+        self.assertEqual(seen["headers"]["range"], "bytes=0-1023")
+
+    def test_probe_range_marks_a_non_mp4_body(self):
+        client, seen = self._probe(b"<html>nope</html>", {"content-type": "text/html"}, status=200)
+
+        probe = asyncio.run(client.probe_range("https://files.iwara.tv/x.mp4"))
+
+        self.assertFalse(probe["is_mp4"])
+        self.assertIsNone(probe["content_range"])
+        self.assertEqual(probe["bytes"], len(b"<html>nope</html>"))
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：%s" % IWARA_IMPORT_ERROR)
+class IwaraChallengeTestCase(unittest.TestCase):
+    """Cloudflare 质询识别：cf-mitigated 头 与 403 + text/html 两条路径。"""
+
+    def _raise(self, resp, **client_kwargs):
+        """只替换重试层（挑战识别在 request 里，位于重试层之上）。"""
+        client = IwaraClient(**client_kwargs)
+
+        class _Session:
+            async def request(self, method, url, **kw):
+                return resp
+
+        async def fake_call(host, call, *, retry_statuses=()):
+            # 真实实现在这里才 session_for(host)；替换后仍要塞个 session 进去。
+            return await call(_Session())
+
+        client._call_with_ip_retry = fake_call  # type: ignore[assignment]
+        return asyncio.run(client.request("GET", "/videos"))
+
+    def test_cf_mitigated_header_is_a_challenge(self):
+        resp = _FakeResp(200, {"results": []})
+        resp.headers["cf-mitigated"] = "challenge"
+
+        with self.assertRaises(IwaraChallengeError) as caught:
+            self._raise(resp)
+
+        self.assertEqual(caught.exception.reason, "cloudflare_challenge")
+        self.assertEqual(caught.exception.status, 502)
+        self.assertIsInstance(caught.exception, IwaraError)
+        self.assertIn("impersonate=", str(caught.exception))
+
+    def test_html_403_is_a_challenge(self):
+        resp = _FakeResp(403, "<html>challenge</html>")
+        resp.headers["content-type"] = "text/html; charset=utf-8"
+
+        with self.assertRaises(IwaraChallengeError) as caught:
+            self._raise(resp)
+
+        self.assertEqual(caught.exception.reason, "cloudflare_challenge")
+
+    def test_json_403_is_not_a_challenge(self):
+        resp = _FakeResp(403, {"message": "errors.forbidden"})
+        resp.headers["content-type"] = "application/json"
+
+        result = self._raise(resp)
+
+        self.assertEqual(result.status_code, 403)
+
+    def test_challenge_is_raised_before_the_token_replay(self):
+        """挑战必须先于「403 = token 过期」的强制重放被识别出来。"""
+        resp = _FakeResp(403, "<html>challenge</html>")
+        resp.headers["content-type"] = "text/html"
+
+        with self.assertRaises(IwaraChallengeError):
+            # 带 refresh token 时 403 本来会触发重放；挑战要抢在前面。
+            self._raise(resp, refresh_token="refresh-good")
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：%s" % IWARA_IMPORT_ERROR)
+class IwaraTokenPathTestCase(unittest.TestCase):
+    """tokens.default_path / _chmod_private：文件落点与权限。"""
+
+    def setUp(self):
+        self.tmp = make_temp_dir("iwara_token_path")
+        self.addCleanup(drop_temp_dir, self.tmp)
+
+    def test_default_path_uses_the_data_dir(self):
+        self.assertEqual(tokens.default_path(self.tmp), self.tmp / "iwara_tokens.json")
+
+    def test_default_path_falls_back_to_the_project_data_dir(self):
+        expected = Path(tokens.__file__).resolve().parent.parent / "data" / "iwara_tokens.json"
+
+        self.assertEqual(tokens.default_path(None), expected)
+
+    def test_saved_token_file_is_private(self):
+        if os.name != "posix":
+            self.skipTest("Windows 没有 0600 这回事（chmod 只动只读位），只在 POSIX 上断言权限位")
+
+        path = tokens.save_token("secret", self.tmp / "t.json")
+
+        mode = os.stat(path).st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+
+    def test_chmod_private_swallows_os_errors(self):
+        tokens._chmod_private(self.tmp / "missing.json")  # 不该抛
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：%s" % IWARA_IMPORT_ERROR)
+class IwaraResolveSaltTestCase(unittest.TestCase):
+    """resolve 的双盐回退：新盐 404 时老盐要顶上。"""
+
+    def _client(self, responses):
+        client = IwaraClient()
+        seen = []
+        queue = list(responses)
+
+        async def fake_video(video_id):
+            return dict(VIDEO)
+
+        async def fake_request(method, path, **kw):
+            seen.append(kw.get("headers", {}).get("x-version"))
+            return queue.pop(0)
+
+        client.request = fake_request  # type: ignore[assignment]
+        client.video = fake_video  # type: ignore[assignment]
+        return client, seen
+
+    def test_the_legacy_salt_is_tried_after_the_current_one(self):
+        from iwara.client import SALT_CURRENT, SALT_LEGACY
+
+        resp = _FakeResp(200, RAW_SOURCES)
+        client, seen = self._client([_FakeResp(404, "nope"), resp])
+
+        resolved = asyncio.run(client.resolve("b0pRCNfo8Igu3p"))
+
+        self.assertEqual(resolved.best().name, "Source")
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[0], x_version(VIDEO["fileUrl"], SALT_CURRENT))
+        self.assertEqual(seen[1], x_version(VIDEO["fileUrl"], SALT_LEGACY))
+        self.assertEqual(resolved.salt_used, SALT_LEGACY)
+
+    def test_every_failed_salt_is_reported(self):
+        client, _ = self._client([_FakeResp(404, "a"), _FakeResp(500, "b")])
+
+        with self.assertRaises(IwaraError) as caught:
+            asyncio.run(client.resolve("b0pRCNfo8Igu3p"))
+
+        self.assertEqual(caught.exception.status, 502)
+        self.assertIn("404", str(caught.exception))
+        self.assertIn("500", str(caught.exception))
+
+    def test_a_non_json_body_falls_through_to_the_next_salt(self):
+        """X-Version 不对时 CDN 回空体：这时要报「非 JSON」并换盐，而不是炸掉。"""
+
+        class _HtmlResp(_FakeResp):
+            content = b"<html>denied</html>"
+
+            def json(self):
+                raise ValueError("not json")
+
+        client, seen = self._client([_HtmlResp(200), _FakeResp(200, RAW_SOURCES)])
+
+        resolved = asyncio.run(client.resolve("b0pRCNfo8Igu3p"))
+
+        self.assertEqual(resolved.best().name, "Source")
+        self.assertEqual(len(seen), 2)
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：%s" % IWARA_IMPORT_ERROR)
+class IwaraFetchImageTestCase(unittest.TestCase):
+    """fetch_image 的跨主机回退。"""
+
+    def _client(self, outcomes):
+        client = IwaraClient()
+        tried = []
+
+        async def fake_once(url):
+            tried.append(urlparse(url).netloc)
+            result = outcomes.get(urlparse(url).netloc)
+            if result is None:
+                raise IwaraError("down", status=502)
+            return result
+
+        client._fetch_image_once = fake_once  # type: ignore[assignment]
+        return client, tried
+
+    def test_the_first_host_wins(self):
+        client, tried = self._client({"files.iwara.tv": (b"jpeg", "image/jpeg")})
+
+        body, ctype = asyncio.run(client.fetch_image("https://files.iwara.tv/image/a.jpg"))
+
+        self.assertEqual(body, b"jpeg")
+        self.assertEqual(tried, ["files.iwara.tv"])
+
+    def test_other_image_hosts_are_tried_in_order(self):
+        client, tried = self._client({"i.iwara.tv": (b"jpeg", "image/jpeg")})
+
+        body, ctype = asyncio.run(client.fetch_image("https://files.iwara.tv/image/a.jpg"))
+
+        self.assertEqual(tried, ["files.iwara.tv", "filesq.iwara.tv", "i.iwara.tv"])
+        self.assertEqual(ctype, "image/jpeg")
+
+    def test_every_host_failing_is_reported(self):
+        client, tried = self._client({})
+
+        with self.assertRaises(IwaraError) as caught:
+            asyncio.run(client.fetch_image("https://files.iwara.tv/image/a.jpg"))
+
+        self.assertIn("已尝试", str(caught.exception))
+        self.assertIn("i.iwara.tv", str(caught.exception))
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：%s" % IWARA_IMPORT_ERROR)
+class IwaraDohClientTestCase(unittest.TestCase):
+    """doh_client 懒建 + aclose 关掉它。"""
+
+    def test_the_client_is_built_lazily_and_closed(self):
+        client = IwaraClient()
+
+        self.assertIsNone(client._doh_client)
+
+        doh = client.doh_client
+        self.assertIsNotNone(doh)
+        self.assertIs(client.doh_client, doh)
+
+        asyncio.run(client.aclose())
+        self.assertIsNone(client._doh_client)
+
+    def test_aclose_swallows_a_broken_session(self):
+        class _Broken:
+            async def aclose(self):
+                raise RuntimeError("boom")
+
+        client = IwaraClient()
+        client._sessions["api.iwara.tv"] = _Broken()
+
+        asyncio.run(client.aclose())
+        self.assertEqual(client._sessions, {})
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：%s" % IWARA_IMPORT_ERROR)
+class IwaraRouteGapTestCase(unittest.TestCase):
+    """路由层没钉住的分支：上游 >=400、related 越界、image/thumbnail 的异常映射。"""
+
+    def setUp(self):
+        self.fake = _FakeIwaraClient()
+
+    def _client(self):
+        app = create_iwara_app(make_settings())
+        client = TestClient(app)
+        client.__enter__()
+        self.addCleanup(client.__exit__, None, None, None)
+        client.app.state.iwara_client = self.fake
+        return client
+
+    def test_stream_surfaces_an_upstream_failure(self):
+        """上游给了个 >=400 的状态码（不是异常）：要原样报出来，别装成 200。
+
+        `VIDEO_URL` 的 `firefly.iwara.tv` 在白名单内，所以能走到上游状态检查。
+        """
+
+        async def failing(url, headers=None):
+            async def body():  # pragma: no cover - 不会轮到它
+                yield b""
+
+            return 502, {"content-type": "text/plain"}, body()
+
+        self.fake.open_stream = failing  # type: ignore[assignment]
+
+        client = self._client()
+        resp = client.get("/api/iwara/stream", params={"url": VIDEO_URL})
+
+        self.assertEqual(resp.status_code, 502)
+        self.assertIn("上游视频源不可用", resp.json()["detail"])
+
+    def test_related_trims_locally_and_can_run_off_the_end(self):
+        """limit 在路由层本地裁剪，翻到末尾要给空页而不是 500。"""
+        client = self._client()
+        full = client.get("/api/iwara/related/b0pRCNfo8Igu3p").json()
+        trimmed = client.get("/api/iwara/related/b0pRCNfo8Igu3p", params={"limit": 1}).json()
+        beyond = client.get("/api/iwara/related/b0pRCNfo8Igu3p", params={"page": 50}).json()
+
+        self.assertEqual(len(full["results"]), 2)
+        self.assertEqual(len(trimmed["results"]), 1)
+        self.assertEqual(beyond["results"], [])
+        self.assertEqual(beyond["count"], full["count"])
+        # 上游只被调用了一次，page/limit 都没往上传。
+        self.assertEqual(self.fake.calls[0], ("related", "b0pRCNfo8Igu3p"))
+
+    def test_image_maps_a_client_error_to_that_status(self):
+        async def failing(url):
+            raise IwaraError("图源挂了", status=502)
+
+        self.fake.fetch_image = failing  # type: ignore[assignment]
+
+        client = self._client()
+        resp = client.get("/api/iwara/image", params={"url": "https://files.iwara.tv/a.jpg"})
+
+        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(resp.json()["detail"], "图源挂了")
+
+    def test_thumbnail_maps_a_client_error_to_that_status(self):
+        async def failing(url):
+            raise IwaraError("图源挂了", status=502)
+
+        self.fake.fetch_image = failing  # type: ignore[assignment]
+
+        client = self._client()
+        resp = client.get("/api/iwara/thumbnail/b0pRCNfo8Igu3p")
+
+        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(resp.json()["detail"], "图源挂了")
+
+    def test_auth_survives_a_failing_username_lookup(self):
+        """已认证但 /user 挂了：诊断照出，只是没有用户名。"""
+        self.fake.refresh_token = "refresh-good"
+        self.fake.access_token = _make_jwt(int(time.time()) + 3600)
+
+        async def failing_me():
+            raise IwaraError("上游挂了", status=502)
+
+        self.fake.me = failing_me  # type: ignore[assignment]
+
+        client = self._client()
+        resp = client.get("/api/iwara/auth")
+
+        payload = resp.json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(payload["configured"])
+        self.assertTrue(payload["authenticated"])
+        self.assertIsNone(payload["username_hint"])
+        self.assertIsNone(payload["error"])
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：%s" % IWARA_IMPORT_ERROR)
+class IwaraGetTokenCliTestCase(unittest.TestCase):
+    """`python iwara/get_token.py` 这个登录脚本：唯一的入口，此前零覆盖。
+
+    它自己有 argparse / input / getpass，所以全部用 patch 顶掉，只验证
+    「打印了什么、返回码是多少」—— 也就是用户在终端真正看到的东西。
+    """
+
+    def setUp(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "iwara_get_token_under_test", PROJECT_ROOT / "iwara" / "get_token.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.module = module
+        self.directory = make_temp_dir("iwara_get_token")
+        self.addCleanup(drop_temp_dir, self.directory)
+        self.token_file = self.directory / "tokens.json"
+        # 每次调用都可能按默认路径（项目 data/）落盘，这里一律重定向到临时目录。
+        patcher = patch.object(
+            self.module.tokens, "default_path", lambda *_a, **_k: self.token_file
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _run(self, argv, *, email=None, password=None, client=None, extra=()):
+        """跑 main()，抓住它打印到 stdout/stderr 的一切。
+
+        `_login` / `_status` 内部才 `from iwara.client import IwaraClient`，
+        所以顶 `iwara.client.IwaraClient` 就能让它们离线跑完。
+        """
+        out, err = io.StringIO(), io.StringIO()
+        patched = [
+            patch.object(sys, "argv", ["get_token.py", *argv]),
+            patch("builtins.input", return_value=email or ""),
+            patch("getpass.getpass", return_value=password or ""),
+        ]
+        if client is not None:
+            patched.append(patch("iwara.client.IwaraClient", client))
+        patched.extend(extra)
+        with contextlib.ExitStack() as stack:
+            for item in patched:
+                stack.enter_context(item)
+            stack.enter_context(contextlib.redirect_stdout(out))
+            stack.enter_context(contextlib.redirect_stderr(err))
+            code = self.module.main()  # 依赖已装好，ensure_packages 会直接放行
+
+        return code, out.getvalue(), err.getvalue()
+
+    @staticmethod
+    def _login_client(*, raise_error=None, refresh="refresh-abc", access=None):
+        """造一个顶替 IwaraClient 的类：记录 login 参数，按设定给 token。"""
+        seen = {}
+
+        class _Client:
+            def __init__(self, *_a, **_kw):
+                self.refresh_token = None
+                self.access_token = None
+
+            async def login(self, email, password):
+                seen["login"] = (email, password)
+                if raise_error is not None:
+                    raise raise_error
+                self.refresh_token = refresh
+                self.access_token = access
+
+            async def aclose(self):
+                seen["closed"] = True
+
+        return _Client, seen
+
+    @staticmethod
+    def _status_client(*, access=None, ensure_error=None, me_error=None, user=None):
+        seen = {}
+
+        class _Client:
+            def __init__(self, *_a, **kw):
+                seen["refresh"] = kw.get("refresh_token")
+                self.access_token = None
+
+            async def ensure_access_token(self):
+                if ensure_error is not None:
+                    raise ensure_error
+                self.access_token = access
+                return access
+
+            async def me(self):
+                if me_error is not None:
+                    raise me_error
+                return user if user is not None else {"user": {"username": "huanghe19512"}}
+
+            async def aclose(self):
+                seen["closed"] = True
+
+        return _Client, seen
+
+    def test_ask_returns_the_typed_value(self):
+        with patch("builtins.input", return_value="typed@example.com"):
+            self.assertEqual(self.module._ask("邮箱: "), "typed@example.com")
+        # 直接回车就用默认值。
+        with patch("builtins.input", return_value="  "):
+            self.assertEqual(self.module._ask("邮箱: ", default="x@example.com"), "x@example.com")
+
+    def test_ask_treats_a_cancelled_prompt_as_empty(self):
+        with patch("builtins.input", side_effect=EOFError):
+            self.assertEqual(self.module._ask("邮箱: "), "")
+        with patch("builtins.input", side_effect=KeyboardInterrupt):
+            self.assertEqual(self.module._ask("邮箱: "), "")
+
+    def test_login_saves_the_token_and_says_where(self):
+        cls, seen = self._login_client(access=_make_jwt(int(time.time()) + 3600))
+
+        code, out, _err = self._run([], email="me@example.com", password="secret", client=cls)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(seen["login"], ("me@example.com", "secret"))
+        self.assertTrue(seen["closed"])
+        self.assertIn("登录成功", out)
+        self.assertIn(str(self.token_file), out)
+        self.assertIn("python iwara/run.py", out)
+        self.assertIn("分钟", out)  # access token 剩余有效期
+        self.assertEqual(tokens.load_token(self.token_file), "refresh-abc")
+
+    def test_login_without_an_access_token_still_saves(self):
+        cls, _seen = self._login_client(access=None)
+
+        code, out, _err = self._run([], email="me@example.com", password="secret", client=cls)
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("分钟", out)
+        self.assertEqual(tokens.load_token(self.token_file), "refresh-abc")
+
+    def test_login_without_a_refresh_token_is_a_failure(self):
+        cls, _seen = self._login_client(refresh="")
+
+        code, _out, err = self._run([], email="me@example.com", password="secret", client=cls)
+
+        self.assertEqual(code, 1)
+        self.assertIn("上游没有返回 token", err)
+
+    def test_login_reports_a_bad_password(self):
+        cls, _seen = self._login_client(
+            raise_error=IwaraAuthError("登录失败（400）: errors.invalidLogin")
+        )
+
+        code, _out, err = self._run([], email="me@example.com", password="wrong", client=cls)
+
+        self.assertEqual(code, 1)
+        self.assertIn("invalidLogin", err)
+        self.assertIn("邮箱或密码不对", err)
+
+    def test_login_explains_a_cloudflare_block(self):
+        cls, _seen = self._login_client(
+            raise_error=IwaraError("被拦了", status=502, reason="cloudflare_challenge")
+        )
+
+        code, _out, err = self._run([], email="me@example.com", password="secret", client=cls)
+
+        self.assertEqual(code, 1)
+        self.assertIn("被拦了", err)
+        self.assertIn("换个网络", err)
+
+    def test_an_empty_email_cancels(self):
+        code, out, _err = self._run([], email="", password="secret")
+
+        self.assertEqual(code, 1)
+        self.assertIn("邮箱为空", out)
+
+    def test_an_empty_password_cancels(self):
+        code, out, _err = self._run([], email="me@example.com", password="")
+
+        self.assertEqual(code, 1)
+        self.assertIn("密码为空", out)
+
+    def test_status_says_anonymous_without_a_token(self):
+        code, out, _err = self._run(["--status"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("未登录", out)
+        self.assertIn("匿名模式可用", out)
+
+    def test_status_prints_the_account_and_the_remaining_minutes(self):
+        tokens.save_token("refresh-abc", self.token_file)
+        cls, seen = self._status_client(access=_make_jwt(int(time.time()) + 3600))
+
+        code, out, _err = self._run(["--status"], client=cls)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(seen["refresh"], "refresh-abc")
+        self.assertTrue(seen["closed"])
+        self.assertIn("已找到 token 文件", out)
+        self.assertIn("有效", out)
+        self.assertIn("huanghe19512", out)
+
+    def test_status_reports_an_expired_token_without_the_account(self):
+        tokens.save_token("refresh-abc", self.token_file)
+        cls, _seen = self._status_client(access=_make_jwt(int(time.time()) - 60))
+
+        code, out, _err = self._run(["--status"], client=cls)
+
+        self.assertEqual(code, 0)
+        self.assertIn("已过期", out)
+
+    def test_status_survives_a_failing_username_lookup(self):
+        tokens.save_token("refresh-abc", self.token_file)
+        cls, _seen = self._status_client(
+            access=_make_jwt(int(time.time()) + 3600), me_error=IwaraError("上游挂了")
+        )
+
+        code, out, _err = self._run(["--status"], client=cls)
+
+        self.assertEqual(code, 0)  # 用户名取不到只是少一行，不算失败
+        self.assertIn("取账号信息失败", out)
+        self.assertNotIn("当前账号", out)
+
+    def test_status_reports_a_dead_token_with_the_relogin_hint(self):
+        tokens.save_token("stale", self.token_file)
+        cls, _seen = self._status_client(ensure_error=IwaraError("刷新 token 失败（403）"))
+
+        code, _out, err = self._run(["--status"], client=cls)
+
+        self.assertEqual(code, 1)
+        self.assertIn("token 不可用", err)
+        self.assertIn("python iwara/get_token.py", err)
+
+    def test_logout_removes_the_token_file(self):
+        tokens.save_token("refresh-abc", self.token_file)
+
+        code, out, _err = self._run(["--logout"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("已删除 token 文件", out)
+        self.assertFalse(self.token_file.exists())
+        self.assertEqual(tokens.load_token(self.token_file), "")
+
+    def test_logout_without_a_file_is_still_a_success(self):
+        code, out, _err = self._run(["--logout"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("本来就没有 token 文件", out)
+
+    def test_a_missing_dependency_is_reported_not_raised(self):
+        extra = [patch.object(self.module, "ensure_packages", side_effect=RuntimeError("装不上"))]
+        code, _out, err = self._run(["--status"], extra=extra)
+
+        self.assertEqual(code, 1)
+        self.assertIn("[deps]", err)
+        self.assertIn("装不上", err)
+
+    def test_ctrl_c_is_reported_as_a_cancellation(self):
+        extra = [patch("builtins.input", side_effect=KeyboardInterrupt)]
+        code, out, _err = self._run([], extra=extra)
+
+        self.assertEqual(code, 1)
+        self.assertIn("已取消", out)
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：%s" % IWARA_IMPORT_ERROR)
+class IwaraEchConfigTestCase(unittest.TestCase):
+    """``iwara/ech.py``：ECH 配置的解析、缓存与取值。
+
+    它是 iwara 版的自足实现（站点之间不能互相 import，见
+    ``scripts/check_boundary.py``），走的路线也和 pixiv 那套不同：pixiv 用
+    ctypes 调 OpenSSL 4.0+ 自己握手，这里只把配置交给 libcurl 的
+    ``CURLOPT_ECH``，所以不需要任何动态库 —— 这里的用例全是纯逻辑。
+    """
+
+    def setUp(self):
+        # 缓存是模块级的，谁先跑都会污染别人；每个用例都从干净状态开始。
+        self.addCleanup(iwara_ech.reset_config_cache)
+
+    def test_the_bundled_config_is_a_usable_echconfiglist(self):
+        raw = iwara_ech._decode_config(iwara_ech.DEFAULT_ECH_CONFIG)
+
+        self.assertGreaterEqual(len(raw), 4)
+        # ECHConfigList 的前两个字节是大端长度，必须覆盖整段，否则 libcurl
+        # 会当成畸形配置丢掉。
+        self.assertEqual(int.from_bytes(raw[:2], "big"), len(raw) - 2)
+        # 内置配置里的 public_name 就是外层 SNI 用的那个名字。
+        self.assertIn(b"cloudflare-ech.com", raw)
+
+    def test_a_too_short_config_is_rejected(self):
+        with self.assertRaises(iwara_ech.EchUnavailable) as ctx:
+            iwara_ech._decode_config(base64.b64encode(b"\x01\x02").decode("ascii"))
+
+        self.assertIn("过短", str(ctx.exception))
+
+    def test_garbage_is_rejected_with_a_readable_reason(self):
+        with self.assertRaises(iwara_ech.EchUnavailable) as ctx:
+            iwara_ech._decode_config("not base64 at all!!")
+
+        self.assertIn("base64", str(ctx.exception))
+
+    def test_pem_wrapping_and_whitespace_are_tolerated(self):
+        wrapped = "-----BEGIN ECH-----\n" + iwara_ech.DEFAULT_ECH_CONFIG + "\n-----END ECH-----"
+
+        self.assertEqual(
+            iwara_ech._decode_config(wrapped),
+            iwara_ech._decode_config(iwara_ech.DEFAULT_ECH_CONFIG),
+        )
+
+    def test_doh_payload_is_only_read_from_type_65(self):
+        good = base64.b64encode(b"\x00\x04abcd").decode("ascii")
+        payload = {
+            "Answer": [
+                # A 记录里就算有 ech= 也不能信（那不是 HTTPS 记录）。
+                {"type": 1, "data": f"1.2.3.4 ech={good}"},
+                {"type": 65, "data": f'alpn="h2" ech="{good}"'},
+            ]
+        }
+
+        self.assertEqual(
+            iwara_ech._ech_from_doh(payload), iwara_ech._decode_config(good)
+        )
+
+    def test_the_doh_regex_handles_the_escaped_quote(self):
+        # DoH 的 JSON 里引号被转义成 \"：正则不许它，就永远退回内置配置。
+        good = base64.b64encode(b"\x00\x04abcd").decode("ascii")
+        for data in (f'ech=\\"{good}\\"', f'ech="{good}"', f"ech={good}"):
+            self.assertRegex(data, iwara_ech._ECH_VALUE_RE, data)
+
+    def test_a_payload_without_any_ech_record_yields_nothing(self):
+        self.assertIsNone(iwara_ech._ech_from_doh({"Answer": [{"type": 65, "data": 'alpn="h2"'}]}))
+        self.assertIsNone(iwara_ech._ech_from_doh({}))
+        self.assertIsNone(iwara_ech._ech_from_doh(None))
+
+    def test_a_broken_record_falls_through_to_the_next_answer(self):
+        good = base64.b64encode(b"\x00\x04abcd").decode("ascii")
+        payload = {
+            "Answer": [
+                {"type": 65, "data": 'ech="!!!!"'},  # 非法 base64，跳过
+                {"type": 65, "data": f'ech="{good}"'},
+            ]
+        }
+
+        self.assertEqual(
+            iwara_ech._ech_from_doh(payload), iwara_ech._decode_config(good)
+        )
+
+    def test_fetch_tries_every_endpoint_before_giving_up(self):
+        seen = []
+
+        def boom(url, **_kwargs):
+            seen.append(url)
+            raise httpx.ConnectError("no route")
+
+        with patch.object(iwara_ech.httpx, "get", boom):
+            with self.assertRaises(iwara_ech.EchUnavailable) as ctx:
+                iwara_ech.fetch_ech_config(endpoints=("https://a/resolve", "https://b/resolve"))
+
+        self.assertEqual(seen, ["https://a/resolve", "https://b/resolve"])
+        self.assertIn("DoH 查询失败", str(ctx.exception))
+        self.assertIn("ConnectError", str(ctx.exception))
+
+    def test_fetch_asks_for_https_records_in_dns_json(self):
+        calls = []
+
+        def fake_get(url, **kwargs):
+            calls.append((url, kwargs))
+            return MagicMock(
+                json=lambda: {"Answer": [{"type": 65, "data": 'ech="%s"' % GOOD_ECH_B64}]},
+                raise_for_status=lambda: None,
+            )
+
+        with patch.object(iwara_ech.httpx, "get", fake_get):
+            found = iwara_ech.fetch_ech_config(endpoints=("https://a/resolve",))
+
+        self.assertEqual(found, iwara_ech._decode_config(GOOD_ECH_B64))
+        url, kwargs = calls[0]
+        self.assertEqual(url, "https://a/resolve")
+        self.assertEqual(kwargs["params"], {"name": "cloudflare-ech.com", "type": "65"})
+        self.assertEqual(kwargs["headers"], {"accept": "application/dns-json"})
+
+    def test_fetch_falls_back_to_the_bundled_endpoints(self):
+        # 没给 endpoints 就用模块里那两个（实测只有它们能查 type 65）。
+        seen = []
+
+        def fake_get(url, **_kwargs):
+            seen.append(url)
+            return MagicMock(
+                json=lambda: {"Answer": [{"type": 65, "data": 'ech="%s"' % GOOD_ECH_B64}]},
+                raise_for_status=lambda: None,
+            )
+
+        with patch.object(iwara_ech.httpx, "get", fake_get):
+            iwara_ech.fetch_ech_config()
+
+        self.assertEqual(seen, [iwara_ech.DOH_ENDPOINTS[0]])
+        self.assertIn("alidns", iwara_ech.DOH_ENDPOINTS[0])
+        self.assertIn("223.5.5.5", iwara_ech.DOH_ENDPOINTS[1])
+
+    def test_fetch_stops_at_the_first_endpoint_that_answers(self):
+        answers = iter(
+            [
+                httpx.ConnectError("no route"),
+                MagicMock(
+                    json=lambda: {
+                        "Answer": [{"type": 65, "data": 'ech="%s"' % GOOD_ECH_B64}]
+                    },
+                    raise_for_status=lambda: None,
+                ),
+            ]
+        )
+
+        def fake_get(url, **_kwargs):
+            value = next(answers)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        with patch.object(iwara_ech.httpx, "get", fake_get):
+            found = iwara_ech.fetch_ech_config(endpoints=("https://a/resolve", "https://b/resolve"))
+
+        self.assertEqual(found, iwara_ech._decode_config(GOOD_ECH_B64))
+
+    def test_an_explicit_override_beats_everything(self):
+        self.assertEqual(
+            iwara_ech.ech_config(override=GOOD_ECH_B64),
+            iwara_ech._decode_config(GOOD_ECH_B64),
+        )
+
+    def test_a_bad_override_is_reported_not_silently_ignored(self):
+        with self.assertRaises(iwara_ech.EchUnavailable):
+            iwara_ech.ech_config(override="!!!")
+
+    def test_the_config_is_cached_until_it_is_reset(self):
+        calls = []
+
+        def fake_get(url, **_kwargs):
+            calls.append(url)
+            return MagicMock(
+                json=lambda: {"Answer": [{"type": 65, "data": 'ech="%s"' % GOOD_ECH_B64}]},
+                raise_for_status=lambda: None,
+            )
+
+        with patch.object(iwara_ech.httpx, "get", fake_get):
+            first = iwara_ech.ech_config()
+            second = iwara_ech.ech_config()
+            iwara_ech.reset_config_cache()
+            third = iwara_ech.ech_config()
+
+        self.assertEqual(first, second)
+        self.assertEqual(second, third)
+        self.assertEqual(len(calls), 2)  # 两次取用之间只打了一次 DoH
+
+    def test_refresh_forces_a_new_lookup(self):
+        calls = []
+
+        def fake_get(url, **_kwargs):
+            calls.append(url)
+            return MagicMock(
+                json=lambda: {"Answer": [{"type": 65, "data": 'ech="%s"' % GOOD_ECH_B64}]},
+                raise_for_status=lambda: None,
+            )
+
+        with patch.object(iwara_ech.httpx, "get", fake_get):
+            iwara_ech.ech_config()
+            iwara_ech.ech_config(refresh=True)
+
+        self.assertEqual(len(calls), 2)
+
+    def test_the_bundled_config_is_the_last_resort(self):
+        with patch.object(iwara_ech.httpx, "get", side_effect=httpx.ConnectError("offline")):
+            config = iwara_ech.ech_config()
+
+        self.assertEqual(config, iwara_ech._decode_config(iwara_ech.DEFAULT_ECH_CONFIG))
+
+    def test_the_option_is_the_ecl_prefixed_base64(self):
+        raw = iwara_ech._decode_config(GOOD_ECH_B64)
+
+        self.assertEqual(iwara_ech.ech_option(raw=raw), "ecl:" + GOOD_ECH_B64)
+
+    def test_the_option_is_none_when_libcurl_cannot_do_ech(self):
+        with patch.object(iwara_ech, "available", lambda: False):
+            self.assertIsNone(iwara_ech.ech_option(raw=b"\x00\x04abcd"))
+
+    def test_an_unusable_config_yields_no_option(self):
+        with patch.object(iwara_ech, "ech_config", side_effect=iwara_ech.EchUnavailable("没了")):
+            self.assertIsNone(iwara_ech.ech_option())
+
+    def test_available_reflects_whether_libcurl_has_the_option(self):
+        # 本机 curl_cffi 0.15.0 有 CURLOPT_ECH；换一个没有的 CurlOpt 就该是假。
+        self.assertTrue(iwara_ech.available())
+        with patch.object(iwara_ech, "CurlOpt", object()):
+            self.assertFalse(iwara_ech.available())
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：%s" % IWARA_IMPORT_ERROR)
+class IwaraSettingsEchTestCase(unittest.TestCase):
+    """``iwara/config.py``：``IwaraSettings`` 只比框架多 ECH 三项。
+
+    环境变量用 ``IWARA_`` 前缀而不是 ``PIXIV_``：各站点是同级入口，混用
+    会让人以为改一个开关两个站都变。
+    """
+
+    def setUp(self):
+        self.directory = make_temp_dir("iwara_ech_settings")
+        self.addCleanup(drop_temp_dir, self.directory)
+
+    def _load(self, **env):
+        merged = {
+            "IWARA_BRIDGE_ECH": "",
+            "IWARA_BRIDGE_ECH_CONFIG": "",
+            "IWARA_BRIDGE_ECH_IPS": "",
+        }
+        merged.update(env)
+        with patch.dict(os.environ, merged, clear=False):
+            return IwaraSettings.load(migrate=False)
+
+    def test_split_ips_accepts_commas_spaces_and_semicolons(self):
+        self.assertEqual(split_ips(""), ())
+        self.assertEqual(split_ips("1.2.3.4"), ("1.2.3.4",))
+        self.assertEqual(
+            split_ips("1.2.3.4, 5.6.7.8;9.9.9.9"),
+            ("1.2.3.4", "5.6.7.8", "9.9.9.9"),
+        )
+        self.assertEqual(split_ips("  "), ())
+
+    def test_ech_is_off_until_the_env_says_otherwise(self):
+        for value in ("", "0", "false", "off", "no"):
+            self.assertFalse(self._load(IWARA_BRIDGE_ECH=value).ech, value)
+
+        for value in ("1", "true", "YES", "on"):
+            self.assertTrue(self._load(IWARA_BRIDGE_ECH=value).ech, value)
+
+    def test_the_two_other_keys_are_taken_verbatim(self):
+        settings = self._load(
+            IWARA_BRIDGE_ECH="1",
+            IWARA_BRIDGE_ECH_CONFIG="cfg-base64",
+            IWARA_BRIDGE_ECH_IPS="1.2.3.4,5.6.7.8",
+        )
+
+        self.assertTrue(settings.ech)
+        self.assertEqual(settings.ech_config, "cfg-base64")
+        self.assertEqual(settings.ech_ips, "1.2.3.4,5.6.7.8")
+
+    def test_the_framework_fields_survive_the_round_trip(self):
+        settings = self._load()
+
+        # 框架负责的那部分（data_dir / 端口 / 限流）不能因为加了站点字段就丢。
+        self.assertEqual(settings.rate_limit_rpm, Settings.load(migrate=False).rate_limit_rpm)
+        self.assertEqual(settings.host, Settings.load(migrate=False).host)
+        self.assertTrue(settings.data_dir)
+
+    def test_as_iwara_settings_keeps_an_iwara_settings_as_is(self):
+        settings = self._load(IWARA_BRIDGE_ECH="1")
+
+        self.assertIs(as_iwara_settings(settings), settings)
+
+    def test_as_iwara_settings_upgrades_a_plain_framework_settings(self):
+        base = Settings(rate_limit_rpm=10000, data_dir=str(self.directory))
+
+        upgraded = as_iwara_settings(base)
+
+        self.assertIsInstance(upgraded, IwaraSettings)
+        self.assertFalse(upgraded.ech)  # 没开就是默认关
+        self.assertEqual(upgraded.rate_limit_rpm, 10000)
+        self.assertEqual(upgraded.data_dir, str(self.directory))
+
+    def test_as_iwara_settings_reloads_when_given_nothing(self):
+        with patch.dict(os.environ, {"IWARA_BRIDGE_ECH": "1"}, clear=False):
+            self.assertTrue(as_iwara_settings(None).ech)
+
+    def test_the_site_declares_its_own_settings_class(self):
+        # 框架 cli 走 site.load_settings()，用的就是这个 settings_class。
+        self.assertIs(SITE.settings_class, IwaraSettings)
+        self.assertIsInstance(SITE.load_settings(), IwaraSettings)
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：%s" % IWARA_IMPORT_ERROR)
+class IwaraClientEchTestCase(unittest.TestCase):
+    """``iwara/client.py`` 里的 ECH 接线：谁能用、怎么传给 libcurl。
+
+    核心事实：ECH 只对**在 Cloudflare 后面**的主机生效（api / www / 裸域）。
+    视频与图片的 CDN 主机是 Let's Encrypt 证书，给它们开 ECH 只会握手失败
+    （``60: SSL certificate problem: Hostname mismatch``）。
+    """
+
+    def test_only_the_cloudflare_hosts_are_eligible(self):
+        for host in ("api.iwara.tv", "www.iwara.tv", "iwara.tv"):
+            self.assertTrue(is_ech_host(host), host)
+
+        for host in ("files.iwara.tv", "filesq.iwara.tv", "i.iwara.tv", "firefly.iwara.tv"):
+            self.assertFalse(is_ech_host(host), host)
+
+    def test_the_whitelist_is_exactly_the_documented_three(self):
+        self.assertEqual(ECH_HOSTS, ("api.iwara.tv", "www.iwara.tv", "iwara.tv"))
+
+    def test_ech_is_off_by_default(self):
+        client = IwaraClient()
+
+        self.assertFalse(client.ech)
+        self.assertIsNone(client.ech_option("www.iwara.tv"))
+
+    def test_the_option_never_appears_for_a_cdn_host(self):
+        client = IwaraClient(ech=True)
+
+        self.assertIsNotNone(client.ech_option("www.iwara.tv"))
+        self.assertIsNone(client.ech_option("files.iwara.tv"))
+
+    def test_the_option_is_none_when_libcurl_cannot_do_ech(self):
+        client = IwaraClient(ech=True)
+
+        with patch.object(iwara_ech, "available", lambda: False):
+            self.assertIsNone(client.ech_option("www.iwara.tv"))
+
+    def test_the_explicit_config_is_handed_to_the_module(self):
+        seen = {}
+
+        def fake(override="", refresh=False):
+            seen["override"] = override
+            return "ecl:" + GOOD_ECH_B64
+
+        client = IwaraClient(ech=True, ech_config="my-config")
+        with patch.object(iwara_ech, "ech_option", fake):
+            self.assertEqual(client.ech_option("www.iwara.tv"), "ecl:" + GOOD_ECH_B64)
+
+        self.assertEqual(seen["override"], "my-config")
+
+    def test_the_session_carries_the_option_for_an_ech_host(self):
+        client = IwaraClient(ech=True)
+        client._live_ips["www.iwara.tv"] = "104.20.28.232"
+
+        with patch.object(iwara_ech, "ech_option", lambda **_kwargs: "ecl:" + GOOD_ECH_B64):
+            session = asyncio.run(client.session_for("www.iwara.tv"))
+
+        self.addCleanup(lambda: asyncio.run(session.close()))
+        self.assertEqual(session.curl_options[CurlOpt.ECH], "ecl:" + GOOD_ECH_B64)
+        # 钉 IP 与浏览器指纹那套不变：ECH 只是多了一个选项。
+        self.assertEqual(
+            session.curl_options[CurlOpt.RESOLVE], ["www.iwara.tv:443:104.20.28.232"]
+        )
+
+    def test_the_session_has_no_ech_option_for_a_cdn_host(self):
+        client = IwaraClient(ech=True)
+        client._live_ips["files.iwara.tv"] = "5.61.209.181"
+
+        session = asyncio.run(client.session_for("files.iwara.tv"))
+
+        self.addCleanup(lambda: asyncio.run(session.close()))
+        self.assertNotIn(CurlOpt.ECH, session.curl_options)
+
+    def test_the_session_has_no_ech_option_when_ech_is_off(self):
+        client = IwaraClient()
+        client._live_ips["www.iwara.tv"] = "104.20.28.232"
+
+        session = asyncio.run(client.session_for("www.iwara.tv"))
+
+        self.addCleanup(lambda: asyncio.run(session.close()))
+        self.assertNotIn(CurlOpt.ECH, session.curl_options)
+
+    def test_configured_ech_ips_land_behind_the_seeds(self):
+        # 种子 IP 是实测可用的，用户配的只是补充：必须排在种子之后，
+        # 否则 pick_ip 会先去试一个可能不通的地址。
+        client = IwaraClient(
+            ech=True,
+            ech_ips=("203.0.113.7",),
+            doh_endpoints=("https://doh.invalid/dns-query",),
+        )
+
+        async def fake_query(endpoint, host):
+            return ["198.51.100.9"]  # DoH 补充的候选（本机常被污染）
+
+        client._query_doh = fake_query  # type: ignore[assignment]
+        ips = asyncio.run(client.resolve_host("www.iwara.tv"))
+
+        seed = SEED_HOSTS["www.iwara.tv"][0]
+        self.assertEqual(ips[0], seed)
+        self.assertLess(ips.index("203.0.113.7"), ips.index("198.51.100.9"))
+
+    def test_ech_ips_are_ignored_for_a_cdn_host(self):
+        client = IwaraClient(ech=True, ech_ips=("203.0.113.7",))
+
+        self.assertEqual(client.ech_ips, ("203.0.113.7",))
+        self.assertFalse(is_ech_host("files.iwara.tv"))
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：%s" % IWARA_IMPORT_ERROR)
+class IwaraEchWiringTestCase(unittest.TestCase):
+    """站点状态与自检里的 ECH 接线。"""
+
+    def test_the_state_factory_hands_the_three_switches_to_the_client(self):
+        settings = IwaraSettings.load(migrate=False)
+        settings.ech = True
+        settings.ech_config = "cfg-base64"
+        settings.ech_ips = "1.2.3.4,5.6.7.8"
+
+        state = iwara_state_factory(settings)
+
+        client = state["iwara_client"]
+        self.addCleanup(lambda: asyncio.run(client.aclose()))
+        self.assertTrue(client.ech)
+        self.assertEqual(client.ech_config, "cfg-base64")
+        self.assertEqual(client.ech_ips, ("1.2.3.4", "5.6.7.8"))
+
+    def test_a_plain_framework_settings_still_builds_a_client(self):
+        # 测试与脚本常常只造框架 Settings：不该因为缺 ech 字段就炸。
+        state = iwara_state_factory(Settings(rate_limit_rpm=10000))
+
+        client = state["iwara_client"]
+        self.addCleanup(lambda: asyncio.run(client.aclose()))
+        self.assertFalse(client.ech)
+
+    def test_the_check_stays_at_three_items_when_ech_is_off(self):
+        from iwara.envcheck import AUTH_NAME, DEPS_NAME, NET_NAME
+
+        patcher, _instance = self._fake_client()
+        with patcher:
+            results = extra_checks(Settings(rate_limit_rpm=10000, data_dir=str(self.directory)))
+
+        self.assertEqual([r.name for r in results], [DEPS_NAME, NET_NAME, AUTH_NAME])
+
+    def test_the_ech_check_is_appended_when_the_switch_is_on(self):
+        from iwara.envcheck import AUTH_NAME, DEPS_NAME, ECH_NAME, NET_NAME
+
+        patcher, _instance = self._fake_client()
+        with patcher:
+            results = extra_checks(self._ech_settings())
+
+        self.assertEqual(
+            [r.name for r in results], [DEPS_NAME, NET_NAME, ECH_NAME, AUTH_NAME]
+        )
+
+    def test_the_ech_check_reads_the_trace_echo(self):
+        patcher, _instance = self._fake_client(
+            trace="sni=encrypted\nvisit_scheme=https\n"
+        )
+        with patcher:
+            results = extra_checks(self._ech_settings())
+
+        ech = [r for r in results if r.name == "iwara ECH"][0]
+        self.assertTrue(ech.ok)
+        self.assertIn("sni=encrypted", ech.detail)
+
+    def test_a_plaintext_sni_is_reported_as_ech_not_working(self):
+        patcher, _instance = self._fake_client(trace="sni=plaintext\n")
+        with patcher:
+            results = extra_checks(self._ech_settings())
+
+        ech = [r for r in results if r.name == "iwara ECH"][0]
+        self.assertFalse(ech.ok)
+        self.assertIn("未生效", ech.detail)
+
+    def test_an_http_error_from_the_trace_endpoint_is_reported(self):
+        patcher, _instance = self._fake_client(trace="<html>503</html>", status=503)
+        with patcher:
+            results = extra_checks(self._ech_settings())
+
+        ech = [r for r in results if r.name == "iwara ECH"][0]
+        self.assertFalse(ech.ok)
+        self.assertIn("HTTP 503", ech.detail)
+
+    def test_a_failing_handshake_is_reported_not_raised(self):
+        patcher, _instance = self._fake_client(error=IwaraError("都连不上"))
+        with patcher:
+            results = extra_checks(self._ech_settings())
+
+        ech = [r for r in results if r.name == "iwara ECH"][0]
+        self.assertFalse(ech.ok)
+        self.assertIn("都连不上", ech.detail)
+
+    def test_a_libcurl_without_ech_says_how_to_turn_it_off(self):
+        patcher, _instance = self._fake_client()
+        with patcher, patch.object(iwara_ech, "available", lambda: False):
+            results = extra_checks(self._ech_settings())
+
+        ech = [r for r in results if r.name == "iwara ECH"][0]
+        self.assertFalse(ech.ok)
+        self.assertIn("CURLOPT_ECH", ech.detail)
+        self.assertIn("IWARA_BRIDGE_ECH=0", ech.detail)
+
+    def test_the_ech_check_never_kills_the_startup(self):
+        from pixiv_bridge.cli import FATAL_CHECKS
+
+        from iwara.envcheck import ECH_NAME
+
+        self.assertNotIn(ECH_NAME, FATAL_CHECKS)
+
+    # -- 脚手架 ----------------------------------------------------------
+
+    def setUp(self):
+        self.directory = make_temp_dir("iwara_ech_wiring")
+        self.addCleanup(drop_temp_dir, self.directory)
+        env = patch.dict(os.environ, {"IWARA_REFRESH_TOKEN": ""}, clear=False)
+        env.start()
+        self.addCleanup(env.stop)
+
+    def _ech_settings(self):
+        settings = IwaraSettings.load(migrate=False)
+        settings.ech = True
+        settings.data_dir = str(self.directory)
+        return settings
+
+    def _fake_client(self, *, videos=None, error=None, trace="", status=200, username="tester"):
+        """顶掉 iwara.client.IwaraClient；``trace`` 是 /cdn-cgi/trace 的回显。"""
+        cls = MagicMock()
+        instance = cls.return_value
+        instance.ech = True
+        instance.site = "www.iwara.tv"
+
+        async def _maybe_raise():
+            if error is not None:
+                raise error
+            return None
+
+        async def _list_videos(**_kwargs):
+            await _maybe_raise()
+            return videos if videos is not None else {"count": 3, "results": []}
+
+        async def _request(*_args, **_kwargs):
+            await _maybe_raise()
+            return MagicMock(text=trace, status_code=status)
+
+        async def _me():
+            await _maybe_raise()
+            return {"user": {"username": username}}
+
+        instance.list_videos = AsyncMock(side_effect=_list_videos)
+        instance.request = AsyncMock(side_effect=_request)
+        instance.ensure_access_token = AsyncMock(side_effect=lambda: _maybe_raise())
+        instance.me = AsyncMock(side_effect=_me)
+        instance.aclose = AsyncMock()
+        return patch("iwara.client.IwaraClient", cls), instance
 
 
 if __name__ == "__main__":  # pragma: no cover
