@@ -59,8 +59,9 @@ packaging = load_packaging_module()
 class PackageSpecTestCase(unittest.TestCase):
     """包清单本身要自洽：key 唯一、内容存在、扩展包只带自己。"""
 
-    def test_six_packages_with_unique_keys_and_zip_names(self):
-        self.assertEqual(len(packaging.PACKAGES), 6)
+    def test_package_count_follows_the_site_registry(self):
+        # 每加一个站点就多一个 api 包，另有固定 2 个扩展包 + 2 个组合包。
+        self.assertEqual(len(packaging.PACKAGES), len(packaging.SITES) + 4)
         keys = [spec.key for spec in packaging.PACKAGES]
         zips = [spec.zip_name for spec in packaging.PACKAGES]
         self.assertEqual(len(set(keys)), len(keys))
@@ -290,7 +291,7 @@ class RenderReadmeTestCase(unittest.TestCase):
         text = self.render(kind="api")
         self.assertIn("# 演示包", text)
         self.assertIn("一句话说明。", text)
-        # 接口包 = 框架 + 恰好一个接口项目；两个接口项目互不依赖。
+        # 接口包 = 框架 + 恰好一个接口项目；各接口项目互不依赖。
         self.assertIn("一个接口项目", text)
         self.assertIn("互不依赖", text)
 
@@ -343,7 +344,7 @@ class RenderReadmeTestCase(unittest.TestCase):
 
 
 class ValidateSpecsTestCase(unittest.TestCase):
-    """``validate_specs()`` 是「两个接口项目同级」在打包这一层的守门人。"""
+    """``validate_specs()`` 是「各接口项目同级」在打包这一层的守门人。"""
 
     def test_the_real_manifest_is_valid(self):
         self.assertEqual(packaging.validate_specs(), [])

@@ -10,7 +10,7 @@
 每个包解压后是一个同名文件夹，根目录里有一份**该包自己的** ``README.md``
 （说明这东西是什么、怎么启动、包里有什么），完整文档放在 ``手册/`` 里。
 
-布局约定（重构后）：两个接口项目 ``pixiv/`` 与 ``iwara/`` 是**同级**目录，
+布局约定（重构后）：接口项目 ``pixiv/``、``iwara/``、``asmr_one/`` 是**同级**目录，
 各自有 ``run.py`` 入口，都只依赖框架 ``pixiv_bridge/``；根目录不再有 ``run.py``。
 所以每个接口包 = ``pixiv_bridge/`` + 一个（或两个）站点目录 + 根目录的启动文件。
 
@@ -115,7 +115,7 @@ BASE_NOTES = (
     "所以它直接启动；想显式指定就在 `.env` 里写 `BRIDGE_SITE=<站点目录名>`。",
     "个人数据都在 `data/` 里（登录凭据 / 阅读历史 / 下载记录 / 收藏台账 / 页面配置）；"
     "换机只拷这一个目录。",
-    "两个接口项目 `pixiv/` 与 `iwara/` 是**同级**的：各自一个 `run.py`，"
+    "三个接口项目 `pixiv/` / `iwara/` / `asmr_one/` 是**同级**的：各自一个 `run.py`，"
     "互相不挂载，都只用框架 `pixiv_bridge/`。",
 )
 
@@ -125,10 +125,24 @@ PIXIV_NOTES = (
     "ECH 模式要用；不用 ECH 的话删掉它也不影响启动。",
 )
 
+ASMR_SETUP = (
+    "asmr 不需要登录：公开浏览、搜索与播放匿名就够。"
+    "（要登录的只有标签 / 用户收藏那几个端点，本站不暴露它们。）",
+)
+
 IWARA_NOTES = (
     "iwara 的接口走 `curl_cffi`（Cloudflare 只认浏览器 TLS 指纹），"
     "首次启动会多装一个编译包，比 pixiv 那边慢一点。",
-    "本包不含 `openssl-libs/`：那是 Pixiv 的 ECH 直连用的，iwara 用不到。",
+    "本包不含 `openssl-libs/`：那是 Pixiv 的 ECH 直连用的（ctypes 调 OpenSSL 4.0+）；"
+    "iwara 的 ECH 走 `curl_cffi` 的 libcurl（`IWARA_BRIDGE_ECH=1`），不需要那套动态库。",
+)
+
+ASMR_NOTES = (
+    "asmr 的 ECH **默认开**（`ASMR_BRIDGE_ECH`）：它自己那几个边缘 IP 在本机是"
+    "IP 级被阻断的，必须借道 Cloudflare 别的 anycast IP 再叠 ECH 才通；关掉大概率整个站不通。",
+    "换 IP 与叠 ECH 都要 libcurl，所以本包同样带 `curl_cffi`（首次启动会多装一个编译包）。",
+    "音频字节在 `raw.kiko-play-niptan.one` 上，浏览器同样到不了 —— 播放器要走本站的"
+    "`/api/asmr/stream?url=...` 代转（`/api/asmr/tracks/{id}` 里给的直链是给本站用的）。",
 )
 
 
@@ -145,6 +159,7 @@ def _site_dirs(*names, with_assets=True) -> tuple:
 
 PIXIV = SITES_BY_NAME["pixiv"]
 IWARA = SITES_BY_NAME["iwara"]
+ASMR = SITES_BY_NAME["asmr_one"]
 
 PACKAGES = (
     PackageSpec(
@@ -189,10 +204,35 @@ PACKAGES = (
         setup_lines=BASE_SETUP + IWARA_SETUP,
         notes=(
             "入口是 `iwara/run.py`，它**只挂 iwara 的接口** —— Pixiv 的路由不在本包里"
-            "（两个接口项目同级，互不挂载），要用 Pixiv 接口请用 `pixiv-api` 那个包。",
+            "（各接口项目同级，互不挂载），要用 Pixiv 接口请用 `pixiv-api` 那个包。",
             "iwara 的**视频页面**不在本包里，它是单独的扩展包 `iwara_web-extension`。",
         )
         + IWARA_NOTES
+        + BASE_NOTES,
+    ),
+    PackageSpec(
+        key="asmr-api",
+        zip_name="asmr-api",
+        title="asmr 接口包",
+        kind="api",
+        summary="asmr.one 音频接口（`/api/asmr/works`、搜索、音轨列表、封面与音频代转）+ `/` 导航页。",
+        dirs=_site_dirs(ASMR.directory, with_assets=False),
+        files=API_ROOT_FILES,
+        start_commands=(
+            "# Windows",
+            "start.bat",
+            "",
+            "# 其它平台",
+            ASMR.command(),
+        ),
+        setup_lines=BASE_SETUP + ASMR_SETUP,
+        notes=(
+            "入口是 `asmr_one/run.py`，它**只挂 asmr 的接口** —— Pixiv / iwara 的路由"
+            "都不在本包里（三个接口项目同级，互不挂载）。",
+            "启动后浏览器打开 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、"
+            "`/api/health` 等入口）。",
+        )
+        + ASMR_NOTES
         + BASE_NOTES,
     ),
     PackageSpec(
@@ -311,7 +351,7 @@ PACKAGES_BY_KEY = {spec.key: spec for spec in PACKAGES}
 def validate_specs():
     """结构自检：包清单必须与站点注册表一致（同级布局 / 一个站点只配自己的扩展）。
 
-    返回问题列表；空列表表示清单成立。这些规则就是「两个接口项目同级」在打包
+    返回问题列表；空列表表示清单成立。这些规则就是「各接口项目同级」在打包
     这一层的落点，写错了会在 ``--check`` 里直接报出来。
     """
     problems = []
@@ -325,7 +365,7 @@ def validate_specs():
         if len(spec.site_names) > 1:
             problems.append(
                 f"{spec.key}: 一个包只能带一个接口项目，现在是 {spec.site_names}"
-                "（两个站点同级，不组合分发）"
+                "（各站点同级，不组合分发）"
             )
         for name in spec.extension_names:
             ext = EXTENSIONS_BY_NAME[name]
@@ -346,10 +386,13 @@ def validate_specs():
             source = PROJECT_ROOT / name
             if not source.exists():
                 problems.append(f"{spec.key}: 清单里的 {name} 在磁盘上不存在")
-    if kinds.get("api") != 2 or kinds.get("extension") != 2 or kinds.get("bundle") != 2:
-        problems.append(f"包的构成变了：{kinds}（约定是 2 接口 + 2 扩展 + 2 组合）")
-    if len(PACKAGES) != 6:
-        problems.append(f"分享包数量是 {len(PACKAGES)}，约定是 6 个")
+    if kinds.get("api") != len(SITES) or kinds.get("extension") != 2 or kinds.get("bundle") != 2:
+        problems.append(
+            f"包的构成变了：{kinds}（约定是 {len(SITES)} 接口（每个站点一个）"
+            " + 2 扩展 + 2 组合）"
+        )
+    if len(PACKAGES) != len(SITES) + 4:
+        problems.append(f"分享包数量是 {len(PACKAGES)}，约定是 {len(SITES) + 4} 个")
     covered = {
         name
         for spec in PACKAGES

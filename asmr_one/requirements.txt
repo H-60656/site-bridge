@@ -1,0 +1,17 @@
+# asmr_one 子项目的额外依赖（只有跑 asmr_one/run.py 时才需要）。
+#
+# 刻意不放进根目录的 requirements.txt：curl_cffi 是带编译产物的包，
+# 而它只是 asmr 站点绕过 Cloudflare 的手段；只跑 pixiv 接口的用户
+# 不该被要求装它。
+#
+# Termux（安卓）上装不装得动，取决于 Python 版本：官方从 0.15.0 起才发
+# 安卓轮子（android_24_arm64_v8a，cp313-abi3），所以 Python 3.13 及以上
+# 装的是现成轮子；3.12 及以下没有对应轮子，会退回源码编译（要 Rust +
+# C 工具链），那才容易装不动。
+#
+# 为什么必须要它：asmr.one 自己那几个边缘 IP 在本机是 IP 级被阻断的，
+# 必须把请求钉到 Cloudflare 别的 anycast IP 上再叠 ECH —— 换 IP 靠
+# curl_cffi 的 CURLOPT_RESOLVE，叠 ECH 靠 CURLOPT_ECH，两者都得是
+# libcurl 才干得了，纯 requests / httpx 做不到。
+curl_cffi>=0.7
+cffi>=1.16

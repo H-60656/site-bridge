@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""核对整理是否成立：框架不依赖任何接口项目、两个接口项目同级且互不依赖、出入口清爽。
+"""核对整理是否成立：框架不依赖任何接口项目、各接口项目同级且互不依赖、出入口清爽。
 
 用法：python scripts/check_boundary.py
 
 检查四件事：
 
-1. 依赖方向：``pixiv_bridge/`` 里不出现任何站点/扩展的名字；两个接口项目互不
+1. 依赖方向：``pixiv_bridge/`` 里不出现任何站点/扩展的名字；各接口项目互不
    依赖；扩展只允许依赖框架、自己与它的宿主站点；
 2. 出入口：每个接口项目一个 ``<site>/run.py``，根目录不再有 ``run.py``，
    扩展包只有 ``<ext>/extension.py``（没有专属入口）；
 3. 注册表与运行时一致：``scripts/sites.py`` 里记的站点名/目录/标题/必需文件，
    与 ``<site>/app.py`` 里那份 ``SITE`` 对得上；
-4. 路由隔离：两个站点各自只比框架外壳多出自己那部分（没有互相串台），
+4. 路由隔离：每个站点各自只比框架外壳多出自己那部分（没有互相串台），
    每个扩展挂上去后**恰好**多出它声明的那几条路由。
 
 站点清单不写死在这里，全部来自 ``scripts/sites.py``（唯一事实来源）。
@@ -29,8 +29,8 @@ from sites import (
     EXTENSIONS,
     FORBIDDEN_ENTRIES,
     FRAMEWORK_PACKAGE,
-    IWARA_ROUTE_PATHS,
     PROJECT_ROOT,
+    SITE_ROUTE_PATHS,
     SITES,
     SITES_BY_NAME,
     SUB_PACKAGES,
@@ -70,7 +70,7 @@ def check_imports(errors):
                 + ", ".join(str(p.relative_to(PROJECT_ROOT)) for p in bad)
             )
 
-    # 两个接口项目同级：谁都不许 import 对方（扩展由各自的宿主负责挂）。
+    # 各接口项目同级：谁都不许 import 对方（扩展由各自的宿主负责挂）。
     for site in SITES:
         allowed = {FRAMEWORK_PACKAGE, site.directory}
         for path in iter_py(site.directory):
@@ -134,6 +134,9 @@ from pixiv_bridge.config import Settings
 from pixiv_bridge.extensions import load_extension_specs
 {imports}
 
+#: 站点名 → 站点模块（由上面的 import 逐条拼出来，不写死某几个站点名）。
+SITE_MODULES = {{{module_map}}}
+
 def key(app):
     out = set()
     for r in app.routes:
@@ -149,8 +152,7 @@ settings = Settings.load(r'{root}')
 shell = key(create_bridge_app())
 apps = {{}}
 for site in {sites!r}:
-    module = {{'pixiv': pixiv_app, 'iwara': iwara_app}}[site]
-    apps[site] = key(module.create_app(settings))
+    apps[site] = key(SITE_MODULES[site].create_app(settings))
 
 result = {{
     'shell': len(shell),
@@ -167,8 +169,7 @@ for left in range(len(names)):
         result['shared'].extend(sorted(shared))
 
 for site in {sites!r}:
-    module = {{'pixiv': pixiv_app, 'iwara': iwara_app}}[site]
-    descriptor = module.SITE
+    descriptor = SITE_MODULES[site].SITE
     result['sites'][site] = {{
         'name': descriptor.name,
         'title': descriptor.title,
@@ -180,9 +181,9 @@ for site in {sites!r}:
     }}
 
 for ext, host in {extensions!r}.items():
-    module = {{'pixiv': pixiv_app, 'iwara': iwara_app}}[host]
     exts = load_extension_specs([ext], r'{root}')
-    result['extensions'][ext] = sorted(key(module.create_app(settings, extensions=exts)) - apps[host])
+    host_app = SITE_MODULES[host].create_app(settings, extensions=exts)
+    result['extensions'][ext] = sorted(key(host_app) - apps[host])
 
 print(json.dumps(result))
 """
@@ -193,10 +194,12 @@ def _probe_source():
     imports = "\n".join(
         f"import {site.directory}.app as {site.name}_app" for site in SITES
     )
+    module_map = ", ".join(f"{site.name!r}: {site.name}_app" for site in SITES)
     extensions = {ext.name: ext.host for ext in EXTENSIONS}
     return ROUTE_PROBE.format(
         root=PROJECT_ROOT,
         imports=imports,
+        module_map=module_map,
         sites=site_names,
         extensions=extensions,
     )
@@ -230,13 +233,16 @@ def check_apps(errors):
     for path in data["shared"]:
         errors.append(f"两个站点的路由串台了：{path}")
 
-    iwara_extra = set(data["routes"].get("iwara", ()))
-    if "iwara" in data["routes"] and iwara_extra != IWARA_ROUTE_PATHS:
-        errors.append(
-            "iwara 站点路由与预期不符：多出 "
-            f"{sorted(iwara_extra - IWARA_ROUTE_PATHS)}，缺少 "
-            f"{sorted(IWARA_ROUTE_PATHS - iwara_extra)}"
-        )
+    for name, expected_paths in SITE_ROUTE_PATHS.items():
+        if name not in data["routes"]:
+            continue
+        extra = set(data["routes"][name])
+        if extra != set(expected_paths):
+            errors.append(
+                f"{name} 站点路由与预期不符：多出 "
+                f"{sorted(extra - set(expected_paths))}，缺少 "
+                f"{sorted(set(expected_paths) - extra)}"
+            )
 
     for site in SITES:
         runtime = data["sites"][site.name]

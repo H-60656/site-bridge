@@ -3,7 +3,7 @@
 - 日期：2026-10-08
 - 触发需求（用户原话，m00001）："项目中存在错误布局，两个接口项目应该是同级的，错误修正后更新分享包；现在想抽象两个接口项目，方便后续实现其他接口项目"
 - 用户已确认的方案（m00066）：`depth=A`（彻底分层）+ `iwara_stack=只提供 iwara 接口`
-- 状态：待执行
+- 状态：**已完成**（2026-10-08 收尾，35 / 35，见第 7 节尾注与第 8 节实测）。第 12 节是同日追加的「根目录启动＝项目导航」；第 13 节是后续用本抽象落地的第三个站点 `asmr_one/`。
 
 ## 1. Goal
 
@@ -305,3 +305,36 @@ if __name__ == "__main__":
 - **分享包抽检**（解压到临时目录、**cwd 设为包根**，包内顶层是 `<包名>/`）：`iwara-api` 里 `python -m pixiv_bridge --check` → 无参非 TTY 直接选 iwara（唯一接口项目），七项全 OK（`iwara 网络 OK api.iwara.tv 可达（共 2 个视频）`、`iwara 登录 OK 匿名模式…`）→ exit 0；`pixiv-api` 里 `--list` → 只有 `1) pixiv`、扩展那行是 `（没有找到：扩展目录里需要有 extension.py）`、提示 `BRIDGE_SITE=pixiv` → exit 0；包内 `start.bat` 纯 ASCII 且含 `python -m pixiv_bridge`，包内没有根 `run.py`。
 - **`dist/` 重建**：`.venv\Scripts\python.exe scripts\make_share_packages.py`（无参）→ `pixiv-api` 59 文件 15.99 MB（压缩 5.82 MB）、`iwara-api` 43 / 0.32 MB（0.14）、`novel-extension` 17 / 0.32 MB、`iwara_web-extension` 8 / 0.17 MB、`pixiv-novel` 72 / 16.16 MB（5.88）、`iwara-iwara_web` 47 / 0.35 MB；`dist/` 下无旧 key 名 zip、无 `.stage/` 残留。
 - **仍未验证**：Docker 只做静态核对（本机守护进程没运行，`docker build` 未跑），与第 8 节同一限制。
+
+## 13. 后续追加：第三个站点 `asmr_one/`（抽象本身的验收）
+
+需求原文（m01648）："尝试做asmr-one的接口项目"；m01776 用户批准按 `Site` 契约搭骨架，m02454「继续」推进到收尾。
+
+这一节的价值不在于新增功能，而在于**用一次真实落地检验第 1 节的「新增站点成本」承诺**：写一个目录 + 在构建侧注册表加一条记录，框架零改动。实测结论：框架 `pixiv_bridge/` **没有为 asmr 改过一行**，改动全部落在新站点目录与三处构建/测试侧的写死假设上。
+
+### 13.1 新增的站点目录
+
+`asmr_one/` 共 10 个文件：`__init__.py`（docstring 第一段就是导航简介，与 iwara 同构；`__getattr__` 惰性导出）、`ech.py`、`config.py`、`client.py`、`routes/__init__.py`、`routes/works.py`、`app.py`、`envcheck.py`、`run.py`（三段式）、`requirements.txt`（`curl_cffi>=0.7` + `cffi>=1.16`）。
+
+- `app.py`：`SITE = Site(name="asmr_one", title="ASMR Bridge", nav_order=3, settings_class=AsmrSettings, checks=extra_checks, ...)`，**没有 `login_check`**（asmr.one 纯匿名可用）。
+- `routes/works.py` 七条 `/api/asmr/*`：`/works`、`/search`、`/work/{id}`、`/tracks/{id}`、`/cover/{id}`、`/stream`、`/auth`。
+- `config.py`：`ASMR_BRIDGE_ECH` 用 `_flag_or_default("ASMR_BRIDGE_ECH", True)` —— 与 iwara 相反，**不写这个变量就是开**（asmr 的 Cloudflare 边缘不带 ECH 会被拦），要关必须显式写 `=0`。
+- `envcheck.py`：三项 `asmr 依赖` / `asmr 网络` / `asmr ECH`；`ASMR_BRIDGE_ECH=0` 关掉后没有 ECH 那一项。
+- 与 iwara 同骨架：种子 IP 池 + `curl_cffi impersonate="chrome"` + DoH，全池轮询换 IP 重试。
+- 站点间禁止互相 import（`check_boundary.py` 会拦），所以 `asmr_one/ech.py` 是 `iwara/ech.py` 的**自足副本**。
+
+### 13.2 抽象承诺暴露出的三处写死假设（都已动态化）
+
+搭第三个站点时撞到的都是「两个」写死在代码里，而不是框架设计缺陷 —— 这正是这次落地的收获：
+
+1. `scripts/check_boundary.py`：`ROUTE_PROBE` 里写死的 `{'pixiv': pixiv_app, 'iwara': iwara_app}[...]` 与 `check_apps` 里只认 iwara 的路由特判 → 换成由 `_probe_source()` 生成的 `module_map` 与遍历 `SITE_ROUTE_PATHS`。
+2. `scripts/make_share_packages.py`：`validate_specs()` 里 `== 2` / `== 6` 两条硬编码 → 改成 `len(SITES)` / `len(SITES) + 4`；并新增 `asmr-api` 包。
+3. `tests/`：`test_bridge.py` 的 `NavigationTestCase` 与入口同构两处、`test_packaging.py` 的包数断言、`test_iwara.py` 的措辞断言，写死「两个接口项目 / 两个站点」→ 改为遍历 `pixiv_bridge.__main__` 的 `site_items()` / `extension_items()` 与 `scripts/sites.py` 的注册表。
+
+### 13.3 实测（2026-10-08 之后，Windows / Python 3.13）
+
+- **边界检查**：`python scripts/check_boundary.py` → pixiv 60（自带 54）、iwara 16（自带 10）、**asmr_one 13（自带 7）**、novel ↗pixiv +10、iwara_web ↗iwara +1 → `边界通过`。
+- **全量测试**：`python -m unittest discover -s tests` → **Ran 712 tests … OK (skipped=1)**，约 16 s。构成为 bridge 334 + iwara 199 + **asmr_one 134**（`tests/test_asmr_one.py`）+ packaging 45。
+- **打包自检**：`python scripts/make_share_packages.py --check` → **七个包**：`pixiv-api` 59、`iwara-api` 45、**`asmr-api` 43**、`novel-extension` 17、`iwara_web-extension` 8、`pixiv-novel` 72、`iwara-iwara_web` 49 → `分享包处理完成`。
+- **文档**：`README.md` / `INSTALL.md` / `DIRECT.md` / `.env.example` 四份同步为三站点（含新增 `ASMR_BRIDGE_ECH` / `ASMR_BRIDGE_ECH_CONFIG` / `ASMR_BRIDGE_ECH_IPS`）。
+- **仍未验证**：asmr.one 的真实取流只做过探活（`/api/tracks/{id}`、`/api/work/{id}`、`/api/works`、`/api/search/works`、`/api/auth/me` 的响应形状已核对并写进 `asmr_one/` 注释），未做长时间播放验证。

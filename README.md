@@ -4,7 +4,7 @@
 Pixiv 官方 App API（`app-api.pixiv.net`）调用方式（请求签名、OAuth 认证、全部端点），用 Python 重新实现的一个
 **自托管 HTTP 接口服务**。启动后，任何语言的代码通过普通 HTTP 请求即可调用 Pixiv 数据能力，无需处理签名、token 刷新、防盗链等细节。
 
-> 项目分四层：**`pixiv_bridge/`**（**框架**：启动、配置、环境自检、扩展机制、导航页与 `/api/health`；不含任何站点知识）、**`pixiv/`** 与 **`iwara/`**（两个**同级的接口项目**，各有一个同构的 `run.py` 入口：前者提供 Pixiv 接口，后者只提供 iwara.tv 接口）、**`novel/`** 与 **`iwara_web/`**（两个**扩展**：小说阅读器与 iwara 视频页面，没有自己的入口，把目录名写进配置就挂到对应站点上）。**新增一个站点** = 建一个与 `pixiv/`、`iwara/` 同级的目录（`app.py` 里按 `Site` 契约给出站点信息、自带检查与登录校验，`run.py` 只做三件事：`bootstrap()` → `from <站点>.app import SITE` → `pixiv_bridge.cli.main(site=SITE)`），框架一行都不用改；详见「附属项目（扩展）」与「新增一个接口项目」。
+> 项目分四层：**`pixiv_bridge/`**（**框架**：启动、配置、环境自检、扩展机制、导航页与 `/api/health`；不含任何站点知识）、**`pixiv/`**、**`iwara/`** 与 **`asmr_one/`**（三个**同级的接口项目**，各有一个同构的 `run.py` 入口：分别提供 Pixiv 接口、iwara.tv 接口、asmr.one 接口）、**`novel/`** 与 **`iwara_web/`**（两个**扩展**：小说阅读器与 iwara 视频页面，没有自己的入口，把目录名写进配置就挂到对应站点上）。**新增一个站点** = 建一个与它们同级的目录（`app.py` 里按 `Site` 契约给出站点信息、自带检查与登录校验，`run.py` 只做三件事：`bootstrap()` → `from <站点>.app import SITE` → `pixiv_bridge.cli.main(site=SITE)`），框架一行都不用改；详见「附属项目（扩展）」与「新增一个接口项目」。
 
 ## 特性
 
@@ -19,6 +19,7 @@ Pixiv 官方 App API（`app-api.pixiv.net`）调用方式（请求签名、OAuth
 - **阅读与下载都有账**：阅读历史（`data/history.jsonl`）、下载历史（`data/downloads.jsonl`，**按章节记**）、收藏台账（`data/bookmarks.jsonl`）都落在项目里；书架分「云端记录 / 下载记录 / 本地文件」三类，同名系列的章节可在书架里**一键合并导出**成一个 EPUB
 - **数据都在 `data/`**：token、阅读历史、下载记录、收藏台账、页面配置统一放在项目下的 `data/` 目录（老版本的 `tokens.json` / `history.jsonl` 首次启动自动搬过去），换机只需拷这一个目录
 - **可选的 iwara.tv 站点**（接口项目 `iwara/`，与 `pixiv/` 同级，用 `python iwara/run.py` 启动）：只提供 iwara 的视频浏览 / 搜索 / 详情 / 直链解析 / 缩略图（`/api/iwara/*`，不挂任何 Pixiv 路由），还自带一个**视频页面**（`http://127.0.0.1:8766/iwara`）：列表 / 搜索 / 筛选、点开详情看简介与标签、看相关视频、`<video>` 直接播（服务端代转字节并透传 `Range`，清晰度可切换）。直链是带签名的 MP4，浏览器里能直接播。用 `pixiv/run.py` 启动时这些地址是 404
+- **可选的 asmr.one 站点**（接口项目 `asmr_one/`，与 `pixiv/` 同级，用 `python asmr_one/run.py` 启动）：只提供 asmr.one 的作品浏览 / 关键词搜索 / 作品详情 / 音轨树 / 音频与封面代转（`/api/asmr/*`，不挂任何 Pixiv 路由），**匿名可用、不需要登录**。封面与音频字节一律由服务端代转（`/api/asmr/cover/{id}`、`/api/asmr/stream?url=...`），因为浏览器所在机器同样到不了那些 Cloudflare 边缘 IP。它和 iwara 一样自带 `curl_cffi` 客户端（种子 IP 池 + ECH），但**ECH 默认是开的**（asmr 的边缘 IP 在本机是 IP 级被阻断，不叠 ECH 基本不通；要关就写 `ASMR_BRIDGE_ECH=0`）。用 `pixiv/run.py` 启动时这些地址是 404
 - **OpenAPI 文档**：启动后访问 `http://127.0.0.1:8765/docs` 在线调试
 
 ## 原理
@@ -134,9 +135,12 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 
 # iwara + 视频页面：在 .env 里加一行 PIXIV_BRIDGE_EXTENSIONS=iwara_web
 # （`/iwara` 上多出视频页面；它调的是 iwara 的接口，所以要跟上面那条一起用）
+
+# 接口 + asmr.one（多了 `/api/asmr/*` 那几个接口；匿名可用，不需要 token）
+.venv/bin/python asmr_one/run.py
 ```
 
-项目分成四层，**站点与扩展依赖框架**、单向依赖不反过来（两个站点之间也互不依赖）。**两个接口项目各有一个同构的入口脚本**（`pixiv/run.py` 与 `iwara/run.py`）；小说阅读器与 iwara 视频页面都没有专属入口，它们作为扩展挂上去：
+项目分成四层，**站点与扩展依赖框架**、单向依赖不反过来（各站点之间也互不依赖）。**每个接口项目各有一个同构的入口脚本**（`pixiv/run.py`、`iwara/run.py` 与 `asmr_one/run.py`）；小说阅读器与 iwara 视频页面都没有专属入口，它们作为扩展挂上去：
 
 | 启动方式 | 提供什么 |
 | --- | --- |
@@ -145,8 +149,9 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 | `pixiv/run.py` + `PIXIV_BRIDGE_EXTENSIONS=novel` | 上面那些，再挂上小说阅读扩展（`novel`）：阅读器页面 `/novel` 与 `/api/history`、`/api/downloads`、`/api/bookmarks`、`/api/config`、`/api/library`（导航页上也会多出一段指向阅读器） |
 | `iwara/run.py` | iwara.tv 接口项目（`iwara/`）：**只有**那十个 `/api/iwara/*`（浏览 / 搜索 / 详情 / 相关 / 直链解析 / 代转播放 / 图片 / 缩略图 / 登录态 / 授权），外加 `/` 上的**导航页**；它不挂任何 Pixiv 路由 |
 | `iwara/run.py` + `PIXIV_BRIDGE_EXTENSIONS=iwara_web` | 上面那些，再挂上 iwara 视频页面扩展（`iwara_web`）：`/iwara` 上的播放页（浏览 / 搜索 / 播放 / 相关视频） |
+| `asmr_one/run.py` | asmr.one 接口项目（`asmr_one/`）：**只有**那七个 `/api/asmr/*`（作品列表 / 搜索 / 作品详情 / 音轨树 / 封面代转 / 音频代转 / 登录态），外加 `/` 上的**导航页**；它不挂任何 Pixiv 或 iwara 路由 |
 
-两个接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3 项 iwara 专属自检（见「环境检查说明」）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
+各接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3～4 项 iwara 专属自检（开了 `IWARA_BRIDGE_ECH=1` 才多出 ECH 那一项），`asmr_one/run.py` 追加 2～3 项 asmr 专属自检（默认就开 ECH，见「环境检查说明」）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`；要 asmr.one 就拷 `pixiv_bridge/` + `asmr_one/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
 
 首次运行输出示例：
 
@@ -165,7 +170,7 @@ INFO:     Uvicorn running on http://127.0.0.1:8765
 
 ### 环境检查说明
 
-每次启动前自动执行下面这些检查：框架给 4 项（`python` / `deps` / `files` / `port`），站点再把自己的追加进同一张表（Pixiv 是 1 项 `network` / `ech` / `proxy`，`iwara/run.py` 还多 3 项 iwara 专属，见下）：
+每次启动前自动执行下面这些检查：框架给 4 项（`python` / `deps` / `files` / `port`），站点再把自己的追加进同一张表（Pixiv 是 1 项 `network` / `ech` / `proxy`，`iwara/run.py` 还多 3～4 项 iwara 专属——开了 `IWARA_BRIDGE_ECH=1` 才多出那第 4 项；`asmr_one/run.py` 多 2～3 项 asmr 专属——`ASMR_BRIDGE_ECH` 默认开，所以默认 3 项。见下）：
 
 | 检查项 | 失败影响 | 说明 |
 | --- | --- | --- |
@@ -175,15 +180,26 @@ INFO:     Uvicorn running on http://127.0.0.1:8765
 | `port`（监听端口） | **中止启动**（`--check` 下只警告） | 提示换端口（`--port` 或 `PIXIV_BRIDGE_PORT`）。`--check` 只校验、不监听端口，所以端口被占时照常给出结论，真正启动时才中止 |
 | `network` / `ech` / `proxy`（Pixiv 域名连通性） | 仅警告，不中止 | 三选一：设置 `PIXIV_PROXY` 时真发一次经代理的请求（`proxy` 项）；开启 `PIXIV_BRIDGE_ECH=1` 时真发一次 ECH 请求（`ech` 项）；否则用内置 IP 池 + 无 SNI TLS 探测（`network` 项）。不可达时按当前模式给出改 ECH / 改无 SNI / 改代理的提示，ECH 被 RST 时会直接点明“当前网络在阻断 ECH 扩展” |
 
-校验登录态并退出（不启动服务，但**同样做上面全部 5 项**，其中 `port` 只警告）：`python pixiv/run.py --check`。`iwara` 入口是 `python iwara/run.py --check`，它在同一张表里追加 3 项：
+校验登录态并退出（不启动服务，但**同样做上面全部 5 项**，其中 `port` 只警告）：`python pixiv/run.py --check`。`iwara` 入口是 `python iwara/run.py --check`，它在同一张表里追加 3 项（开了 `IWARA_BRIDGE_ECH=1` 时是 4 项）：
 
 | iwara 检查项 | 失败影响 | 说明 |
 | --- | --- | --- |
 | `iwara 依赖` | 仅警告，不中止 | 真 `import curl_cffi`（不看包在不在，看能不能用——ABI 不匹配也照样失败），附版本号 |
 | `iwara 网络` | 仅警告，不中止 | 真发一次 `GET /videos?limit=1`，确认 `api.iwara.tv` 可达。只探 TCP 不够——真正的坎是 Cloudflare 挑战，必须真发一次请求 |
+| `iwara ECH` | 仅警告，不中止 | **仅当 `IWARA_BRIDGE_ECH=1` 时才有这一项**。真发一次 `GET /cdn-cgi/trace`，看回显里是不是 `sni=encrypted`（明文是 `sni=plaintext`）；`curl_cffi` 的 libcurl 不支持 ECH 时提示换版本或关掉开关 |
 | `iwara 登录` | 仅警告，不中止 | 没配 token 就报「匿名模式」（公开视频含 R18 照常看），配了就真刷一次 access token 并读用户名；失败提示重新 `python iwara/get_token.py` |
 
-这三项**故意不在致命清单里**：iwara 依赖缺失或 API 不可达时入口仍能启动（图片/其它接口照用），所以只提示不中止。
+这四项**故意不在致命清单里**：iwara 依赖缺失或 API 不可达时入口仍能启动（图片/其它接口照用），所以只提示不中止。
+
+`asmr_one` 入口是 `python asmr_one/run.py --check`，它在同一张表里追加 3 项（`ASMR_BRIDGE_ECH` 默认就是开的，所以默认就有 ECH 那一项；关掉后是 2 项）：
+
+| asmr 检查项 | 失败影响 | 说明 |
+| --- | --- | --- |
+| `asmr 依赖` | 仅警告，不中止 | 真 `import curl_cffi`（与 iwara 同理，ABI 不匹配也照样失败），附版本号；手动补 `pip install -r asmr_one/requirements.txt` |
+| `asmr 网络` | 仅警告，不中止 | 真发一次 `GET /api/works?page=1`，确认 `api.asmr.one` 可达并能拿到 JSON。只探 TCP 不够——这里的坎是「IP 被 RST + 不带 ECH 也会被拦」，要整条「借道 IP 池 + impersonate + ECH」链路通才算过 |
+| `asmr ECH` | 仅警告，不中止 | **默认就有（`ASMR_BRIDGE_ECH` 默认开）；写成 `ASMR_BRIDGE_ECH=0` 关掉 ECH 后才没有这一项**。真发一次 `GET /cdn-cgi/trace`，看回显里是不是 `sni=encrypted`（明文是 `sni=plaintext`） |
+
+这三项也**不在致命清单里**：asmr 依赖缺失或 API 不可达时入口仍能启动，接口失败只返回 502。另外 asmr **没有登录自检**——它公开浏览与播放匿名就够，要登录的端点（标签 / 用户收藏）本站不暴露。
 
 ### 获取 refresh_token（三种方式任选）
 
@@ -285,9 +301,21 @@ pixiv-bridge/
 │   ├── client.py       iwara 客户端：种子 IP 池 + 浏览器指纹 TLS + 直链解析 + Range 探测
 │   ├── tokens.py        登录态落盘（data/iwara_tokens.json，与 pixiv 的 tokens.json 分开）
 │   ├── get_token.py     可选：交互式登录一次（邮箱 + 密码），解锁订阅内容
-│   ├── envcheck.py      iwara 专属自检（依赖 / api.iwara.tv / 登录态），经 Site.checks 追加到入口检查表
+│   ├── envcheck.py      iwara 专属自检（依赖 / api.iwara.tv / ECH / 登录态），经 Site.checks 追加到入口检查表
+│   ├── ech.py           iwara 用的 ECH 配置获取（DoH 取 CF 的 ECHConfigList，走 libcurl 的 CURLOPT_ECH）
+│   ├── config.py        iwara 的配置：`IwaraSettings(Settings)` 加了 ECH 三个开关（`IWARA_BRIDGE_ECH*`）
 │   ├── requirements.txt 本站点额外依赖（curl_cffi，刻意不放进根清单）
 │   └── routes/         本站点路由（videos 接口）
+├── asmr_one/                           asmr.one 接口项目（与 pixiv/ 同级；入口 asmr_one/run.py）
+│   ├── __init__.py     说明本站点依赖框架；对外入口是 app.SITE（惰性导出，避免直接拖入 curl_cffi）
+│   ├── run.py          入口（bootstrap 先装 curl_cffi，再交给框架 cli）
+│   ├── app.py          站点声明：Site 契约 + create_app()，把 AsmrClient 挂到 app.state（nav_order=3）
+│   ├── client.py       asmr 客户端：借道 Cloudflare IP 池 + ECH + impersonate + DoH；无登录态
+│   ├── envcheck.py      asmr 专属自检（依赖 / api.asmr.one / ECH），经 Site.checks 追加到入口检查表
+│   ├── ech.py           asmr 用的 ECH 配置获取（iwara/ech.py 的自足副本：站点间不许互相 import）
+│   ├── config.py        asmr 的配置：`AsmrSettings(Settings)` 加了 ECH 三个开关（`ASMR_BRIDGE_ECH*`，ECH 默认开）
+│   ├── requirements.txt 本站点额外依赖（curl_cffi + cffi，刻意不放进根清单）
+│   └── routes/         本站点路由（works 接口：`/api/asmr/*`）
 ├── novel/                              小说阅读扩展（挂在 pixiv/ 站点上；扩展没有自己的入口）
 │   ├── __init__.py  说明本扩展依赖框架与宿主站点；对外入口是 app.create_app
 │   ├── extension.py    扩展入口（固定文件名）：导出本扩展的路由与状态工厂
@@ -305,7 +333,7 @@ pixiv-bridge/
 ├── pixiv_bridge/                       框架（启动 / 配置 / 环境自检 / 扩展机制 / 导航页；不含任何站点知识）
 │   ├── __main__.py     项目导航：列出接口项目与扩展、选一个再启动（`python -m pixiv_bridge` / `--list`）
 │   ├── site.py         Site 契约（站点交给框架的东西：入口工厂、标题、配置类、自检钩子）
-│   ├── cli.py          命令行入口（两个站点共用：--host / --port / --reload / --check / --env；在这里按配置挂扩展）
+│   ├── cli.py          命令行入口（各站点共用：--host / --port / --reload / --check / --env；在这里按配置挂扩展）
 │   ├── server.py       FastAPI 应用组装（create_bridge_app：lifespan + 异常处理 + 健康检查 + 导航页 + 站点/扩展路由）
 │   ├── errors.py       统一异常处理（站点抛的异常只认 status / reason / message 三个属性）
 │   ├── config.py       框架配置（.env / 环境变量 / data 目录与旧数据迁移）
@@ -330,7 +358,7 @@ pixiv-bridge/
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
-├── tests/                              单元测试（477 项：框架与站点 334 + iwara 98 + 打包 45）
+├── tests/                              单元测试（712 项：框架与站点 334 + iwara 199 + asmr_one 134 + 打包 45）
 ├── openssl-libs/                       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -338,7 +366,7 @@ pixiv-bridge/
 └── scripts/            自检与打包脚本
     ├── sites.py             构建侧的站点/扩展登记表（唯一事实来源：布局、标题、自带资产、扩展宿主）
     ├── check_boundary.py    整理自检（依赖方向 + 出入口布局 + 各站点/扩展的路由差集 + 注册表↔运行时一致性）
-    └── make_share_packages.py  一键生成六个分享包（接口包 / 扩展包 / 组合包）
+    └── make_share_packages.py  一键生成七个分享包（接口包 / 扩展包 / 组合包）
 ```
 
 ## 配置（环境变量 / .env）
@@ -369,10 +397,17 @@ pixiv-bridge/
 | `PIXIV_BRIDGE_EXTENSIONS` | 空 | 要挂载的**附属项目（扩展）**目录，逗号分隔、按顺序挂载；相对路径按项目根算。留空＝只跑站点自己的接口。写 `novel` 就会去找 `novel/extension.py` 并把小说阅读器挂上，写 `iwara_web` 就会挂上 iwara 的视频页面，见「附属项目（扩展）」 |
 | `PIXIV_BRIDGE_NAV_LINKS` | 空 | 额外列进导航页「其它入口」段的链接，写成 `标题=地址`，多项用逗号 / 分号 / 换行分隔（如 `iwara 视频=http://127.0.0.1:8766/`）。只写地址时拿地址当标题 |
 | `PIXIV_PROXY`（别名 `PIXIV_BRIDGE_PROXY`） | 空 | 如 `http://127.0.0.1:7890`；设置后所有 Pixiv 请求（API / OAuth / 图片 / 自检）都走代理，**优先于 ECH 与 SNI 绕过**，见「代理通道」 |
+| `IWARA_BRIDGE_ECH` | 关 | `1/true/yes/on` 给 iwara 开 ECH（加密 SNI），见「iwara.tv」；只影响 `api` / `www` 这两个在 Cloudflare 后的主机 |
+| `IWARA_BRIDGE_ECH_CONFIG` | 空 | 自定义 iwara 用的 ECHConfigList（base64）；留空走 DoH（`dns.alidns.com` → `223.5.5.5`），失败用内置默认值 |
+| `IWARA_BRIDGE_ECH_IPS` | 空 | 逗号分隔，给 ECH 主机额外追加的入口 IP（排在内置种子之后） |
+| `IWARA_REFRESH_TOKEN` | 空 | iwara 的 refresh token（可选）；也可以跑 `python iwara/get_token.py` 落盘到 `data/iwara_tokens.json` |
+| `ASMR_BRIDGE_ECH` | **开** | `0/false/no/off` 给 asmr 关掉 ECH（加密 SNI）。**与 iwara 相反：asmr.one 不写就是开**，因为 `api.asmr.one` 的 Cloudflare 边缘不带 ECH 会被拦；见「asmr.one」 |
+| `ASMR_BRIDGE_ECH_CONFIG` | 空 | 自定义 asmr 用的 ECHConfigList（base64）；留空走 DoH（`dns.alidns.com` → `223.5.5.5`），失败用内置默认值 |
+| `ASMR_BRIDGE_ECH_IPS` | 空 | 逗号分隔，给 asmr 的 ECH 主机额外追加的入口 IP（排在内置种子之后） |
 
 ## 附属项目（扩展）
 
-项目分四层，但**入口只有两个**（`pixiv/run.py` 与 `iwara/run.py`：两个同级接口项目，命令行完全一样）。小说阅读器（`novel`）与 iwara 视频页面（`iwara_web`）都不带专属入口脚本，它们作为**扩展**挂在各自的宿主站点上：把扩展目录名写进配置，站点启动时自己去该目录找固定名字的入口文件 `extension.py`。
+项目分四层，但**入口只有三个**（`pixiv/run.py`、`iwara/run.py` 与 `asmr_one/run.py`：三个同级接口项目，命令行完全一样）。小说阅读器（`novel`）与 iwara 视频页面（`iwara_web`）都不带专属入口脚本，它们作为**扩展**挂在各自的宿主站点上：把扩展目录名写进配置，站点启动时自己去该目录找固定名字的入口文件 `extension.py`。
 
 ```
 PIXIV_BRIDGE_EXTENSIONS=novel        # 相对路径按项目根算
@@ -408,14 +443,14 @@ PIXIV_BRIDGE_EXTENSIONS=novel        # 相对路径按项目根算
 
 ### 要点
 
-- **框架不认识任何具体扩展或站点**：`pixiv_bridge/server.py` 的 `create_bridge_app()` 只按传入的站点路由与扩展对象组装，不读配置、不 import 任何站点（保证纯接口的行为不随 `.env` 漂移）；读配置加载扩展发生在 `pixiv_bridge/cli.py` 里，即两个 `run.py` 走的那条路。
+- **框架不认识任何具体扩展或站点**：`pixiv_bridge/server.py` 的 `create_bridge_app()` 只按传入的站点路由与扩展对象组装，不读配置、不 import 任何站点（保证纯接口的行为不随 `.env` 漂移）；读配置加载扩展发生在 `pixiv_bridge/cli.py` 里，即各 `run.py` 走的那条路。
 - **扩展目录名写错不会静默降级**：找不到 `extension.py`、或入口里没定义 `EXTENSION_ROUTERS`，都会在启动前打印一条可读的错误并**以退出码 1 中止**，不会半启动。
-- `iwara` 不参与这套机制，它保留自己的入口 `iwara/run.py`（原因是它需要多装一个编译依赖 `curl_cffi`，见「iwara.tv」一节）。
+- `iwara` 与 `asmr_one` 不参与这套机制，它们各自保留入口 `iwara/run.py`、`asmr_one/run.py`（原因是都需要多装一个编译依赖 `curl_cffi`，见「iwara.tv」与「asmr.one」两节）。
 - 命令行上用 `--env` 指定别的目录（`python pixiv/run.py --env /path/to/other`）时，扩展相对路径就按那个目录算。
 
 ## 新增一个接口项目
 
-`pixiv/` 与 `iwara/` 就是两个现成实例，照着抄即可。框架只提供「启动 + 配置 + 环境自检 + 扩展机制 + 导航页 + `/api/health`」，路由和站点常量都由站点自己提供；**框架里没有一行代码知道站点叫什么**。
+`pixiv/`、`iwara/` 与 `asmr_one/` 就是三个现成实例，照着抄即可。框架只提供「启动 + 配置 + 环境自检 + 扩展机制 + 导航页 + `/api/health`」，路由和站点常量都由站点自己提供；**框架里没有一行代码知道站点叫什么**。
 
 一个站点目录最少三样东西：
 
@@ -426,7 +461,7 @@ mysite/
 └── run.py           入口：bootstrap → import SITE → main(site=SITE)
 ```
 
-`run.py` 是固定三段（两个站点一模一样）：
+`run.py` 是固定三段（各站点一模一样）：
 
 ```python
 import sys
@@ -444,7 +479,7 @@ from mysite.app import SITE        # noqa: E402
 main(site=SITE)
 ```
 
-> 站点自己有额外依赖时（iwara 要 `curl_cffi`），把 `bootstrap()` 换成 `bootstrap(partial(ensure_packages, ("curl_cffi",), HERE / "requirements.txt"))`，并且**必须在 import 站点模块之前**——站点客户端在 import 时就要用那个库。
+> 站点自己有额外依赖时（iwara 与 asmr_one 都要 `curl_cffi`），把 `bootstrap()` 换成 `bootstrap(partial(ensure_packages, ("curl_cffi",), HERE / "requirements.txt"))`，并且**必须在 import 站点模块之前**——站点客户端在 import 时就要用那个库。
 
 `app.py` 里声明一个 `Site`（`pixiv_bridge/site.py`，冻结 dataclass）：
 
@@ -454,7 +489,7 @@ main(site=SITE)
 | `directory` | 站点目录（`Path(__file__).resolve().parent`）；`--check` 用它作为站点必需文件的基准 |
 | `create_app` | `create_app(settings, extensions=()) -> FastAPI`，内部调 `pixiv_bridge.server.create_bridge_app(...)` 组装 |
 | `settings_class` | 站点配置类（默认即框架 `Settings`；Pixiv 用子类 `PixivSettings` 多带 token / ECH 等字段） |
-| `required_files` | 站点目录里必须存在的文件（一般是 `("run.py",)`；iwara 还带 `requirements.txt`） |
+| `required_files` | 站点目录里必须存在的文件（`pixiv` 是 `("run.py",)`；iwara 与 asmr_one 还带 `requirements.txt`） |
 | `checks` | `checks(settings) -> list[CheckResult]`，站点专属自检项，追加到 `--check` 的同一张表里 |
 | `login_check` | `login_check(settings) -> int`，`--check` 的退出码（校验登录态；允许匿名时可以返回 0） |
 | `network_hint` | `network_hint(results, settings) -> None`，网络项失败时打印的排查提示 |
@@ -660,6 +695,46 @@ iwara 是另一个站点，与 Pixiv 无关，由独立的接口项目 `iwara/` 
 
 > 这三点属于**链路层**问题，不是 iwara API 本身的特性。它们和 Pixiv 那边对付 DNS 污染 / SNI 阻断 / ECH 阻断用的是同一套思路（分层定位 → 逐层选手段），完整方法论见 **[DIRECT.md](DIRECT.md)**。
 
+#### iwara 的 ECH（可选，`IWARA_BRIDGE_ECH=1`）
+
+iwara 与 Pixiv 一样支持 ECH（加密 SNI），但**两者的实现完全不同**：Pixiv 用 ctypes 调 OpenSSL 4.0+ 的 `SSL_set1_ech_config_list`（所以要自带 `openssl-libs/`），iwara 本来就用 `curl_cffi`，直接把配置交给 libcurl 的 `CURLOPT_ECH` 即可，**不需要任何动态库，也不需要多装依赖**。
+
+```bash
+IWARA_BRIDGE_ECH=1        # 写进 .env 即可
+```
+
+三条实测前提决定了它的适用范围：
+
+1. **只有 Cloudflare 后面的主机能用。** 实测证书：`api.iwara.tv` / `www.iwara.tv` / `iwara.tv` 拿的是 `Google Trust` / `WE1`、SAN `iwara.tv,*.iwara.tv`（Cloudflare 边缘，ECH 可用）；而 `files` / `filesq` / `i.iwara.tv` 与 `SEED_IPS` 那一串花名主机拿的是 **Let's Encrypt**、SAN `*.iwara.tv,*.iwara.ai,*.iwara.moe` —— 它们**不在 Cloudflare 后面**，对它们开 ECH 只会得到 `curl: (60) SSL certificate problem: Hostname mismatch`。所以 `client.py` 里有一张 `ECH_HOSTS` 白名单（就是 `api` / `www` / `iwara.tv`），视频 CDN 那一侧保持现状。
+2. **iwara 自己的 DNS 里没有 ECH 配置。** 各主机的 HTTPS（type 65）记录只有 `alpn="h2" ipv4hint=...`，没有 `ech=` 字段，所以用的是 Cloudflare 那份 **zone 无关**的公钥（`cloudflare-ech.com`），和 Pixiv 用的是同一份，与站点无关。
+3. **取配置走自己的 DoH。** libcurl 自带的 `CURLOPT_DOH_URL` 在这台机全失败（curl 6 / SSL 35），所以 `iwara/ech.py` 用 httpx 依次问 `https://dns.alidns.com/resolve` → `https://223.5.5.5/resolve`（type=65），全失败时退回内置默认值（会过期，届时换 IP 或配代理）。注意这与查 A 记录的 `DOH_ENDPOINTS` 是两组端点。
+
+判据是 `https://www.iwara.tv/cdn-cgi/trace` 的回显：明文是 `sni=plaintext`，ECH 生效是 **`sni=encrypted`**。开了开关后启动自检会多一项 `iwara ECH`，真发一次这个请求来判定；`curl_cffi` 的 libcurl 没编 ECH（拿不到 `CurlOpt.ECH`）时会明确提示，此时关掉开关即可，其余功能不受影响。
+
+> **ECH 与浏览器指纹不冲突**：`impersonate="chrome"` 是每次请求的参数，而 ECH 配置建会话时塞进 `curl_options`，libcurl 每次请求都会重新下发，两者叠加实测能正常取到 `200 JSON`。也就是说 ECH 不是为了绕过 Cloudflare 挑战（那是指纹的活），它只是让 SNI 不再明文暴露。
+
+### asmr.one（**仅 `asmr_one/run.py` 提供**）
+
+asmr.one 是第三个站点，与 Pixiv、iwara 都无关，由独立的接口项目 `asmr_one/` 提供；用 `pixiv/run.py` 或 `iwara/run.py` 启动时这些地址都返回 **404**。它是**纯匿名**的：只要能连上，不用登录、不用 token 就能浏览、搜索、播放（本站也没有暴露任何需要登录的端点）。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/asmr/works?page=` | 作品列表（一页 20 条）。asmr 的上游**不接受任何排序参数**（`sort`/`order` 一律 400），所以这里只给分页，不给排序 |
+| GET | `/api/asmr/search?query=&page=` | 关键词搜索。走的是上游 `/api/search/works` —— `/api/works?keyword=` 那个 keyword **不生效**（返回同一份全量列表） |
+| GET | `/api/asmr/work/{work_id}` | 作品详情（上游 36 个键原样透传，另给封面补上代转地址） |
+| GET | `/api/asmr/tracks/{work_id}?flat=` | 音轨（文件）列表。上游是嵌套树（folder 套 folder，叶子是 audio），默认**展平**成一列文件并保留每个文件的文件夹路径；`flat=false` 时按 `{hash, folders}` 的形状原样返回叶子 |
+| GET | `/api/asmr/cover/{work_id}?type=` | 作品封面代转（`type`: `main` / `sam` / `240x240`，上游给的是 webp） |
+| GET | `/api/asmr/stream?url=` | 代转音频字节并透传 `Range`（原样转发 `Range` / `If-Range`，返回上游的 206 与 `Content-Range`）。只允许 asmr 媒体主机（`raw.kiko-play-niptan.one`） |
+| GET | `/api/asmr/auth` | 登录态诊断：`{configured, authenticated, anonymous, ech, error}`。本入口只报匿名可用与链路是否通，`anonymous` 永远是 `true` |
+
+> **为什么封面和音频必须服务端代转**：浏览器所在机器同样到不了 `api.asmr.one` 与 `raw.kiko-play-niptan.one`（同样的 Cloudflare 边缘 IP 阻断），直链拿过去也加载不出来，所以图片与音频字节一律由服务端代转（`/api/asmr/cover/...`、`/api/asmr/stream?url=...`）。
+
+关于 asmr 的实现说明（都来自实测）：
+
+1. **链路和 iwara 是同一副骨架**：Cloudflare 边缘 + IP 阻断，所以要**种子 IP 池 + 浏览器指纹（`curl_cffi` 的 `impersonate`）+ DoH 补候选**，视频/音频 CDN 边缘同样按内容路由、同一份内容钉到池里任一可用 IP 都能取到，所以也是全池轮询换 IP 重试。
+2. **但 ECH 默认是开的**（和 iwara 正相反）。`asmr_one/config.py` 里 `ASMR_BRIDGE_ECH` 用 `_flag_or_default(..., True)`：**不写这个变量就是开**，要关必须显式写 `ASMR_BRIDGE_ECH=0`（`0/false/no/off`）。原因和 iwara 一样——不带 ECH 的 SNI 在这类网络下会被拦。ECH 三个开关见上面的配置表。
+3. **站点自带一份 `ech.py`**（`iwara/ech.py` 的自足副本）。站点之间**不许互相 import**（框架的边界检查会拦），所以需要同一份逻辑就各留一份，不去依赖别的站点目录。
+
 ## 调用示例
 
 ### curl
@@ -748,29 +823,29 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 - `GET /api/config` 多返回两个字段：`warnings`（上面那些提示）与 `writable`（真写一个探针文件判断数据目录能不能写，`{"ok": bool, "dir": "...", "reason": "..."}`），页面在保存前就能提示；
 - 跨文件系统的 `os.replace`（安卓 `/sdcard` 的 FUSE 就会这样，报 `EXDEV`）不再白等重试，直接退回「原地覆盖写」。
 
-还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，框架与站点的用例应全绿（iwara 的 98 项会跳过，见下）。
+还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，框架与站点的用例应全绿（iwara 的 199 项会跳过，见下）。
 > **安卓 / Termux**：请把项目放在 Termux 家目录里（例如 `~/pixiv-bridge`），不要把数据目录指到 `/sdcard` 下的路径。Termux 上依赖会自动换成纯 Python 的 `requirements-termux.txt`（见 INSTALL.md，pydantic 1.x 与 2.x 都支持），与这条路径限制无关。
 
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 477 项应全绿（框架与站点 334 + iwara 98 + 打包 45）
+python -m unittest discover -s tests       # 712 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + 打包 45）
 python scripts/check_boundary.py           # 拆分边界自检
 python scripts/make_share_packages.py --check   # 分享包内容自检（不写 zip）
 ```
 
 `scripts/check_boundary.py` 做四件事：用 AST 扫依赖方向与出入口布局，再实际建一次应用对比路由，最后拿构建侧登记表与运行时对账。
 
-1. `pixiv_bridge/` 是纯框架：里面没有任何模块 `import pixiv` / `import iwara` / `import novel` / `import iwara_web`——依赖是单向的，框架不认识任何站点与扩展；
-2. 站点只许 import 框架和自己（**两个站点互不依赖**，`iwara` 不许 import `pixiv`）；扩展只许 import 框架、自己和宿主站点；
-3. 出入口布局成立：`pixiv/run.py` 与 `iwara/run.py` 两个接口入口都在且同级，`novel/run.py`、`iwara_web/run.py`、根 `run.py` **都不存在**（两个扩展由扩展机制启用），且 `novel/extension.py`、`iwara_web/extension.py` 两个扩展入口存在；
-4. 路由对账：先建框架外壳（只有 `/api/health` 与导航页），再建各站点应用与「挂上扩展」的应用，断言 —— `iwara` 比外壳多出的恰好是那 10 条 `/api/iwara/*`（多一条少一条都算越界）、`pixiv` 与 `iwara` 的路由**互不相交**（`pixiv` 上没有任何 `/api/iwara`，`iwara` 上没有任何 Pixiv 接口）、每个扩展比宿主多出的恰好是它声明的那些路径；同时比对 `scripts/sites.py` 的登记与运行时 `SITE` 的 name / title / version / directory / required_files 一致。
+1. `pixiv_bridge/` 是纯框架：里面没有任何模块 `import pixiv` / `import iwara` / `import asmr_one` / `import novel` / `import iwara_web`——依赖是单向的，框架不认识任何站点与扩展；
+2. 站点只许 import 框架和自己（**各站点互不依赖**，`iwara` 不许 import `pixiv`，`asmr_one` 谁都不许 import）；扩展只许 import 框架、自己和宿主站点；
+3. 出入口布局成立：`pixiv/run.py`、`iwara/run.py` 与 `asmr_one/run.py` 三个接口入口都在且同级，`novel/run.py`、`iwara_web/run.py`、根 `run.py` **都不存在**（两个扩展由扩展机制启用），且 `novel/extension.py`、`iwara_web/extension.py` 两个扩展入口存在；
+4. 路由对账：先建框架外壳（只有 `/api/health` 与导航页），再建各站点应用与「挂上扩展」的应用，断言 —— `iwara` 比外壳多出的恰好是那 10 条 `/api/iwara/*`、`asmr_one` 比外壳多出的恰好是那 7 条 `/api/asmr/*`（多一条少一条都算越界）、各站点的路由**互不相交**（`pixiv` 上没有任何 `/api/iwara` 或 `/api/asmr`，`iwara` / `asmr_one` 上没有任何 Pixiv 接口）、每个扩展比宿主多出的恰好是它声明的那些路径；同时比对 `scripts/sites.py` 的登记与运行时 `SITE` 的 name / title / version / directory / required_files 一致。
 
 改了 imports、挪了路由或动了入口脚本后跑一下它，比等到运行时才 404 省事。测试给 `novel` 那一层的用例统一走 helper（`tests/test_bridge.py`），因为三台账 / 配置 / 书架 / 阅读器页面现在都由扩展挂载，用框架外壳或 `pixiv.app.create_app` 打这些路径会 404。
 
-`iwara` 的用例在 `tests/test_iwara.py`（98 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求（`--check` 那三项也是把 `IwaraClient` 整个换掉再断言）。换 token 那一层也不例外：把真正发请求的 `_call_with_ip_retry` 换成「按队列吐假响应」，就能让 `refresh_access()` 的请求形状（POST `/user/token`、空 body、refresh token 放 `authorization` 头）和 `request()` 收到 403 后的那次强制重放真实跑一遍，不需要账号。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 98 项会**整片跳过**（显示 `OK (skipped=98)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
+`iwara` 的用例在 `tests/test_iwara.py`（199 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求（`--check` 那几项也是把 `IwaraClient` 整个换掉再断言）。换 token 那一层也不例外：把真正发请求的 `_call_with_ip_retry` 换成「按队列吐假响应」，就能让 `refresh_access()` 的请求形状（POST `/user/token`、空 body、refresh token 放 `authorization` 头）和 `request()` 收到 403 后的那次强制重放真实跑一遍，不需要账号。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 199 项会**整片跳过**（显示 `OK (skipped=199)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
 
-分享包脚本的用例在 `tests/test_packaging.py`（45 项），同样全部离线、且**不写真实 `dist/`**（用 `patch.object(packaging, "DIST_DIR", 临时目录)` 顶掉）。它盯四类回归：包清单本身（六个包、key 与 zip 名唯一、**每个包里声明的每条目录/文件都真的在盘上**——目录被改名时测试先炸，而不是等打出来的包缺东西）、`validate_specs()` 的结构约束（接口包必须带框架与**恰好一个**站点、扩展包不带站点、组合包的扩展宿主必须也在包里、六个包恰好覆盖所有站点与扩展）、铺包逻辑（扩展包只带自己、自动跳过 `__pycache__` / `.pyc` / `data/`、缺内容时报 `SystemExit` 并指名道姓）、以及 zip 回读（条目都在同名根文件夹下、根有 `README.md`、包内 `<站点>/run.py` 存在、`inspect_zip` 能认出字节码与私密数据）。脚本不在任何包里（`scripts/` 没有 `__init__.py`），所以测试用 `importlib` 按路径加载；注意脚本头有 `from __future__ import annotations`，加载时必须**先**把模块登记进 `sys.modules` 再 `exec_module`，否则 dataclasses 解析字符串注解时会去 `sys.modules` 里找一个还不存在的模块，报 `AttributeError: 'NoneType' object has no attribute '__dict__'`。
+分享包脚本的用例在 `tests/test_packaging.py`（45 项），同样全部离线、且**不写真实 `dist/`**（用 `patch.object(packaging, "DIST_DIR", 临时目录)` 顶掉）。它盯四类回归：包清单本身（**包数跟着 `scripts/sites.py` 的登记表走**、key 与 zip 名唯一、**每个包里声明的每条目录/文件都真的在盘上**——目录被改名时测试先炸，而不是等打出来的包缺东西）、`validate_specs()` 的结构约束（接口包必须带框架与**恰好一个**站点、扩展包不带站点、组合包的扩展宿主必须也在包里、包清单恰好覆盖所有站点与扩展）、铺包逻辑（扩展包只带自己、自动跳过 `__pycache__` / `.pyc` / `data/`、缺内容时报 `SystemExit` 并指名道姓）、以及 zip 回读（条目都在同名根文件夹下、根有 `README.md`、包内 `<站点>/run.py` 存在、`inspect_zip` 能认出字节码与私密数据）。脚本不在任何包里（`scripts/` 没有 `__init__.py`），所以测试用 `importlib` 按路径加载；注意脚本头有 `from __future__ import annotations`，加载时必须**先**把模块登记进 `sys.modules` 再 `exec_module`，否则 dataclasses 解析字符串注解时会去 `sys.modules` 里找一个还不存在的模块，报 `AttributeError: 'NoneType' object has no attribute '__dict__'`。
 
 ## 打包与移植（换机 / 离线部署）
 
@@ -778,10 +853,10 @@ python scripts/make_share_packages.py --check   # 分享包内容自检（不写
 
 ### 一键生成分享包（推荐）
 
-项目现在是四层（框架 + 两个同级接口项目 + 两个扩展），按用途拆成六个分享包：
+项目现在是四层（框架 + 三个同级接口项目 + 两个扩展），按用途拆成七个分享包：
 
 ```bash
-python scripts/make_share_packages.py            # 六个包全做，写进 dist/
+python scripts/make_share_packages.py            # 七个包全做，写进 dist/
 python scripts/make_share_packages.py --list     # 只列有哪些包
 python scripts/make_share_packages.py iwara-api  # 只做一个（按 key 或 zip 名）
 python scripts/make_share_packages.py --check    # 只自检内容、不写 zip
@@ -790,7 +865,8 @@ python scripts/make_share_packages.py --check    # 只自检内容、不写 zip
 | key | 压缩包 | 里面是什么 | 怎么用 |
 | --- | --- | --- | --- |
 | `pixiv-api` | `pixiv-api.zip` | Pixiv 接口项目 + 框架（含 `pixiv/`、`openssl-libs/`、`examples/`、启动脚本） | 解压后在目录里 `python pixiv/run.py` |
-| `iwara-api` | `iwara-api.zip` | 只有 iwara 接口项目 + 框架（`iwara/`，**不带 `pixiv/`、不带 `openssl-libs/`**） | 解压后 `python iwara/run.py`（iwara 不需要 ECH 那套直连库） |
+| `iwara-api` | `iwara-api.zip` | 只有 iwara 接口项目 + 框架（`iwara/`，**不带 `pixiv/`、不带 `openssl-libs/`**） | 解压后 `python iwara/run.py`（iwara 的 ECH 走 `curl_cffi` 的 libcurl，不需要那套 OpenSSL 动态库） |
+| `asmr-api` | `asmr-api.zip` | 只有 asmr 接口项目 + 框架（`asmr_one/`，**不带 `pixiv/` / `iwara/`、不带 `openssl-libs/`**） | 解压后 `python asmr_one/run.py`（asmr 的 ECH 同样走 `curl_cffi` 的 libcurl；不需要 token） |
 | `novel-extension` | `novel-extension.zip` | 小说阅读器扩展（`novel/`） | **不能单独启动**：把包内 `novel/` 拷进 Pixiv 接口项目根，`.env` 写 `PIXIV_BRIDGE_EXTENSIONS=novel` |
 | `iwara_web-extension` | `iwara_web-extension.zip` | iwara 视频页面扩展（`iwara_web/`） | **不能单独启动**：把包内 `iwara_web/` 拷进 `iwara-api` 项目根，`.env` 写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`（要配 `iwara/run.py` 入口） |
 | `pixiv-novel` | `pixiv-novel.zip` | Pixiv 接口 + 阅读器，已配好 | 解压后在目录里 `python pixiv/run.py`，`.env` 写 `PIXIV_BRIDGE_EXTENSIONS=novel` |

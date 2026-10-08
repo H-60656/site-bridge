@@ -56,7 +56,7 @@ class SiteInfo:
         return f"python {self.directory}{separator}run.py"
 
 
-#: 两个接口项目：同级、互不挂载，各自只依赖框架包。
+#: 接口项目：同级、互不挂载，各自只依赖框架包。
 SITES = (
     SiteInfo(
         name="pixiv",
@@ -75,6 +75,16 @@ SITES = (
         files=("run.py", "requirements.txt"),
         token_script="iwara/get_token.py",
     ),
+    SiteInfo(
+        name="asmr_one",
+        directory="asmr_one",
+        title="ASMR Bridge",
+        # 与 iwara 同因：换边缘 IP（CURLOPT_RESOLVE）与叠 ECH 都要 libcurl，
+        # 纯 httpx 做不到。asmr 没有自己的登录脚本（匿名就能浏览与播放）。
+        extra_modules=("curl_cffi",),
+        requirements="asmr_one/requirements.txt",
+        files=("run.py", "requirements.txt"),
+    ),
 )
 
 SITES_BY_NAME = {site.name: site for site in SITES}
@@ -83,6 +93,7 @@ SITES_BY_NAME = {site.name: site for site in SITES}
 SITE_ASSETS = {
     "pixiv": ("openssl-libs",),
     "iwara": (),
+    "asmr_one": (),
 }
 
 
@@ -145,7 +156,7 @@ EXTENSIONS = (
 
 EXTENSIONS_BY_NAME = {ext.name: ext for ext in EXTENSIONS}
 
-#: iwara 站点自己的接口（相对框架外壳多出来的部分），用于路由隔离检查。
+#: 站点自己的接口（相对框架外壳多出来的部分），用于路由隔离检查。
 IWARA_ROUTE_PATHS = frozenset(
     {
         "/api/iwara/auth",
@@ -161,7 +172,26 @@ IWARA_ROUTE_PATHS = frozenset(
     }
 )
 
-#: 顶层包名：项目根下所有「有 __init__.py 的目录」+ 两个站点目录。
+ASM_ROUTE_PATHS = frozenset(
+    {
+        "/api/asmr/auth",
+        "/api/asmr/cover/{work_id}",
+        "/api/asmr/search",
+        "/api/asmr/stream",
+        "/api/asmr/tracks/{work_id}",
+        "/api/asmr/work/{work_id}",
+        "/api/asmr/works",
+    }
+)
+
+#: 「站点名 → 该站点自己的路由」：路由隔离检查按这张表逐个站点比对，
+#: 加站点时只要在这里补一条（不写死某个站点名）。
+SITE_ROUTE_PATHS = {
+    "iwara": IWARA_ROUTE_PATHS,
+    "asmr_one": ASM_ROUTE_PATHS,
+}
+
+#: 顶层包名：项目根下所有「有 __init__.py 的目录」+ 各站点目录。
 SUB_PACKAGES = tuple(site.directory for site in SITES) + tuple(
     ext.name for ext in EXTENSIONS
 )

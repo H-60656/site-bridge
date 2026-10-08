@@ -2846,8 +2846,11 @@ class PipBootstrapTestCase(unittest.TestCase):
         self.assertIn("pip download", str(ctx.exception))
 
     def test_entry_points_share_the_same_bootstrap(self):
-        """两个站点入口的自举都走 ``deps.bootstrap()``，不再各抄一遍 try/except。"""
-        for name in ("pixiv/run.py", "iwara/run.py"):
+        """各站点入口的自举都走 ``deps.bootstrap()``，不再各抄一遍 try/except。"""
+        from pixiv_bridge import __main__ as navigation
+
+        for item in navigation.site_items():
+            name = f"{item.name}/run.py"
             source = (PROJECT_ROOT / name).read_text(encoding="utf-8")
             with self.subTest(name=name):
                 self.assertIn("bootstrap(", source)
@@ -2909,15 +2912,16 @@ class NavigationTestCase(unittest.TestCase):
 
     # ---------------- 列出真实项目里的接口项目与扩展 ----------------
 
-    def test_the_real_project_lists_both_api_projects_in_nav_order(self):
+    def test_the_real_project_lists_every_api_project_in_nav_order(self):
         sites = self.nav.site_items()
-        self.assertEqual([item.name for item in sites], ["pixiv", "iwara"])
-        self.assertEqual([item.order for item in sites], [1, 2])
-        self.assertEqual([item.kind for item in sites], ["site", "site"])
+        self.assertEqual([item.name for item in sites], ["pixiv", "iwara", "asmr_one"])
+        self.assertEqual([item.order for item in sites], [1, 2, 3])
+        self.assertEqual([item.kind for item in sites], ["site", "site", "site"])
         self.assertEqual(sites[0].title, "Pixiv Bridge")
         self.assertEqual(sites[0].entry, PROJECT_ROOT / "pixiv" / "run.py")
         self.assertTrue(sites[0].description.startswith("Pixiv 接口站点"))
         self.assertTrue(sites[1].description.startswith("iwara.tv 接口站点"))
+        self.assertTrue(sites[2].description.startswith("asmr.one 接口站点"))
 
     def test_the_real_project_lists_extensions_that_are_not_entries(self):
         extensions = self.nav.extension_items()
@@ -2927,7 +2931,8 @@ class NavigationTestCase(unittest.TestCase):
                 self.assertEqual(item.kind, "extension")
                 self.assertEqual(item.entry, PROJECT_ROOT / item.name / "extension.py")
                 self.assertTrue(item.title)
-        self.assertEqual(self.nav.site_names(), ["pixiv", "iwara"])
+        # 站点列表跟着 package 的注册表走，不再写死两个。
+        self.assertEqual(self.nav.site_names(), ["pixiv", "iwara", "asmr_one"])
 
     def test_render_navigation_shows_numbers_extensions_and_hints(self):
         text = self.nav.render_navigation()
@@ -5038,20 +5043,30 @@ class ExtensionLayoutTestCase(unittest.TestCase):
     """出入口整理：接口项目各留一个入口，阅读项目改由扩展机制启用。"""
 
     def test_two_api_entry_points_are_peers(self):
-        # 两个接口项目同级：各自 <站点>/run.py，根目录不再有 run.py。
-        for name in ("pixiv/run.py", "iwara/run.py"):
-            with self.subTest(name=name):
-                self.assertTrue((PROJECT_ROOT / name).is_file(), name)
+        # 各接口项目同级：各自 <站点>/run.py，根目录不再有 run.py。
+        # 站点/扩展清单跟着导航发现走（不再写死），加站点时这里自动覆盖。
+        from pixiv_bridge import __main__ as navigation
+
+        sites = navigation.site_items()
+        self.assertGreaterEqual(len(sites), 2)
+        for item in sites:
+            with self.subTest(name=item.name):
+                self.assertTrue((PROJECT_ROOT / item.name / "run.py").is_file())
         self.assertFalse((PROJECT_ROOT / "run.py").exists())
-        # 框架包里不许混进任何站点知识。
-        for name in ("pixiv", "iwara", "novel", "iwara_web"):
+        # 框架包里不许混进任何站点/扩展知识。
+        local = [item.name for item in sites] + [
+            item.name for item in navigation.extension_items()
+        ]
+        for name in local:
             with self.subTest(framework=name):
                 self.assertFalse((PROJECT_ROOT / "pixiv_bridge" / name).exists(), name)
 
     def test_extension_packages_have_no_dedicated_entry_point(self):
-        for name in ("novel", "iwara_web"):
-            with self.subTest(name=name):
-                self.assertFalse((PROJECT_ROOT / name / "run.py").exists())
+        from pixiv_bridge import __main__ as navigation
+
+        for item in navigation.extension_items():
+            with self.subTest(name=item.name):
+                self.assertFalse((PROJECT_ROOT / item.name / "run.py").exists())
 
     def test_novel_exposes_the_fixed_extension_entry(self):
         entry = PROJECT_ROOT / "novel" / EXTENSION_FILENAME
