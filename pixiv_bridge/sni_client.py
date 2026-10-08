@@ -1,3 +1,6 @@
+"""绕过 SNI 的 TLS 客户端：手工握手后直接发 HTTP 请求，Host 头由调用方补。
+"""
+
 import asyncio
 import json
 import ssl

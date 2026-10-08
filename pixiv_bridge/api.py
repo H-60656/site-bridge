@@ -1,3 +1,9 @@
+"""Pixiv App API 客户端：拼签名头、发请求、把上游错误转成统一异常。
+
+顺带承载小说正文的解析：2024-02 起官方下掉了 ``/v1/novel/text``，
+正文只能从 ``/webview/v2/novel`` 的 HTML 里抠出来。
+"""
+
 import hashlib
 import json
 import time

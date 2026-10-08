@@ -1,3 +1,6 @@
+"""运行配置：从 ``.env`` / 环境变量读出 Settings，并把数据文件都收进项目内。
+"""
+
 import os
 from dataclasses import dataclass, field
 from pathlib import Path

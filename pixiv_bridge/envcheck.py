@@ -1,3 +1,6 @@
+"""启动前的环境自检：Python 版本、依赖、端口，以及代理 / ECH / 网络探测。
+"""
+
 import asyncio
 import socket
 import ssl

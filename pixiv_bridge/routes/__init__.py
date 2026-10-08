@@ -1,3 +1,6 @@
+"""路由模块共用的依赖访问器：从 ``app.state`` 取主项目注入的对象。
+"""
+
 def get_api(request):
     return request.app.state.api
 

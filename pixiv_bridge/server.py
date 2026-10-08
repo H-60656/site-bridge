@@ -1,3 +1,6 @@
+"""组装 FastAPI 应用：lifespan 建资源、挂内置路由与扩展路由、统一错误映射。
+"""
+
 from contextlib import asynccontextmanager
 
 import httpx

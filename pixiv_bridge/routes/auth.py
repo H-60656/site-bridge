@@ -1,3 +1,6 @@
+"""认证路由（``/api/auth/*``）：查询登录态、账号密码登录、浏览器授权与令牌刷新。
+"""
+
 from datetime import datetime
 
 from fastapi import APIRouter, Request

@@ -1,3 +1,6 @@
+"""插画路由（``/api/illust/*``、``/api/bookmark/*``、``/api/comment/*``）。
+"""
+
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 

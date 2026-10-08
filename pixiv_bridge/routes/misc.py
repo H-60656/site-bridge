@@ -1,3 +1,6 @@
+"""杂项路由：健康检查、``next_url`` 翻页，以及图片代理（``/img``）。
+"""
+
 from mimetypes import guess_type
 
 from fastapi import APIRouter, HTTPException, Query, Request

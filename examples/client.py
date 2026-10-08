@@ -1,3 +1,6 @@
+"""Pixiv Bridge 的 Python 调用示例（同步 httpx 客户端 + 一个命令行 demo）。
+"""
+
 import argparse
 from urllib.parse import quote
 

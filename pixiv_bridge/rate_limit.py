@@ -1,3 +1,6 @@
+"""令牌桶限流：按每分钟请求数约束对外调用。
+"""
+
 import asyncio
 import time
 

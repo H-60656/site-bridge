@@ -1,3 +1,6 @@
+"""``i.pximg.net`` 图片代理：校验目标、按传输模式取流、原样透传给调用方。
+"""
+
 from urllib.parse import urlparse
 
 import httpx

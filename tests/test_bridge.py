@@ -1,3 +1,6 @@
+"""主项目与扩展机制的单元测试；iwara 的用例在 ``tests/test_iwara.py``。
+"""
+
 import asyncio
 import base64
 import errno

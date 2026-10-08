@@ -1,3 +1,6 @@
+"""``python -m pixiv_bridge`` 的入口：先补齐依赖，再交给命令行主函数。
+"""
+
 import sys
 
 from .deps import ensure_dependencies

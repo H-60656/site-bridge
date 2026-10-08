@@ -1,3 +1,6 @@
+"""推荐流与榜单路由（``/api/*``）：排行、推荐、关注、热门标签、精选等。
+"""
+
 from fastapi import APIRouter, Request
 
 from . import get_api

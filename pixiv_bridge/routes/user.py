@@ -1,3 +1,6 @@
+"""用户路由（``/api/user/*``）：资料、作品、收藏、关注 / 粉丝，以及关注操作。
+"""
+
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 

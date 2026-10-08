@@ -1,3 +1,6 @@
+"""Pixiv OAuth：用 refresh_token 换 access_token、按需续期、把令牌落盘。
+"""
+
 import asyncio
 import base64
 import hashlib

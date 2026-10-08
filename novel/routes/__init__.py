@@ -1,3 +1,6 @@
+"""阅读器路由共用的依赖访问器：从 ``app.state`` 取主项目与扩展注入的对象。
+"""
+
 def get_api(request):
     """主项目注入的 PixivApi（app.state.api）。"""
     return request.app.state.api

@@ -1,3 +1,6 @@
+"""搜索路由（``/api/search/*``）：插画、小说、用户、联想词与热门词。
+"""
+
 from fastapi import APIRouter, Query, Request
 
 from . import get_api

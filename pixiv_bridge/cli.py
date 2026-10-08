@@ -1,3 +1,9 @@
+"""命令行入口：解析参数、跑环境自检、按配置挂扩展、交给 uvicorn 启动。
+
+默认入口（调用方不传 ``app_factory``）在这里读 ``PIXIV_BRIDGE_EXTENSIONS``
+并挂扩展；传了 ``app_factory`` 的调用方自己负责组装（``iwara/run.py`` 走这条）。
+"""
+
 import argparse
 import asyncio
 import sys
