@@ -23,6 +23,9 @@ _tmp_tests/
 # 分享打包产物（用 README「打包与移植」里的命令随时重新生成）
 dist/
 
+# 开发时的临时探针、中间报告与离线 wheel（不属于项目代码；删掉不影响运行）
+_scratch/
+
 # pytest 在本机写缓存失败时留下的空目录
 pytest-cache-files-*/
 .pytest_cache/
