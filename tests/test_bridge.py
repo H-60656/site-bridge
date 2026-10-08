@@ -3,6 +3,7 @@
 
 import asyncio
 import base64
+import contextlib
 import errno
 import hashlib
 import io
@@ -4872,6 +4873,86 @@ class NavigationPageTestCase(unittest.TestCase):
             root = client.get("/")
             self.assertEqual(root.status_code, 200)
             self.assertIn("接口项目自带", root.text)
+
+
+class CliCheckTestCase(unittest.IsolatedAsyncioTestCase):
+    """``--check`` 这条路的三处行为：端口只提示、缺 token 有提示、可加专属检查。"""
+
+    def _fatal_results(self):
+        return [CheckResult("python", True, "3.13"), CheckResult("port", False, "8765 已被占用")]
+
+    def test_fail_on_stops_on_a_fatal_check(self):
+        from pixiv_bridge.cli import _fail_on
+
+        with self.assertRaises(SystemExit) as ctx:
+            _fail_on(self._fatal_results())
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_fail_on_skips_the_port_check_when_asked(self):
+        from pixiv_bridge.cli import _fail_on
+
+        # --check 只校验、不监听端口，端口被占不该拦下自检。
+        _fail_on(self._fatal_results(), skip=("port",))
+
+    async def test_check_hints_get_token_when_no_refresh_token(self):
+        from pixiv_bridge.cli import MISSING_TOKEN_HINT, _check
+
+        directory = make_temp_dir("cli_notoken")
+        self.addCleanup(drop_temp_dir, directory)
+        settings = Settings(refresh_token="", token_file=directory / "absent.json")
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = await _check(settings)
+
+        self.assertEqual(code, 1)
+        text = buffer.getvalue()
+        self.assertIn("未配置 refresh_token", text)
+        self.assertIn("python get_token.py", text)
+        self.assertIn(MISSING_TOKEN_HINT.strip(), text)
+
+    def test_main_prints_extra_checks_in_the_same_table(self):
+        from pixiv_bridge import cli
+
+        seen = {}
+
+        def extra(settings):
+            seen["settings"] = settings
+            return [CheckResult("iwara 网络", False, "api.iwara.tv 不可达（测试）")]
+
+        buffer = io.StringIO()
+        with patch.object(cli, "ensure_dependencies"), patch.object(
+            cli, "run_checks", return_value=[CheckResult("python", True, "3.13")]
+        ), patch.object(cli, "load_extensions", return_value=[]), patch.object(
+            cli.uvicorn, "run"
+        ) as uvicorn_run, contextlib.redirect_stdout(buffer):
+            cli.main([], extra_checks=extra)
+
+        text = buffer.getvalue()
+        # 与通用检查打在同一张 [环境检查] 表里，而且顺序排在它们后面。
+        self.assertIn("[环境检查]", text)
+        self.assertLess(text.index("python"), text.index("iwara 网络"))
+        self.assertIn("api.iwara.tv 不可达（测试）", text)
+        self.assertIsInstance(seen.get("settings"), Settings)
+        uvicorn_run.assert_called_once()
+
+    def test_main_reports_extra_checks_failure_without_stopping(self):
+        from pixiv_bridge import cli
+
+        def extra(settings):
+            return [CheckResult("iwara 依赖", False, "不可用")]
+
+        buffer = io.StringIO()
+        with patch.object(cli, "ensure_dependencies"), patch.object(
+            cli, "run_checks", return_value=[CheckResult("python", True, "3.13")]
+        ), patch.object(cli, "load_extensions", return_value=[]), patch.object(
+            cli.uvicorn, "run"
+        ) as uvicorn_run, contextlib.redirect_stdout(buffer):
+            cli.main([], extra_checks=extra)
+
+        # 专属检查不在 FATAL_CHECKS 里：WARN 之后照样进 uvicorn.run。
+        self.assertIn("WARN", buffer.getvalue())
+        uvicorn_run.assert_called_once()
 
 
 if __name__ == "__main__":

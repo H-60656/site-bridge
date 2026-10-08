@@ -20,6 +20,12 @@ from .server import create_app
 
 FATAL_CHECKS = ("python", "deps", "port")
 
+MISSING_TOKEN_HINT = (
+    "  提示: 没有 refresh_token 也能用接口（公开内容照常返回），但登录态、"
+    "关注流这些要用到它 —— 在项目目录跑一次 `python get_token.py` 即可"
+    "（浏览器授权，结果写进 data/tokens.json），或在 .env 里直接填 PIXIV_REFRESH_TOKEN"
+)
+
 
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(
@@ -54,8 +60,17 @@ def _print_warnings(settings):
         print(f"  ! {note}", flush=True)
 
 
-def _fail_on(results):
-    failed = [result for result in results if not result.ok and result.name in FATAL_CHECKS]
+def _fail_on(results, skip=()):
+    """有致命检查不通过就中止启动。
+
+    `skip` 用于 ``--check``：那条路上不监听端口，端口被占只该提示，
+    不该拦住「只校验登录」的用法（真正启动时才中止）。
+    """
+    failed = [
+        result
+        for result in results
+        if not result.ok and result.name in FATAL_CHECKS and result.name not in skip
+    ]
     if not failed:
         return
     for result in failed:
@@ -140,7 +155,11 @@ async def _check(settings):
         oauth = OAuthManager(settings, http)
         await oauth.load()
         if not oauth.refresh_token:
-            print("未配置 refresh_token（PIXIV_REFRESH_TOKEN 或 tokens.json）", flush=True)
+            print(
+                "未配置 refresh_token（PIXIV_REFRESH_TOKEN 或 tokens.json）",
+                flush=True,
+            )
+            print(MISSING_TOKEN_HINT, flush=True)
             return 1
         try:
             await oauth.refresh()
@@ -162,7 +181,7 @@ def _print_extensions(extensions):
         print(f"  {ext.name:<8} {ext.entry}（{len(ext.routers)} 个路由）", flush=True)
 
 
-def main(argv=None, app_factory=None):
+def main(argv=None, app_factory=None, extra_checks=None):
     """启动服务。
 
     默认 `app_factory` 就是主项目的 `create_app`，并按配置
@@ -171,7 +190,9 @@ def main(argv=None, app_factory=None):
     不需要专门的入口脚本。
 
     传了 `app_factory(settings)` 的调用方自己负责组装（`iwara/run.py` 走这条，
-    它不是 pixiv 接口项目的扩展，而是自己独立的接口项目）。
+    它不是 pixiv 接口项目的扩展，而是自己独立的接口项目）；这类入口还可以传
+    `extra_checks(settings) -> list[CheckResult]`，把自己专属的自检项追加到
+    `[环境检查]` 里（`iwara/run.py` 用它报告 curl_cffi、api.iwara.tv 与 iwara 登录态）。
     """
     args = _parse_args(argv)
     settings = Settings.load(args.env)
@@ -181,7 +202,7 @@ def main(argv=None, app_factory=None):
         settings.port = args.port
     ensure_dependencies()
     results = run_checks(
-        port=None if args.check else settings.port,
+        port=settings.port,
         api_ips=settings.api_ips,
         oauth_ips=settings.oauth_ips,
         image_ips=settings.image_ips,
@@ -192,9 +213,15 @@ def main(argv=None, app_factory=None):
         api_base=settings.api_base,
         project_root=settings.project_root,
     )
+    if extra_checks is not None:
+        # 入口专属的自检（iwara：curl_cffi / api.iwara.tv / iwara 登录态）跟通用检查
+        # 打在同一张表里 —— 它们都不在 FATAL_CHECKS 里，所以只提示、不中止。
+        results.extend(extra_checks(settings))
+
     _print_checks(results)
     _print_warnings(settings)
-    _fail_on(results)
+    # --check 只校验，不监听端口：端口被占只提示，最终启动时才中止。
+    _fail_on(results, skip=("port",) if args.check else ())
     _warn_network(results, settings)
 
     if app_factory is None:

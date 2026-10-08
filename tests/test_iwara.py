@@ -14,8 +14,10 @@ import itertools
 import json
 import os
 import shutil
+import sys
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 from fastapi.testclient import TestClient
@@ -61,6 +63,21 @@ def _mock_handler(request: httpx.Request) -> httpx.Response:
 
 def make_settings():
     return Settings(refresh_token="", rate_limit_rpm=10000)
+
+
+def make_temp_dir(tag="tmp"):
+    """与 test_bridge.py 同一份实现：临时的东西放工作区 _tmp_tests/。"""
+    path = TEST_TMP_ROOT / ("%s_%d_%d" % (tag, os.getpid(), next(_TEMP_COUNTER)))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def drop_temp_dir(path):
+    shutil.rmtree(path, ignore_errors=True)
+    try:
+        TEST_TMP_ROOT.rmdir()
+    except OSError:
+        pass
 
 
 # 真实结构（字段名与线上一致）：thumbnail 是整数帧号，真地址要用 file.id 拼。
@@ -955,6 +972,182 @@ class IwaraEntryPointTestCase(unittest.TestCase):
         client = TestClient(_create_bridge_app(make_settings(), transport=httpx.MockTransport(_mock_handler)))
         with client:
             self.assertEqual(client.get("/api/iwara/videos").status_code, 404)
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：pip install -r iwara/requirements.txt")
+class IwaraEnvCheckTestCase(unittest.TestCase):
+    """iwara 入口 ``--check`` 时多出来的那三项。
+
+    它们跟主项目那五项打在同一张 ``[环境检查]`` 表里，但名字都不在
+    ``FATAL_CHECKS`` 里 —— 装坏了/没登录只该提示，永远不该拦下启动。
+    """
+
+    def setUp(self):
+        # 真实环境里可能已经有 token 文件；这里一律换成一个空目录。
+        self.directory = make_temp_dir("iwara_envcheck")
+        self.addCleanup(drop_temp_dir, self.directory)
+        env = patch.dict(os.environ, {"IWARA_REFRESH_TOKEN": ""}, clear=False)
+        env.start()
+        self.addCleanup(env.stop)
+
+    def _settings(self):
+        return Settings(
+            refresh_token="",
+            rate_limit_rpm=10000,
+            data_dir=str(self.directory),
+        )
+
+    def _fake_client(self, *, videos=None, error=None, username="tester"):
+        """顶掉 iwara.client.IwaraClient，返回 (patch, instance)。"""
+        cls = MagicMock()
+        instance = cls.return_value
+
+        async def _list_videos(**_kwargs):
+            if error is not None:
+                raise error
+            return videos if videos is not None else {"count": 3, "results": []}
+
+        async def _ensure():
+            if error is not None:
+                raise error
+            return "access-token"
+
+        async def _me():
+            if error is not None:
+                raise error
+            return {"user": {"username": username}}
+
+        instance.list_videos = AsyncMock(side_effect=_list_videos)
+        instance.ensure_access_token = AsyncMock(side_effect=_ensure)
+        instance.me = AsyncMock(side_effect=_me)
+        instance.aclose = AsyncMock()
+        return patch("iwara.client.IwaraClient", cls), instance
+
+    def test_extra_checks_are_named_and_never_fatal(self):
+        from pixiv_bridge.cli import FATAL_CHECKS
+
+        from iwara.envcheck import AUTH_NAME, DEPS_NAME, NET_NAME
+
+        self.assertEqual(
+            sorted((DEPS_NAME, NET_NAME, AUTH_NAME)),
+            ["iwara 依赖", "iwara 登录", "iwara 网络"],
+        )
+        for name in (DEPS_NAME, NET_NAME, AUTH_NAME):
+            self.assertNotIn(name, FATAL_CHECKS)
+
+    def test_extra_checks_returns_three_results_in_order(self):
+        from iwara.envcheck import AUTH_NAME, DEPS_NAME, NET_NAME, extra_checks
+
+        patcher, _ = self._fake_client()
+        with patcher:
+            results = extra_checks(self._settings())
+
+        self.assertEqual([r.name for r in results], [DEPS_NAME, NET_NAME, AUTH_NAME])
+        # 这台机器上确实装了 curl_cffi，否则这些用例本来就被整片跳过。
+        self.assertTrue(results[0].ok)
+        self.assertIn("curl_cffi", results[0].detail)
+
+    def test_anonymous_mode_is_ok_and_says_how_to_log_in(self):
+        from iwara.envcheck import extra_checks
+
+        patcher, instance = self._fake_client()
+        with patcher:
+            results = extra_checks(self._settings())
+
+        auth = [r for r in results if r.name == "iwara 登录"][0]
+        self.assertTrue(auth.ok)
+        self.assertIn("匿名模式", auth.detail)
+        self.assertIn("iwara/get_token.py", auth.detail)
+        # 没有 token 就不该去验 token。
+        instance.ensure_access_token.assert_not_called()
+
+    def test_network_failure_is_reported_not_raised(self):
+        from iwara.envcheck import extra_checks
+
+        patcher, _ = self._fake_client(error=IwaraError("都连不上"))
+        with patcher:
+            results = extra_checks(self._settings())
+
+        net = [r for r in results if r.name == "iwara 网络"][0]
+        self.assertFalse(net.ok)
+        self.assertIn("api.iwara.tv 不可达", net.detail)
+        self.assertIn("都连不上", net.detail)
+
+    def test_broken_token_is_a_warning_with_the_relogin_hint(self):
+        from iwara.client import IwaraAuthError
+        from iwara.envcheck import extra_checks
+
+        os.environ["IWARA_REFRESH_TOKEN"] = "stale.token.value"
+        patcher, _ = self._fake_client(
+            error=IwaraAuthError("刷新 token 失败（403）: errors.forbidden")
+        )
+        with patcher:
+            results = extra_checks(self._settings())
+
+        auth = [r for r in results if r.name == "iwara 登录"][0]
+        self.assertFalse(auth.ok)
+        self.assertIn("token 不可用", auth.detail)
+        self.assertIn("iwara/get_token.py", auth.detail)
+
+    def test_saved_token_is_verified_and_named(self):
+        from iwara import tokens
+        from iwara.envcheck import extra_checks
+
+        tokens.save_token("good.token.value", self.directory / tokens.DEFAULT_FILENAME)
+        patcher, instance = self._fake_client(username="huanghe19512")
+        with patcher:
+            results = extra_checks(self._settings())
+
+        auth = [r for r in results if r.name == "iwara 登录"][0]
+        self.assertTrue(auth.ok)
+        self.assertIn("huanghe19512", auth.detail)
+        instance.ensure_access_token.assert_awaited()
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：pip install -r iwara/requirements.txt")
+class IwaraEntryWiringTestCase(unittest.TestCase):
+    """入口脚本本身：自举要跑在 import iwara.app 之前，并且要挂上专属检查。"""
+
+    def _source(self) -> str:
+        path = Path(__file__).resolve().parent.parent / "iwara" / "run.py"
+        return path.read_text(encoding="utf-8")
+
+    def test_bootstrap_runs_before_importing_the_app(self):
+        # iwara.app → iwara.client → import curl_cffi；这条链没装包时会直接
+        # ImportError，必须排在 bootstrap 之后，否则自举根本没机会跑。
+        # 只看真正的语句行：注释里也可能提到这两个名字。
+        lines = [line.strip() for line in self._source().splitlines()]
+        statements = [line for line in lines if line and not line.startswith("#")]
+        bootstrap = next(
+            i for i, line in enumerate(statements) if line.startswith("bootstrap(")
+        )
+        app_import = next(
+            i
+            for i, line in enumerate(statements)
+            if line.startswith("from iwara.app import")
+        )
+        self.assertLess(bootstrap, app_import)
+
+    def test_entry_passes_the_iwara_extra_checks(self):
+        text = self._source()
+        self.assertIn("from iwara.envcheck import extra_checks", text)
+        self.assertIn("extra_checks=extra_checks", text)
+
+    def test_get_token_does_not_import_the_app_package(self):
+        # `from iwara import tokens` 不能再顺带把 iwara.app（→ curl_cffi）拖进来，
+        # 否则没装包时登录脚本一开头就炸。
+        path = Path(__file__).resolve().parent.parent / "iwara" / "get_token.py"
+        text = path.read_text(encoding="utf-8")
+        self.assertNotIn("from iwara.app import", text)
+        self.assertNotIn("from iwara.client import", text.split("def _login")[0])
+
+    def test_init_lazy_exports_keep_tokens_importable(self):
+        # `iwara/__init__.py` 用模块级 __getattr__ 惰性转发，所以导入子模块时
+        # 不会连锁拖进 curl_cffi。
+        import iwara
+
+        self.assertIn("create_app", iwara.__all__)
+        self.assertIs(iwara.tokens, sys.modules["iwara.tokens"])
 
 
 if __name__ == "__main__":  # pragma: no cover

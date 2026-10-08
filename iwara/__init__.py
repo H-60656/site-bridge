@@ -10,6 +10,26 @@ Cloudflare 后面会拦截普通 Python TLS 指纹。因此这里自带一个基
 详见 `iwara/client.py` 的模块 docstring。
 """
 
-from .app import IWARA_ROUTERS, create_app, iwara_state_factory
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # 只给类型检查看，运行时不导入
+    from .app import IWARA_ROUTERS, create_app, iwara_state_factory
 
 __all__ = ["IWARA_ROUTERS", "create_app", "iwara_state_factory"]
+
+
+def __getattr__(name):
+    """按需导入 `iwara.app` 里的三个名字。
+
+    这里**不能**写成模块级 `from .app import ...`：`iwara.app` 链式导入
+    `iwara.client`，而后者顶部就要 `curl_cffi`。可 `curl_cffi` 是编译包、
+    只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装 —— 一旦在包的
+    `__init__` 里就把它拖进来，自举（先装依赖再建应用）根本跑不到：
+    `from iwara import tokens` 会先炸 ImportError。
+    应用入口照旧显式 `from iwara.app import create_app`。
+    """
+    if name in __all__:
+        from . import app
+
+        return getattr(app, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
