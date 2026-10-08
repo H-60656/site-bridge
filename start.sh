@@ -1,15 +1,16 @@
 #!/usr/bin/env sh
-# Pixiv Bridge / Iwara Bridge 一键启动脚本（Termux / Linux / macOS）
+# Pixiv Bridge / Iwara Bridge / ASMR Bridge 一键启动脚本（Termux / Linux / macOS）
 #
 # 用法：
 #   sh start.sh                  打开项目导航，挑一个接口项目启动（回车＝默认的 pixiv）
 #   sh start.sh iwara            直接启动指定的接口项目
+#   sh start.sh asmr_one         直接启动该接口项目（匿名可用，不需要登录）
 #   sh start.sh --port 9000      换个端口
 #   sh start.sh --host 0.0.0.0   允许同一局域网的其他设备访问
 #   sh start.sh --check          只检查环境和登录，不启动服务
 #   BRIDGE_SITE=iwara sh start.sh  跳过询问，直接跑 iwara
 #
-# 两个接口项目 pixiv/ 与 iwara/ 是**同级**的：各自一个 run.py，互不加载。
+# 三个接口项目 pixiv/ 、 iwara/ 与 asmr_one/ 是**同级**的：各自一个 run.py，互不加载。
 # 本脚本不做挑选，只把参数转发给框架的项目导航（`python -m pixiv_bridge`）：
 #   * 设了 BRIDGE_SITE 就用它（环境变量，其次根目录 .env 里的同名行）；
 #   * 只有一个接口项目就直接启动；
@@ -59,12 +60,12 @@ if [ ! -f .env ] && [ -f .env.example ]; then
     echo "[i] 已从 .env.example 生成配置文件 .env"
 fi
 
-# ---------- 4. 首次使用提醒（只跑 iwara 时不需要 Pixiv 登录） ----------
+# ---------- 4. 首次使用提醒（只跑 iwara / asmr.one 时不需要 Pixiv 登录） ----------
 if [ "${BRIDGE_SITE:-pixiv}" = "pixiv" ] && [ -f .env ] \
     && ! grep -q '^PIXIV_REFRESH_TOKEN=..*' .env && [ ! -f data/tokens.json ]; then
     echo "[!] 还没有 Pixiv 登录凭据：请编辑 .env 填入 PIXIV_REFRESH_TOKEN，"
     echo "    或启动后按 INSTALL.md「获取 refresh_token」用网页授权登录。"
-    echo "    （只跑 iwara 接口项目时不需要 Pixiv 登录。）"
+    echo "    （只跑 iwara 或 asmr.one 接口项目时不需要 Pixiv 登录。）"
 fi
 
 # ---------- 5. 启动（依赖缺失会自动安装；站点挑选交给框架的导航） ----------

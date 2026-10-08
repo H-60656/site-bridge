@@ -241,7 +241,7 @@ def bootstrap(install=ensure_dependencies):
 
     ``run.py`` 与 ``pixiv_bridge/__main__.py`` 共用这一段，差别只在传进来的
     安装函数（主项目传 ``ensure_dependencies``，iwara 传 ``ensure_packages``
-    的偏函数）。两个入口在模块级调用它，等于「进主程序之前先把依赖补齐」。
+    的偏函数）。各入口在模块级调用它，等于「进主程序之前先把依赖补齐」。
 
     返回 ``install()`` 的结果（本次装上来的模块名列表）。
     """

@@ -2,7 +2,7 @@
 
 与 ``pixiv/config.py`` 同形：框架负责项目根、``.env``、数据目录与通用字段，
 站点只补自己那几个。环境变量用 ``IWARA_`` 前缀（与既有的
-``IWARA_REFRESH_TOKEN`` 一致）—— 两个站点是同级的独立入口，各自的开关互不
+``IWARA_REFRESH_TOKEN`` 一致）—— 各站点是同级的独立入口，各自的开关互不
 影响，混用 ``PIXIV_`` 前缀会让人以为改一个两个站都变。
 
 ``Settings`` 在这里再导出一次：站点内其它模块写 ``from .config import Settings``

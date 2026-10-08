@@ -1,7 +1,7 @@
 """iwara 的 ECH 配置（加密 Client Hello）。
 
 为什么这里要自己写一份，而不是直接 import ``pixiv/ech_client.py``：
-两个站点**同级、互不依赖**（``scripts/check_boundary.py`` 会拒绝站点 import
+站点之间**同级、互不依赖**（``scripts/check_boundary.py`` 会拒绝站点 import
 别的站点），iwara 必须自足。两者的实现路线也不同 —— pixiv 用 ctypes 调
 OpenSSL 4.0+ 自己握手（所以要带 ``openssl-libs/``），iwara 本来就依赖
 ``curl_cffi``，直接把 ECH 配置交给 libcurl 的 ``CURLOPT_ECH`` 即可，不需要

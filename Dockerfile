@@ -19,17 +19,20 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 凭据与虚拟环境由 .dockerignore 排除。
 COPY . .
 
-# iwara 站点的额外依赖（curl_cffi，编译包）。它跟着进镜像时才装；没跟进来
-# 也不影响构建，真去跑 iwara 时 deps.py 会自己补装。
-RUN if [ -f iwara/requirements.txt ]; then \
-        pip install --no-cache-dir -r iwara/requirements.txt; \
-    fi
+# 各站点的额外依赖（curl_cffi，编译包）。目录跟着进镜像时才装；没跟进来
+# 也不影响构建，真去跑那个站点时 deps.py 会自己补装。
+# iwara 与 asmr_one 都要 curl_cffi，各有一份 requirements.txt。
+RUN for req in iwara/requirements.txt asmr_one/requirements.txt; do \
+        if [ -f "$req" ]; then pip install --no-cache-dir -r "$req"; fi; \
+    done
 
 EXPOSE 8765
 
-# 站点用一个入口脚本挑（与 start.sh 同一套逻辑：有 pixiv/ 就跑 pixiv，否则跑
-# iwara），所以同一份镜像换个包也能用；要显式指定就加环境变量：
+# 站点用一个入口脚本挑（与 start.sh 同一套逻辑：`python -m pixiv_bridge` 的项目
+# 导航，有终端就列出来问一句，没终端就用第一个站点），所以同一份镜像换个包也能
+# 用；要显式指定就加环境变量：
 #   docker run -e BRIDGE_SITE=iwara ...
+#   docker run -e BRIDGE_SITE=asmr_one ...    （asmr.one 匿名可用，不需要登录）
 # 挂扩展照旧（扩展目录已在镜像里，程序自己去找 <扩展>/extension.py）：
 #   docker run -e PIXIV_BRIDGE_EXTENSIONS=novel ...
 #   docker run -e PIXIV_BRIDGE_EXTENSIONS=iwara_web -e BRIDGE_SITE=iwara ...

@@ -212,11 +212,18 @@ def check_apps(errors):
     if out.returncode != 0:
         last = (out.stderr.strip().splitlines() or [""])[-1]
         hint = ""
-        # iwara 的 client 在模块顶层 import curl_cffi（Cloudflare 要求浏览器
-        # TLS 指纹），而它只写在 iwara/requirements.txt 里。新克隆的仓库若还
-        # 没跑过 iwara/run.py，这里会缺包 —— 点明怎么补，别让人以为路由写错了。
-        if "curl_cffi" in last:
-            hint = "；先装 iwara 的额外依赖：pip install -r iwara/requirements.txt"
+        # 站点的 client 可能在模块顶层 import 站点专属依赖（比如 iwara / asmr_one
+        # 都要 curl_cffi：Cloudflare 只认浏览器 TLS 指纹），而这些只写在站点自己的
+        # requirements.txt 里。新克隆的仓库若还没跑过那个站点的 run.py，这里会缺包
+        # —— 点明怎么补，别让人以为路由写错了。
+        needs = [site for site in SITES if site.requirements]
+        for site in needs:
+            if site.extra_modules and any(m in last for m in site.extra_modules):
+                hint = (
+                    f"；先装 {site.name} 的额外依赖："
+                    f"pip install -r {site.requirements}"
+                )
+                break
         errors.append(f"站点无法同时导入：{last}{hint}")
         return
     try:
@@ -231,7 +238,7 @@ def check_apps(errors):
         print(f"  {site.name:<8} {info} 条路由（其中站点自己的 {len(data['routes'][site.name])} 条）")
 
     for path in data["shared"]:
-        errors.append(f"两个站点的路由串台了：{path}")
+        errors.append(f"站点之间的路由串台了：{path}")
 
     for name, expected_paths in SITE_ROUTE_PATHS.items():
         if name not in data["routes"]:
