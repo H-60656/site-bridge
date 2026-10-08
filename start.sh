@@ -7,8 +7,10 @@
 #   sh start.sh --host 0.0.0.0   允许同一局域网的其他设备访问
 #   sh start.sh --check          只检查环境和登录，不启动服务
 #
-# 这个脚本启动的是「纯接口」那一版（run.py）。要带小说阅读器页面请用
-# python3 novel/run.py（会额外挂上 novel/ 子项目的阅读器与书架接口，见 README）。
+# 这个脚本启动的是接口项目（run.py），默认只提供纯 Pixiv 接口。
+# 想连小说阅读器一起用，在 .env 里加一行：
+#   PIXIV_BRIDGE_EXTENSIONS=novel
+# 程序会自动去找 novel/extension.py，阅读项目不再有自己的入口脚本（见 README「附属项目（扩展）」）。
 # 首次运行会自动用 pip 安装依赖（fastapi / uvicorn / httpx，Termux 上改用
 # 纯 Python 的 pydantic 1.x 依赖集），之后启动就很快。
 

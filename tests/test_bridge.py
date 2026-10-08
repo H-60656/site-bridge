@@ -41,6 +41,14 @@ from pixiv_bridge.envcheck import (
     python_version,
     run_checks,
 )
+from pixiv_bridge.extensions import (
+    EXTENSION_FILENAME,
+    EXTENSION_ROUTERS_ATTR,
+    ExtensionError,
+    load_extension_specs,
+    load_extensions,
+    parse_extension_specs,
+)
 from novel.app import create_app as create_novel_app
 from novel.bookmarks import BookmarkStore, normalize_bookmark
 from novel.downloads import DownloadStore, normalize_download
@@ -48,6 +56,8 @@ from novel.history import HistoryStore, normalize_entry
 from pixiv_bridge.image_proxy import ImageProxy
 from pixiv_bridge.oauth import OAuthManager
 from pixiv_bridge.server import create_app
+
+from pixiv_bridge import nav as nav_module
 
 
 def app_with_novel(settings, **kwargs):
@@ -317,10 +327,20 @@ class ServerTestCase(unittest.TestCase):
             self.assertEqual(client.get("/docs").status_code, 200)
             self.assertEqual(client.get("/openapi.json").status_code, 200)
 
-    def test_pure_api_app_has_no_index_page(self):
-        """接口项目只提供接口：不带阅读器页面（`/` 404）。"""
+    def test_pure_api_app_index_is_the_navigation_page(self):
+        """接口项目的 `/` 是导航页（不是阅读器页面）。"""
         with self._client() as client:
-            self.assertEqual(client.get("/").status_code, 404)
+            resp = client.get("/")
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn("text/html", resp.headers.get("content-type", ""))
+            # 纯接口状态下也列出自带入口，并说明没有挂扩展
+            self.assertIn("/api/health", resp.text)
+            self.assertIn("没有挂载扩展", resp.text)
+
+    def test_pure_api_app_does_not_serve_the_reader(self):
+        """阅读器页面属于 novel 扩展：不挂扩展时 /novel 不存在。"""
+        with self._client() as client:
+            self.assertEqual(client.get("/novel").status_code, 404)
 
     def test_image_proxy_routes(self):
         with self._client() as client:
@@ -338,14 +358,14 @@ class ServerTestCase(unittest.TestCase):
 
 
 class NovelWebIndexTestCase(unittest.TestCase):
-    """`/` 上的小说阅读器页面由子项目挂载（novel/web/index.html）。"""
+    """小说阅读器页面由子项目挂在 `/novel` 上（`/` 是接口项目的导航页）。"""
 
     def test_web_index(self):
         settings = make_settings(token="")
         settings.token_file = SERVER_TOKEN_FILE
         app = app_with_novel(settings, transport=httpx.MockTransport(_mock_handler))
         with TestClient(app) as client:
-            resp = client.get("/")
+            resp = client.get("/novel")
             self.assertEqual(resp.status_code, 200)
             self.assertIn("text/html", resp.headers.get("content-type", ""))
             self.assertIn("Pixiv Bridge", resp.text)

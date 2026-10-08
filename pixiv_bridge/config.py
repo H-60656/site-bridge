@@ -2,6 +2,9 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# 只取这一个纯函数用于解析 PIXIV_BRIDGE_EXTENSIONS；extensions.py 不反向 import
+# 本模块，所以这里没有循环依赖。
+from .extensions import parse_extension_specs
 from .userdata import (
     DATA_DIR_NAME,
     is_inside,
@@ -81,6 +84,16 @@ class Settings:
     app_os_version: str = APP_OS_VERSION
     app_version: str = APP_VERSION
     project_root: Path = Path.cwd()
+    # 要挂到接口项目上的附属项目（扩展）。配置项写目录相对路径，程序去该目录下
+    # 找固定的 entry 文件名 extension.py；默认空 = 只跑纯接口，一个扩展都不装。
+    #   PIXIV_BRIDGE_EXTENSIONS=novel        挂上小说阅读器
+    #   PIXIV_BRIDGE_EXTENSIONS=novel,reader 逗号/分号/空白分隔，按顺序挂
+    # 解析成元组前会做去空、去重（见 pixiv_bridge.extensions.parse_extension_specs）。
+    extensions: tuple = field(default_factory=tuple)
+    # 导航页（`/`）「其它入口」那一段的额外链接，写法 `标题=地址`，逗号分隔。
+    # 用来把主项目不认识的东西（例如另一个入口 iwara 的页面）也列上去。
+    #   PIXIV_BRIDGE_NAV_LINKS=iwara 视频=http://127.0.0.1:8766/
+    nav_links: str = ""
 
     @classmethod
     def load(cls, env_path=None, migrate=True):
@@ -205,5 +218,9 @@ class Settings:
             api_ips=os.environ.get("PIXIV_BRIDGE_API_IPS", ""),
             oauth_ips=os.environ.get("PIXIV_BRIDGE_OAUTH_IPS", ""),
             image_ips=os.environ.get("PIXIV_BRIDGE_IMAGE_IPS", ""),
+            extensions=tuple(
+                parse_extension_specs(os.environ.get("PIXIV_BRIDGE_EXTENSIONS", ""))
+            ),
+            nav_links=os.environ.get("PIXIV_BRIDGE_NAV_LINKS", "").strip(),
             project_root=root,
         )

@@ -3,6 +3,16 @@
 依赖关系：本模块只 import 主项目（`pixiv_bridge`）与本子项目的模块，
 主项目不认识 `novel`，单向依赖不会倒过来。
 
+命令行上的启用方式是**扩展机制**（配置驱动）：扩展目录里放一个固定的
+`extension.py`（本目录已有），配置里写 `PIXIV_BRIDGE_EXTENSIONS=novel`，
+主项目就会执行它并把阅读器挂上去 —— 不需要专属入口脚本。
+
+本模块提供两条等价的路：
+
+- `novel/extension.py` 导出 `EXTENSION_ROUTERS` 与 `extension_state_factory`，
+  供扩展机制使用（`python run.py` 走这条）；
+- `create_app()` 直接显式组装，供测试与脚本使用。
+
 `create_app()` 的构造过程：
 
 1. `novel_state_factory(settings)`：按主项目 Settings 里的四个文件路径建好
@@ -51,7 +61,14 @@ def novel_state_factory(settings):
 
 
 def create_app(settings=None, transport=None):
-    """接口 + 小说阅读的完整服务（`novel/run.py` 的入口）。"""
+    """接口 + 小说阅读的完整服务（显式组装路径，主要给测试与脚本用）。
+
+    命令行启动不再走这里 —— 阅读器现在作为**扩展**挂在接口项目上：
+    把 `novel/` 放进项目目录，配置里写 `PIXIV_BRIDGE_EXTENSIONS=novel`，
+    由 `pixiv_bridge.extensions` 执行 `novel/extension.py` 完成挂载（见该文件）。
+    本函数保留原名与语义，与扩展共用同一套 `NOVEL_ROUTERS` /
+    `novel_state_factory`，两条路挂出来的应用是同一个。
+    """
     return _create_bridge_app(
         settings,
         transport=transport,

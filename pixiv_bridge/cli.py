@@ -8,6 +8,7 @@ import uvicorn
 from .config import Settings
 from .deps import ensure_dependencies
 from .envcheck import run_checks
+from .extensions import ExtensionError, load_extensions
 from .oauth import OAuthManager
 from .server import create_app
 
@@ -146,11 +147,25 @@ async def _check(settings):
         return 0
 
 
+def _print_extensions(extensions):
+    """报告按配置挂上的附属项目（扩展）。一个都没有就不打印。"""
+    if not extensions:
+        return
+    print(f"[扩展] 已挂载 {len(extensions)} 个：", flush=True)
+    for ext in extensions:
+        print(f"  {ext.name:<8} {ext.entry}（{len(ext.routers)} 个路由）", flush=True)
+
+
 def main(argv=None, app_factory=None):
     """启动服务。
 
-    `app_factory(settings)` 默认就是主项目的 `create_app`；子项目（如 `novel`）
-    传自己的工厂进来，即可在同一套命令行与环境检查之上挂上自己的路由。
+    默认 `app_factory` 就是主项目的 `create_app`，并按配置
+    （`PIXIV_BRIDGE_EXTENSIONS`）把附属项目（扩展，例如 `novel`）挂上去 ——
+    也就是说「把扩展目录放进项目目录 + 在配置里写它的相对路径」就够了，
+    不需要专门的入口脚本。
+
+    传了 `app_factory(settings)` 的调用方自己负责组装（`iwara/run.py` 走这条，
+    它不是 pixiv 接口项目的扩展，而是自己独立的接口项目）。
     """
     args = _parse_args(argv)
     settings = Settings.load(args.env)
@@ -175,9 +190,23 @@ def main(argv=None, app_factory=None):
     _print_warnings(settings)
     _fail_on(results)
     _warn_network(results, settings)
+
+    if app_factory is None:
+        # 扩展只在默认入口这一条路上按配置加载；加载失败给一行可读报错，
+        # 而不是把栈甩给用户（配置写错目录 / 目录里没有 extension.py 等）。
+        try:
+            extensions = load_extensions(settings)
+        except ExtensionError as exc:
+            print(f"[扩展] {exc}", file=sys.stderr, flush=True)
+            sys.exit(1)
+        _print_extensions(extensions)
+        app_factory = lambda settings: create_app(  # noqa: E731 - 就地绑定已加载的扩展
+            settings, extensions=extensions
+        )
+
     if args.check:
         sys.exit(asyncio.run(_check(settings)))
-    app = (app_factory or create_app)(settings)
+    app = app_factory(settings)
     uvicorn.run(app, host=settings.host, port=settings.port, reload=args.reload)
 
 

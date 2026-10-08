@@ -266,11 +266,14 @@ pixiv-bridge/
 │   ├── userdata.py     data 目录 / 旧数据迁移 / 用户配置 / 本地书架文件扫描
 │   ├── hoster.py       Pixiv 官方 IP 池 + Cloudflare ECH 入口 IP（可配置覆盖）
 │   ├── sni_client.py   无 SNI TLS 直连客户端（对应 PixEz sni:false）
-│   ├── ech_client.py   ECH（加密 SNI）直连客户端（ctypes 调用 OpenSSL 3.5+）
+│   ├── ech_client.py   ECH（加密 SNI）直连客户端（ctypes 调用 OpenSSL 4.0+，优先用自带库）
 │   ├── rate_limit.py   令牌桶限流
 │   ├── image_proxy.py  图片防盗链代理
-│   ├── cli.py          命令行入口（两个入口共用：--host / --port / --reload / --check / --env）
+│   ├── cli.py          命令行入口（两个入口共用：--host / --port / --reload / --check / --env；默认入口在这里按配置挂扩展）
+│   ├── nav.py          导航页渲染（自带入口 + 扩展声明的页面 + 配置里的其它入口）
+│   ├── routes/nav.py   `/` 导航页路由（在扩展路由之前挂载，保证扩展抢不走 `/`）
 │   ├── server.py       FastAPI 应用组装（lifespan + 异常处理 + 挂载纯接口路由）
+│   ├── extensions.py   扩展加载（配置里写目录名，程序找其中的 extension.py）
 │   └── routes/         接口路由模块（按领域拆分）
 │       ├── auth.py     认证接口
 │       ├── illust.py   插画 / 收藏 / 评论
@@ -309,12 +312,57 @@ pixiv-bridge/
 | `PIXIV_BRIDGE_ECH` | 关 | `1/true/yes/on` 开启 ECH（加密 SNI）直连，见「ECH 模式」 |
 | `PIXIV_BRIDGE_ECH_CONFIG` | 空 | 自定义 ECHConfigList（base64，可带 PEM 包裹）；留空则自动经 DoH 获取（Cloudflare → 阿里 DNS），失败时用内置默认值（会过期） |
 | `PIXIV_BRIDGE_ECH_IPS` | 空 | 逗号分隔，覆盖 ECH 用的 Cloudflare 入口 IP（默认 `104.18.10.118,104.18.11.118,104.18.42.239,104.16.132.229`，按实测可用率排序） |
-| `PIXIV_BRIDGE_OPENSSL_DIR` | 空 | 含 OpenSSL 3.5+ `libssl`/`libcrypto` 的目录（**仅 ECH 模式需要**；留空按 PATH → 常见安装路径查找） |
+| `PIXIV_BRIDGE_OPENSSL_DIR` | 空 | 含 OpenSSL **4.0+** `libssl`/`libcrypto` 的目录（**仅 ECH 模式需要**）。留空时用项目自带的 `openssl-libs/`，再退回系统安装位置；填了就**优先**用它 |
+| `PIXIV_BRIDGE_EXTENSIONS` | 空 | 要挂载的**附属项目（扩展）**目录，逗号分隔、按顺序挂载；相对路径按项目根算。留空＝纯接口。写 `novel` 就会去找 `novel/extension.py` 并把小说阅读器挂上，见「附属项目（扩展）」 |
+| `PIXIV_BRIDGE_NAV_LINKS` | 空 | 额外列进导航页「其它入口」段的链接，写成 `标题=地址`，多项用逗号 / 分号 / 换行分隔（如 `iwara 视频=http://127.0.0.1:8766/`）。只写地址时拿地址当标题 |
 | `PIXIV_PROXY`（别名 `PIXIV_BRIDGE_PROXY`） | 空 | 如 `http://127.0.0.1:7890`；设置后所有 Pixiv 请求（API / OAuth / 图片 / 自检）都走代理，**优先于 ECH 与 SNI 绕过**，见「代理通道」 |
+
+## 附属项目（扩展）
+
+项目分三块，但**入口只有两个**（`run.py` 与 `iwara/run.py`）。小说阅读器（`novel`）不带专属入口脚本，它作为**扩展**挂在接口主项目上：把扩展目录名写进配置，主项目启动时自己去该目录找固定名字的入口文件 `extension.py`。
+
+```
+PIXIV_BRIDGE_EXTENSIONS=novel        # 相对路径按项目根算
+```
+
+启用后启动日志会多一段：
+
+```
+[扩展] 已挂载 1 个：
+  novel    /path/to/pixiv-bridge/novel/extension.py（5 个路由）
+```
+
+约定（写自己的扩展时照着做）：
+
+| 名字 | 必需 | 作用 |
+| --- | --- | --- |
+| `extension.py` | 是 | 扩展目录里的固定入口文件名 |
+| `EXTENSION_ROUTERS` | 是 | 要挂到应用上的路由（元组；写单个 router 也能被自动包成元组） |
+| `extension_state_factory(settings)` | 否 | 返回 `{属性名: 对象}`，启动时逐个挂到 `app.state` 上（与主项目自己的状态并存；也用它往导航页里加自己的段落，见下） |
+| `extension_shutdown(app)` | 否 | 异步函数；应用退出时被 `await`（按扩展的**倒序**释放，用来关掉扩展自己的连接池等资源） |
+| `EXTENSION_NAV` | 否 | 导航页上要展示的自己这一摊页面：`({"title": ..., "path": ..., "description": ...}, ...)`。没写就只在导航页上列一个扩展名 |
+
+### `/` 上的导航页
+
+`/` 恒定是接口项目的**导航页**（`pixiv_bridge/nav.py` + `pixiv_bridge/routes/nav.py`），任何人启动都会看到它：
+
+- 不挂扩展时列出接口项目自带的 `/docs`、`/redoc`、`/openapi.json`、`/api/health`；
+- 挂了扩展就多出「扩展：目录名」一段，内容来自该扩展的 `EXTENSION_NAV`（没声明就只列名字 + 一句说明）；
+- 配置里的 `PIXIV_BRIDGE_NAV_LINKS` 会渲染成「其它入口」一段，用来把**另一个入口**（例如 `iwara/run.py`）挂到手边；
+- 导航页路由挂在扩展路由**之前**（Starlette 先匹配先赢），所以扩展即使也声明 `/` 也顶不掉它 —— 小说阅读器就是这么让位到 `/novel` 的。
+
+`iwara/run.py` 那个入口的 `/` 是同一个导航页，只是多一段「iwara 视频（本入口独有）」：iwara 不动路由，而是在 `iwara/app.py` 里通过 `iwara_state_factory` 往 `app.state.nav_sections` 塞一个 `NavSection`。
+
+### 要点
+
+- **主项目不认识任何具体扩展**：`pixiv_bridge/server.py` 的 `create_app()` 只按传入的扩展对象组装，不读配置（保证纯接口的行为不随 `.env` 漂移）；读配置加载扩展发生在 `pixiv_bridge/cli.py` 里，即 `run.py` 走的那条路。
+- **扩展目录名写错不会静默降级**：找不到 `extension.py`、或入口里没定义 `EXTENSION_ROUTERS`，都会在启动前打印一条可读的错误并**以退出码 1 中止**，不会半启动。
+- `iwara` 不参与这套机制，它保留自己的入口 `iwara/run.py`（原因是它需要多装一个编译依赖 `curl_cffi`，见「iwara.tv」一节）。
+- 命令行上用 `--env` 指定别的目录（`python run.py --env /path/to/other`）时，扩展相对路径就按那个目录算。
 
 ## Web 页面（小说阅读器）
 
-小说阅读子项目（`novel/`）内置单文件页面（`novel/web/index.html`，零依赖、无构建步骤）。用 `python novel/run.py` 启动后，浏览器打开 <http://127.0.0.1:8765/> 即可使用。它是**个人向的 Pixiv 小说阅读器**：只做「找小说 → 读小说 → 存/导出」这一条链路，插画相关的界面已移除。
+小说阅读子项目（`novel/`）内置单文件页面（`novel/web/index.html`，零依赖、无构建步骤）。在配置里启用 `novel` 扩展（`PIXIV_BRIDGE_EXTENSIONS=novel`）后启动，浏览器打开 <http://127.0.0.1:8765/novel> 即可使用（`/` 是接口项目的导航页，上面有指向阅读器的链接）。它是**个人向的 Pixiv 小说阅读器**：只做「找小说 → 读小说 → 存/导出」这一条链路，插画相关的界面已移除。
 
 导航有六项，页面顶部常驻搜索框（搜索框左侧可选「作品 / 作者」）：
 
@@ -360,7 +408,7 @@ pixiv-bridge/
 - 输入框在窄屏为 `16px` 字号（iOS 不会因聚焦而放大页面）、常用按钮整行铺满；卡片单列、封面放大到 64×88；按钮 / 可点区域按 ≥44px 设计。
 - 顶栏 / 标签栏 / 抽屉 / 提示条都带 `env(safe-area-inset-*)`，刘海屏与手势条不遮挡内容；阅读工具条在窄屏可横向滑动。
 - 阅读设置（`Aa`）与目录抽屉在手机上都是全宽浮层，浮在标签栏之上。
-- 手机上访问用 `http://<电脑局域网 IP>:8765/`（后端需以 `HOST=0.0.0.0` 启动，见「局域网访问」）。
+- 手机上访问用 `http://<电脑局域网 IP>:8765/novel`（后端需以 `HOST=0.0.0.0` 启动，见「局域网访问」）。
 
 打开小说报错时怎么看（页面已内置提示）：
 
@@ -462,9 +510,9 @@ pixiv-bridge/
 | GET | `/api/next?url=` | 通用翻页（传任意列表接口返回的 next_url） |
 | GET | `/img?url=完整图片URL` 或 `/img/{path}` | 图片代理 |
 
-### 台账与书架（**仅 `novel/run.py` 提供**）
+### 台账与书架（**仅启用 `novel` 扩展后提供**）
 
-下面这些不是接口的一部分，而由小说阅读子项目 `novel/` 挂载；用 `run.py`（或 `start.bat` / `start.sh`）启动时它们都返回 **404**，要看下面的说明请改用 `novel/run.py`：
+下面这些不是接口的一部分，而由小说阅读子项目 `novel/` 挂载；不启用扩展时（`python run.py` / `start.bat` / `start.sh` 的默认状态）它们都返回 **404**（阅读器页面在 `/novel`，不在 `/`——`/` 是导航页），要看下面的说明请先在配置里写 `PIXIV_BRIDGE_EXTENSIONS=novel`：
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -709,9 +757,9 @@ python -m pip download -r requirements.txt -d wheels
 cd pixiv-bridge
 cp .env.example .env      # Windows: copy .env.example .env
 # 编辑 .env：填入 PIXIV_REFRESH_TOKEN（以及需要的 PIXIV_BRIDGE_ECH 等）
+# 要小说阅读器的话，再加一行 PIXIV_BRIDGE_EXTENSIONS=novel
 python run.py --check     # 期望：python / deps / files / ech(或 network) 全 OK + 登录成功
-python run.py             # 纯接口启动
-python novel/run.py       # 或：接口 + 小说阅读器，浏览器打开 http://127.0.0.1:8765/
+python run.py             # 启动（配了扩展就一起挂上；浏览器打开 http://127.0.0.1:8765/ 是导航页）
 ```
 
 ## 部署
@@ -726,7 +774,7 @@ docker run -d -p 8765:8765 \
   pixiv-bridge
 ```
 
-> Docker 镜像里跑的是**纯接口**入口（`CMD python run.py`）。想在容器里用阅读器，`docker run` 时把命令换成 `python novel/run.py`（镜像已 `COPY novel novel`，不用改镜像）。
+> Docker 镜像里默认跑的是**纯接口**入口（`CMD python run.py`）。想在容器里用阅读器，`docker run` 时加一个环境变量 `-e PIXIV_BRIDGE_EXTENSIONS=novel`（镜像已 `COPY novel novel`，不用改镜像）；阅读器在 `/novel`。
 
 ### 局域网访问
 
@@ -735,7 +783,7 @@ docker run -d -p 8765:8765 \
 
 ```bash
 PIXIV_BRIDGE_HOST=0.0.0.0 .venv/bin/python run.py          # 纯接口
-PIXIV_BRIDGE_HOST=0.0.0.0 .venv/bin/python novel/run.py     # 接口 + 阅读器（手机浏览器可用）
+PIXIV_BRIDGE_HOST=0.0.0.0 PIXIV_BRIDGE_EXTENSIONS=novel .venv/bin/python run.py   # 接口 + 阅读器（手机浏览器可用）
 ```
 
 建议放在反向代理（Nginx/Caddy）后面并加访问密钥。

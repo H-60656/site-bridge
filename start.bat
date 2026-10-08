@@ -7,8 +7,11 @@ rem   start.bat --port 9000          use another port
 rem   start.bat --host 0.0.0.0       allow other devices on your LAN
 rem   start.bat --check              check environment/login only, do not serve
 rem
-rem This launcher starts the pure API project (run.py). For the novel reader UI,
-rem run "python novel\run.py" instead (see README, it mounts the novel/ sub-project).
+rem This launcher starts the API project (run.py). The API project serves the
+rem pure Pixiv API only. To also get the novel reader UI, add this line to .env:
+rem   PIXIV_BRIDGE_EXTENSIONS=novel
+rem The launcher finds novel/extension.py automatically; there is no separate
+rem entry script for it anymore (see README, section "附属项目（扩展）").
 rem
 rem The first run installs dependencies with pip (fastapi / uvicorn / httpx);
 rem it takes 1-3 minutes. Chinese walkthrough: see INSTALL.md.
