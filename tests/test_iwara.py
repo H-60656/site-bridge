@@ -10,11 +10,13 @@ iwara 依赖 ``curl_cffi``（Cloudflare 只认浏览器 TLS 指纹），而它�
 """
 
 import asyncio
+import base64
 import itertools
 import json
 import os
 import shutil
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -38,6 +40,7 @@ try:
         SEED_HOSTS,
         SEED_IPS,
         THUMBNAIL_HOST,
+        IwaraAuthError,
         IwaraClient,
         IwaraError,
         Resolved,
@@ -674,6 +677,249 @@ class IwaraAuthTestCase(unittest.TestCase):
         asyncio.run(client._prepare_auth("/videos"))
         self.assertEqual(client.auth_error, "")
         self.assertEqual(client.headers()["authorization"], "Bearer access-xyz")
+
+
+def _make_jwt(exp: int, username: str = "tester") -> str:
+    """造一个形状正确的 JWT（不验签，客户端也只 base64 解载荷）。"""
+
+    def seg(payload: dict) -> str:
+        raw = json.dumps(payload).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    return f"{seg({'alg': 'HS256', 'typ': 'JWT'})}.{seg({'exp': exp, 'username': username})}.sig"
+
+
+class _FakeResp:
+    """`request()` 只会用到 status_code / headers / json() / text。"""
+
+    def __init__(self, status_code=200, payload=None, headers=None, text=""):
+        self.status_code = status_code
+        self._payload = payload if payload is not None else {}
+        self.headers = headers or {}
+        self.text = text or json.dumps(self._payload)
+
+    def json(self):
+        return self._payload
+
+
+@unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：pip install -r iwara/requirements.txt")
+class IwaraTokenHttpTestCase(unittest.TestCase):
+    """换 token 的真实 HTTP 形状，以及「403 表示过期」的强制重放。
+
+    既有的用例都把 ``ensure_access_token`` 整个打桩掉，所以从没验证过它实际
+    发出去的是什么（方法、路径、空 body、refresh token 放哪个头），也没验证过
+    服务端用 403 而不是 401 表示过期时那次重放。这里补上这两块。
+    """
+
+    def _client_with_a_live_token(self) -> "IwaraClient":
+        # access token 离过期还很远，好让 _prepare_auth 保持不动。
+        client = IwaraClient(refresh_token="refresh-good", access_token=_make_jwt(int(time.time()) + 3600))
+        return client
+
+    def _patch_request(self, client: "IwaraClient"):
+        """记录 request() 收到的参数，并按序返回假响应。"""
+        seen: list[dict] = []
+        queue: list[_FakeResp] = []
+
+        async def fake_request(method, path, **kw):
+            seen.append({"method": method, "path": path, **kw})
+            if not queue:
+                raise AssertionError(f"没有排队的响应给 {method} {path}")
+            return queue.pop(0)
+
+        client.request = fake_request  # type: ignore[assignment]
+        return seen, queue
+
+    # ---------- refresh_access 的请求形状 ----------
+
+    def test_refresh_access_posts_an_empty_body_with_the_refresh_token_in_a_header(self):
+        client = IwaraClient(refresh_token="refresh-good")
+        seen, queue = self._patch_request(client)
+        queue.append(_FakeResp(payload={"accessToken": "access-new"}))
+
+        token = asyncio.run(client.refresh_access())
+
+        self.assertEqual(token, "access-new")
+        self.assertEqual(client.access_token, "access-new")
+        self.assertEqual(len(seen), 1)
+        call = seen[0]
+        self.assertEqual(call["method"], "POST")
+        self.assertEqual(call["path"], "/user/token")
+        # 空 body：这个端点靠 authorization 头认人，不是 JSON 体。
+        self.assertIsNone(call.get("json_body"))
+        self.assertEqual(call["headers"]["authorization"], "Bearer refresh-good")
+
+    def test_refresh_access_treats_403_as_a_dead_token(self):
+        # 关键：这个 API 过期 token 回 403，不是 401，两者都必须当失败。
+        client = IwaraClient(refresh_token="refresh-expired")
+        seen, queue = self._patch_request(client)
+        queue.append(_FakeResp(403, text='{"message":"errors.forbidden"}'))
+
+        with self.assertRaises(IwaraAuthError) as ctx:
+            asyncio.run(client.refresh_access())
+        self.assertIn("403", str(ctx.exception))
+        self.assertIsNone(client.access_token)
+
+    def test_refresh_access_rejects_a_response_without_access_token(self):
+        client = IwaraClient(refresh_token="refresh-good")
+        seen, queue = self._patch_request(client)
+        queue.append(_FakeResp(payload={"nope": True}))
+
+        with self.assertRaises(IwaraAuthError):
+            asyncio.run(client.refresh_access())
+
+    def test_refresh_access_without_a_refresh_token_does_not_send_anything(self):
+        client = IwaraClient()
+        seen, queue = self._patch_request(client)
+
+        with self.assertRaises(IwaraAuthError):
+            asyncio.run(client.refresh_access())
+        self.assertEqual(seen, [], "连 refresh token 都没有就不该发请求")
+
+    # ---------- ensure_access_token 的续期时机 ----------
+
+    def test_ensure_access_token_refreshes_when_there_is_no_access_token(self):
+        client = IwaraClient(refresh_token="refresh-good")
+        calls = []
+
+        async def fake_refresh():
+            calls.append(1)
+            client.access_token = "access-new"
+            return "access-new"
+
+        client.refresh_access = fake_refresh  # type: ignore[assignment]
+        self.assertEqual(asyncio.run(client.ensure_access_token()), "access-new")
+        self.assertEqual(len(calls), 1)
+
+    def test_ensure_access_token_keeps_a_token_that_is_still_fresh(self):
+        client = self._client_with_a_live_token()
+        calls = []
+
+        async def fake_refresh():  # pragma: no cover - 不该被调到
+            calls.append(1)
+            return "should-not-happen"
+
+        client.refresh_access = fake_refresh  # type: ignore[assignment]
+        asyncio.run(client.ensure_access_token())
+        self.assertEqual(calls, [], "离过期还有一小时，不该白白换一次")
+
+    def test_ensure_access_token_renews_inside_the_five_minute_window(self):
+        # 提前 300 秒续期，免得请求正好卡在过期那一瞬。
+        client = IwaraClient(refresh_token="refresh-good", access_token=_make_jwt(int(time.time()) + 120))
+        calls = []
+
+        async def fake_refresh():
+            calls.append(1)
+            client.access_token = "access-renewed"
+            return "access-renewed"
+
+        client.refresh_access = fake_refresh  # type: ignore[assignment]
+        self.assertEqual(asyncio.run(client.ensure_access_token()), "access-renewed")
+        self.assertEqual(len(calls), 1)
+
+    def test_ensure_access_token_renews_a_token_without_an_exp_claim(self):
+        # 载荷解不出来（畸形 token）时，宁愿换新的也不赌它还有效。
+        client = IwaraClient(refresh_token="refresh-good", access_token="not-a-jwt")
+        calls = []
+
+        async def fake_refresh():
+            calls.append(1)
+            client.access_token = "access-renewed"
+            return "access-renewed"
+
+        client.refresh_access = fake_refresh  # type: ignore[assignment]
+        self.assertEqual(asyncio.run(client.ensure_access_token()), "access-renewed")
+        self.assertEqual(len(calls), 1)
+
+    # ---------- request() 的 403 强制重放 ----------
+
+    def test_request_replays_once_after_a_403(self):
+        # 服务端用 403 表示「token 过期」。带 token 收到 403 时应换一次 token
+        # 再重放同一请求，而且只放一次。
+        client = self._client_with_a_live_token()
+        client._call_with_ip_retry = self._queue_retries(client)
+        responses = client._call_with_ip_retry.queue  # type: ignore[attr-defined]
+        responses.append(_FakeResp(403, text='{"message":"expired"}'))
+        responses.append(_FakeResp(200, payload={"ok": True}))
+
+        refreshed = []
+
+        async def fake_refresh():
+            refreshed.append(1)
+            client.access_token = _make_jwt(int(time.time()) + 3600)
+            return client.access_token
+
+        client.refresh_access = fake_refresh  # type: ignore[assignment]
+        resp = asyncio.run(client.request("GET", "/videos"))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"ok": True})
+        self.assertEqual(len(refreshed), 1, "403 应触发一次换 token")
+        self.assertTrue(client._auth_retry_used)
+
+    def test_request_does_not_replay_a_second_403_forever(self):
+        # token 真失效时不能死循环：重放一次又回 403 就把响应交出去。
+        client = self._client_with_a_live_token()
+        client._call_with_ip_retry = self._queue_retries(client)
+        responses = client._call_with_ip_retry.queue  # type: ignore[attr-defined]
+        responses.append(_FakeResp(403, text='{"message":"expired"}'))
+        responses.append(_FakeResp(403, text='{"message":"still expired"}'))
+
+        refreshed = []
+
+        async def fake_refresh():  # pragma: no cover - 只该调一次
+            refreshed.append(1)
+            client.access_token = _make_jwt(int(time.time()) + 3600)
+            return client.access_token
+
+        client.refresh_access = fake_refresh  # type: ignore[assignment]
+        resp = asyncio.run(client.request("GET", "/videos"))
+
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(len(refreshed), 1, "只放一次，不能无限循环")
+
+    def test_request_surfaces_a_failed_refresh_without_losing_the_403(self):
+        client = self._client_with_a_live_token()
+        client._call_with_ip_retry = self._queue_retries(client)
+        client._call_with_ip_retry.queue.append(  # type: ignore[attr-defined]
+            _FakeResp(403, text='{"message":"expired"}')
+        )
+
+        async def boom():
+            raise IwaraAuthError("刷新 token 失败（403）: errors.forbidden")
+
+        client.refresh_access = boom  # type: ignore[assignment]
+        resp = asyncio.run(client.request("GET", "/videos"))
+
+        # 换不出 token 也要把原始 403 交回去，并记下原因退化成匿名。
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(client._auth_failed)
+        self.assertIn("403", client.auth_error)
+
+    def test_request_does_not_replay_without_a_refresh_token(self):
+        # 匿名访问收到 403 就是真没权限，不是「token 过期」，不该去换 token。
+        client = IwaraClient()
+        client._call_with_ip_retry = self._queue_retries(client)
+        client._call_with_ip_retry.queue.append(  # type: ignore[attr-defined]
+            _FakeResp(403, text='{"message":"nope"}')
+        )
+
+        async def fake_refresh():  # pragma: no cover - 不该被调到
+            raise AssertionError("匿名不该尝试续期")
+
+        client.refresh_access = fake_refresh  # type: ignore[assignment]
+        resp = asyncio.run(client.request("GET", "/videos"))
+        self.assertEqual(resp.status_code, 403)
+
+    @staticmethod
+    def _queue_retries(client: "IwaraClient"):
+        """把真正发请求的那层换成「按队列吐响应」，并挂在函数上便于取用。"""
+
+        async def fake_call(host, call, *, retry_statuses=()):
+            return fake_call.queue.pop(0)  # type: ignore[attr-defined]
+
+        fake_call.queue = []  # type: ignore[attr-defined]
+        return fake_call
 
 
 @unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：pip install -r iwara/requirements.txt")
