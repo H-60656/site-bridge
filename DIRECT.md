@@ -20,10 +20,10 @@
 
 | 层 | 干什么 | 典型失败现象 | 本项目的对策 | 落地位置 |
 | --- | --- | --- | --- | --- |
-| ① DNS 解析 | 域名 → IP | `getaddrinfo failed`；解析到明显无关的网段（Facebook / Twitter 段） | 硬编码 IP 池；DoH（**必须验真**） | `pixiv_bridge/hoster.py`、`iwara/client.py` 的 `SEED_HOSTS` / `SEED_IPS` |
+| ① DNS 解析 | 域名 → IP | `getaddrinfo failed`；解析到明显无关的网段（Facebook / Twitter 段） | 硬编码 IP 池；DoH（**必须验真**） | `pixiv/hoster.py`、`iwara/client.py` 的 `SEED_HOSTS` / `SEED_IPS` |
 | ② TCP 可达 | 能不能建立连接 | `Timeout`、`TcpTestSucceeded=False` | IP 池逐个回退 + 先探测再固定 | `hoster.resolve()`、`iwara/client.py` 的 `pick_ip` |
-| ③ TLS 握手 | 握手内容与形状 | 连接被 RST；403 + `cf-mitigated: challenge` | 无 SNI 握手 / ECH / 浏览器指纹 | `pixiv_bridge/sni_client.py`、`ech_client.py`、`iwara/client.py` 的 `impersonate` |
-| ④ 应用层 | HTTP 语义 | 200 但 body 空；403；业务错误码 | 补齐请求头 / 签名 / 令牌 | `pixiv_bridge/api.py` 的 `_signed_headers`、`iwara/client.py` 的 `headers` |
+| ③ TLS 握手 | 握手内容与形状 | 连接被 RST；403 + `cf-mitigated: challenge` | 无 SNI 握手 / ECH / 浏览器指纹 | `pixiv/sni_client.py`、`ech_client.py`、`iwara/client.py` 的 `impersonate` |
+| ④ 应用层 | HTTP 语义 | 200 但 body 空；403；业务错误码 | 补齐请求头 / 签名 / 令牌 | `pixiv/api.py` 的 `_signed_headers`、`iwara/client.py` 的 `headers` |
 
 **关键纪律：不要跨层乱猜。** 每一层都有独立的探针，先定位再动手，否则会浪费大量时间在错误的方向上（本项目在 iwara 上就先后走过「以为是 HTTP 库问题」和「换个 DoH 就好」两条死路）。
 
@@ -57,7 +57,7 @@
 
 ### 3.1 DNS 层：不要相信解析
 
-**手段一：硬编码 IP 池。** 最可靠。`pixiv_bridge/hoster.py` 里按域名分组维护官方源站 IP：
+**手段一：硬编码 IP 池。** 最可靠。`pixiv/hoster.py` 里按域名分组维护官方源站 IP：
 
 ```python
 HOST_IP_POOLS = {
@@ -102,7 +102,7 @@ iwara 更进一步，用一张**实测可用的边缘 IP 表**（`iwara/client.p
 
 #### a) 无 SNI 握手 —— 对付「SNI 明文触发阻断」
 
-TLS ClientHello 里不明文携带域名，链路中间盒就无从下手。`pixiv_bridge/sni_client.py` 用 `asyncio.open_connection(ip, port, ssl=ctx, server_hostname=None)` 实现，配套三个细节：
+TLS ClientHello 里不明文携带域名，链路中间盒就无从下手。`pixiv/sni_client.py` 用 `asyncio.open_connection(ip, port, ssl=ctx, server_hostname=None)` 实现，配套三个细节：
 
 - 证书不校验（`ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE`）—— 直连源站 IP 时没有可校验的名字；
 - **必须手工补 `Host` 头**：TLS 里没有 SNI 后，Host 是服务端识别域名的唯一依据（`sni_client.py:135-138`）；
@@ -112,7 +112,7 @@ TLS ClientHello 里不明文携带域名，链路中间盒就无从下手。`pix
 
 #### b) ECH —— 对付「SNI 无论怎么发都被阻断」
 
-ECH（Encrypted Client Hello，RFC 9180 的 TLS 扩展）把**真正的 SNI 加密**后放进 ClientHello，中间盒只能看到外层名字 `cloudflare-ech.com`。`pixiv_bridge/ech_client.py` 的实现要点（全部来自实测约束）：
+ECH（Encrypted Client Hello，RFC 9180 的 TLS 扩展）把**真正的 SNI 加密**后放进 ClientHello，中间盒只能看到外层名字 `cloudflare-ech.com`。`pixiv/ech_client.py` 的实现要点（全部来自实测约束）：
 
 1. **Cloudflare 的 ECH 公钥与站点无关**（按 anycast 集群下发），所以可以拿 `cloudflare-ech.com` 的配置去连**任意** Cloudflare 前置的域名 —— 这是整套方案成立的前提。
 2. **需要 OpenSSL 4.0+**：ECH 是 OpenSSL 4.0.0 才加入的，3.x 全系（含 3.5/3.6）都没有。Python 自带的 `ssl` 模块没有暴露 ECH，所以用 `ctypes` 直接调 libssl。项目**自带** `openssl-libs/`，按 `平台-架构` 分目录（`win32-amd64` 4.0.2 / `android-arm64` 4.0.3），查找顺序是「用户指定 → 项目自带 → 系统安装」，逐个候选尝试。
@@ -168,7 +168,7 @@ elif settings.bypass_sni:
 else:                   # 普通路径
 ```
 
-（`pixiv_bridge/api.py:298-338` 就是这个分支结构。）
+（`pixiv/api.py:298-338` 就是这个分支结构。）
 
 **什么时候必须用代理**：① 目标是 IP 层封锁（TCP 都建不起来）；② 链路无差别阻断 ECH 扩展；③ 服务端策略升级到直连手段都跟不上。
 
@@ -191,8 +191,8 @@ else:                   # 普通路径
 
 直连能力是**可选增强**，不能反过来成为负担：
 
-- **子项目隔离，单向依赖。** `pixiv_bridge/` 永远不认识 `novel/` 和 `iwara/`；子项目只能 `import pixiv_bridge.*`。`scripts/check_boundary.py` 用 AST + 子进程探路由来强制这条边界。
-- **重依赖不进根清单。** `curl_cffi` 是编译包，只有 iwara 需要，所以写在 `iwara/requirements.txt` 里，由 `pixiv_bridge/deps.py` 的通用 `ensure_packages(names, requirements)` 按需安装。只跑 Pixiv 的用户完全不必碰它。
+- **站点隔离，单向依赖。** `pixiv_bridge/` 是纯框架，永远不认识 `pixiv/`、`iwara/`、`novel/`、`iwara_web/`；站点与扩展只能 `import pixiv_bridge.*`（两个站点之间也互不依赖）。`scripts/check_boundary.py` 用 AST + 子进程探路由来强制这条边界，`scripts/sites.py` 是构建侧的登记表。
+- **重依赖不进根清单。** `curl_cffi` 是编译包，只有 iwara 需要，所以写在 `iwara/requirements.txt` 里，由 `pixiv_bridge/deps.py` 的通用 `ensure_packages(names, requirements)` 按需安装，站点在自己 `run.py` 里先 `bootstrap(partial(ensure_packages, ...))` 再用它。只跑 Pixiv 的用户完全不必碰它。
 - **可选能力要有回退，且失败要安静。** 登录态失效不该让整站不可用 —— iwara 的 `_prepare_auth`（`iwara/client.py:465-485`）换不出 access token 时只把原因记进 `auth_error` 并退回匿名，因为「iwara 的绝大部分内容匿名就能看，为了一个失效的 token 让整站不可用是本末倒置」。
 - **能力自检要暴露给用户。** `/api/iwara/auth` 匿名时刻意不去打 `/user`（那返回 401，看着像报错），所以它永远 200；只有真拿到 access token 才问一次 `/user` 填 `username_hint` —— 顺带一条教训：token 载荷里**没有**用户名字段（只有 `exp`/`id`/`role`），早期直接读载荷的 `username` 于是恒为 `None`，而当时的测试替身自己往载荷里塞了 `username`，正好把这个 bug 盖住了。
 
@@ -200,7 +200,7 @@ else:                   # 普通路径
 
 ## 7. 同一套方法、两个不同站点
 
-| | Pixiv（`pixiv_bridge/`） | iwara.tv（`iwara/`） |
+| | Pixiv 站点（`pixiv/`） | iwara.tv 站点（`iwara/`） |
 | --- | --- | --- |
 | 阻塞形态 | SNI 阻断 + DNS 污染 | DNS 污染 + Cloudflare 反爬挑战 |
 | ① DNS | 默认解析可用；直连模式下走内置 IP 池 | **解析完全不可信**，DoH 也返回污染答案 → 种子 IP 表 |
@@ -240,4 +240,4 @@ else:                   # 普通路径
 | `PIXIV_PROXY` | 代理通道，**优先级高于以上所有直连手段** |
 | `IWARA_REFRESH_TOKEN` | iwara 可选登录态（也可跑 `python iwara/get_token.py` 存到 `data/iwara_tokens.json`） |
 
-> 起手先跑 `python run.py --check`：自检会逐项报告 python / deps / 项目文件 / 端口 / 网络 / ECH 的状态，把「四道关」的结论直接摊开（`--check` 不监听端口，所以 `port` 只警告不中止）。加了站点之后自检也要跟着长：iwara 入口跑 `python iwara/run.py --check`，会在这张表后面追加 `iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录` 三项——**新站点照这个套路做**：把「本层的判据」写成一条 `CheckResult`，经 `extra_checks(settings)` 传进 `pixiv_bridge.cli.main`，就与通用检查同表同打印点。
+> 起手先跑 `python pixiv/run.py --check`：自检会逐项报告 python / deps / 项目文件 / 端口 / 网络 / ECH 的状态，把「四道关」的结论直接摊开（`--check` 不监听端口，所以 `port` 只警告不中止）。加了站点之后自检也要跟着长：iwara 入口跑 `python iwara/run.py --check`，会在这张表后面追加 `iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录` 三项——**新站点照这个套路做**：把「本层的判据」写成一条 `CheckResult`，挂在 `Site` 契约的 `checks`（以及 `login_check` / `network_hint`）上（见 `pixiv_bridge/site.py`），框架的 `pixiv_bridge.cli.main(site=SITE)` 就会把它与通用检查打在同一张表里。另外别忘了在构建侧登记：`scripts/sites.py` 的 `SITES` 加一条，`check_boundary.py` / `make_share_packages.py` 才认这个新站点。

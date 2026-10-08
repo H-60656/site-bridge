@@ -14,8 +14,9 @@
 - 什么都不写：导航页仍然会列出这个扩展（只给名字，不给链接），
   这样「现在挂了哪些东西」一眼可见，写没写声明都不影响它是否出现。
 
-主项目不认识任何具体扩展，也不认识别的接口项目（例如 `iwara`，它是自己独立的
-入口）—— 那些入口在配置里用 `PIXIV_BRIDGE_NAV_LINKS` 手工补链接即可，例如
+框架不认识任何具体扩展，也不认识具体接口站点 —— 页面标题取自应用自己的
+`app.title`（站点在建应用时声明），别的入口（例如另一个站点 `iwara` 的运行实例）
+在配置里用 `PIXIV_BRIDGE_NAV_LINKS` 手工补链接即可，例如
 `PIXIV_BRIDGE_NAV_LINKS=iwara 视频=http://127.0.0.1:8766/`。
 
 依赖方向：本模块只依赖标准库，扩展与接口项目都可以用它渲染自己的那一页。
@@ -39,8 +40,8 @@ BUILTIN_ITEMS = (
     },
 )
 
-# 页面标题与副标题的默认值（副标题按当前挂了什么动态拼）。
-DEFAULT_TITLE = "Pixiv Bridge"
+# 页面标题的兜底值（正常取自应用的 `app.title`）；副标题按当前挂了什么动态拼。
+DEFAULT_TITLE = "Bridge"
 
 # `href` 只接受这几类地址，别的（例如 javascript:）只当文本显示。
 _SAFE_PREFIXES = ("/", "http://", "https://")
@@ -166,7 +167,9 @@ def render_page(app):
     """按当前应用状态渲染整个导航页（路由直接用它）。"""
     settings = getattr(app.state, "settings", None)
     return render_html(
-        title=DEFAULT_TITLE,
+        # 标题由接口站点自己声明（`create_bridge_app(title=...)` → FastAPI 的 app.title）；
+        # 框架不写死任何一个站点的名字。
+        title=getattr(app, "title", DEFAULT_TITLE) or DEFAULT_TITLE,
         subtitle=subtitle_for(app),
         sections=page_sections(app),
         links=parse_nav_links(getattr(settings, "nav_links", "")),

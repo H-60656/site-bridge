@@ -11,7 +11,7 @@
 #   pydantic 1.10.26 + fastapi 0.115.14 + starlette 0.41.3 已实测通过全部
 #   单元测试。
 #
-# 手工安装（一般不需要，run.py 会自动用本文件）：
+# 手工安装（一般不需要，pixiv/run.py 或 iwara/run.py 启动时会自动用本文件）：
 #   python -m pip install -r requirements-termux.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 pydantic<2

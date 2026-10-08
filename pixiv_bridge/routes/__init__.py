@@ -1,13 +1,5 @@
-"""路由模块共用的依赖访问器：从 ``app.state`` 取主项目注入的对象。
+"""框架自带路由（导航页 ``/``、健康检查 ``/api/health``）。
+
+站点自己的路由与 ``app.state`` 访问器在 ``<site>/routes/`` 里（例如
+``pixiv/routes/__init__.py`` 的 ``get_api`` / ``get_oauth`` / ``get_image_proxy``）。
 """
-
-def get_api(request):
-    return request.app.state.api
-
-
-def get_oauth(request):
-    return request.app.state.oauth
-
-
-def get_image_proxy(request):
-    return request.app.state.image_proxy

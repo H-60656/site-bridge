@@ -25,7 +25,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from pixiv_bridge.config import Settings
-from pixiv_bridge.server import create_app as _create_bridge_app
+from pixiv_bridge.server import create_bridge_app as _create_bridge_app
 
 # 与 test_bridge.py 同一约定：临时的东西放工作区 _tmp_tests/，别用系统 TEMP。
 TEST_TMP_ROOT = Path(__file__).resolve().parent.parent / "_tmp_tests"
@@ -65,7 +65,9 @@ def _mock_handler(request: httpx.Request) -> httpx.Response:
 
 
 def make_settings():
-    return Settings(refresh_token="", rate_limit_rpm=10000)
+    # iwara 站点用框架的 Settings（Pixiv 那堆字段在 PixivSettings 里，
+    # 站点之间互不共享配置）；refresh_token 之类的概念这里根本不存在。
+    return Settings(rate_limit_rpm=10000)
 
 
 def make_temp_dir(tag="tmp"):
@@ -939,7 +941,7 @@ class IwaraRouteTestCase(unittest.TestCase):
     """路由层：真实 app + 假客户端，验证形状、装饰与主机白名单。"""
 
     def _client(self):
-        app = create_iwara_app(make_settings(), transport=httpx.MockTransport(_mock_handler))
+        app = create_iwara_app(make_settings())
         client = TestClient(app)
         client.__enter__()
         self.addCleanup(client.__exit__, None, None, None)
@@ -1101,13 +1103,15 @@ class IwaraRouteTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_shutdown_releases_the_client(self):
-        app = create_iwara_app(make_settings(), transport=httpx.MockTransport(_mock_handler))
+        app = create_iwara_app(make_settings())
         with TestClient(app):
             fake = _FakeIwaraClient()
             app.state.iwara_client = fake
         self.assertTrue(fake.closed)
 
-    def test_pixiv_routes_still_present(self):
+    def test_framework_routes_are_present(self):
+        # `/api/health` 由框架（pixiv_bridge/routes/health.py）提供，
+        # 每个入口都有；站点自己不重复定义。
         client = self._client()
         self.assertEqual(client.get("/api/health").status_code, 200)
 
@@ -1188,7 +1192,7 @@ class IwaraEntryPointTestCase(unittest.TestCase):
         # 否则没挂那个包时导航页会出现一条 404 链接。
         self.assertNotIn("/iwara", paths)
 
-    def test_iwara_adds_routes_to_the_pure_app(self):
+    def test_iwara_adds_exactly_its_own_routes_to_the_shell(self):
         def paths(app):
             # 新版 FastAPI 的 include_router() 会塞一个 _IncludedRouter 包装对象，
             # 真正的路由在 .original_router.routes 里；旧版本来就是摊平的。
@@ -1201,10 +1205,12 @@ class IwaraEntryPointTestCase(unittest.TestCase):
                         collected.add(path)
             return collected
 
-        pure = paths(_create_bridge_app(make_settings(), transport=httpx.MockTransport(_mock_handler)))
-        full = paths(create_iwara_app(make_settings(), transport=httpx.MockTransport(_mock_handler)))
-        extra = full - pure
-        self.assertTrue(pure <= full, "iwara 应用必须包含纯接口的全部路由")
+        # 基准是框架外壳（`create_bridge_app`）：两个接口项目同级，
+        # iwara 的入口只往外壳上挂自己的那 10 条路由，不挂 Pixiv 的任何路由。
+        shell = paths(_create_bridge_app(make_settings()))
+        full = paths(create_iwara_app(make_settings()))
+        extra = full - shell
+        self.assertTrue(shell <= full, "iwara 应用必须包含框架外壳的全部路由")
         self.assertEqual(
             extra,
             {
@@ -1236,10 +1242,22 @@ class IwaraEntryPointTestCase(unittest.TestCase):
         root_requirements = Path(__file__).resolve().parent.parent / "requirements.txt"
         self.assertNotIn("curl_cffi", root_requirements.read_text(encoding="utf-8"))
 
-    def test_pure_bridge_does_not_expose_iwara_routes(self):
-        client = TestClient(_create_bridge_app(make_settings(), transport=httpx.MockTransport(_mock_handler)))
+    def test_shell_and_iwara_app_do_not_expose_pixiv_routes(self):
+        # 两个接口项目同级：框架外壳里没有任何站点路由；
+        # iwara 入口只挂 `/api/iwara/*`，Pixiv 的路由一条都不在。
+        pixiv_paths = ("/api/ranking", "/api/trending-tags", "/api/search/illust")
+        shell = TestClient(_create_bridge_app(make_settings()))
+        with shell:
+            self.assertEqual(shell.get("/api/iwara/videos").status_code, 404)
+            self.assertEqual(shell.get("/api/ranking").status_code, 404)
+        client = TestClient(create_iwara_app(make_settings()))
         with client:
-            self.assertEqual(client.get("/api/iwara/videos").status_code, 404)
+            for path in pixiv_paths:
+                self.assertEqual(
+                    client.get(path).status_code,
+                    404,
+                    f"iwara 入口不该挂 Pixiv 的 {path}",
+                )
 
 
 @unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：pip install -r iwara/requirements.txt")
@@ -1260,7 +1278,6 @@ class IwaraEnvCheckTestCase(unittest.TestCase):
 
     def _settings(self):
         return Settings(
-            refresh_token="",
             rate_limit_rpm=10000,
             data_dir=str(self.directory),
         )
@@ -1396,10 +1413,13 @@ class IwaraEntryWiringTestCase(unittest.TestCase):
         )
         self.assertLess(bootstrap, app_import)
 
-    def test_entry_passes_the_iwara_extra_checks(self):
+    def test_entry_hands_the_site_to_the_framework_cli(self):
         text = self._source()
-        self.assertIn("from iwara.envcheck import extra_checks", text)
-        self.assertIn("extra_checks=extra_checks", text)
+        # 入口本身不再拼参数：站点的检查/登录钩子都挂在 `iwara.app.SITE` 上，
+        # 由框架基座 `pixiv_bridge.cli.main(site=...)` 统一取值。
+        self.assertIn("from iwara.app import SITE", text)
+        self.assertIn("main(site=SITE)", text)
+        self.assertIn("from pixiv_bridge.cli import main", text)
 
     def test_get_token_does_not_import_the_app_package(self):
         # `from iwara import tokens` 不能再顺带把 iwara.app（→ curl_cffi）拖进来，

@@ -1,8 +1,8 @@
 """交互式获取 Pixiv refresh_token（傻瓜式）。
 
 用法：
-    python get_token.py              # 交互式选择登录方式
-    python get_token.py --password   # 直接用账号密码登录
+    python pixiv/get_token.py              # 交互式选择登录方式
+    python pixiv/get_token.py --password   # 直接用账号密码登录
 
 成功后 refresh_token 会写入项目数据目录 data/tokens.json（项目启动时优先读取它），
 不需要手工编辑 .env。
@@ -14,6 +14,9 @@ import getpass
 import sys
 from pathlib import Path
 
+# 直接 `python pixiv/get_token.py` 时 sys.path[0] 是 pixiv/，框架包在它的上一级。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from pixiv_bridge.deps import ensure_dependencies
 
 try:
@@ -24,10 +27,11 @@ except RuntimeError as exc:
 
 import httpx  # noqa: E402
 
-from pixiv_bridge.config import Settings  # noqa: E402
-from pixiv_bridge.oauth import AuthError, OAuthManager  # noqa: E402
+from pixiv.config import PixivSettings as Settings  # noqa: E402
+from pixiv.oauth import AuthError, OAuthManager  # noqa: E402
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+# 项目根（`.env` 与数据目录都在这里）；本文件在 pixiv/ 下，所以取上一级。
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _ask(prompt, default=""):
@@ -113,7 +117,7 @@ async def _run(args):
     print()
     print(f"登录功功: {name} {account}".rstrip())
     print(f"refresh_token 已保存到: {settings.token_file}")
-    print("现在可以启动服务了：python run.py")
+    print("现在可以启动服务了：python pixiv/run.py")
     return 0
 
 

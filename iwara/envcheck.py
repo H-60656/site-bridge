@@ -1,16 +1,15 @@
-"""iwara 入口专属的启动自检。
+"""iwara 站点的启动自检与登录校验。
 
-主项目的 ``--check`` 查的是公共环境（Python / 依赖 / 项目文件 / 端口 /
-网络 / ECH）。这一份只补 iwara 自己那三样，通过
-``pixiv_bridge.cli.main(extra_checks=...)`` 挂进同一张 ``[环境检查]`` 表：
+框架的通用检查查的是公共环境（Python / 依赖 / 项目文件 / 端口）。这一份补
+iwara 自己那三样，通过 ``Site.checks`` 挂进同一张 ``[环境检查]`` 表：
 
-    iwara 依赖   curl_cffi 在不在（编译包，主项目 REQUIRED 不含它）
+    iwara 依赖   curl_cffi 在不在（编译包，框架 REQUIRED 不含它）
     iwara 网络   api.iwara.tv 通不通（本机 DNS 对 *.iwara.tv 有污染，走种子 IP 池）
     iwara 登录   有 token 就验一次；没有就说明匿名模式够用
 
-三项名字都**不在** ``FATAL_CHECKS`` 里，所以永远只提示、不中止启动：
-没装 curl_cffi 时启动本身会走 ``deps.bootstrap`` 自动补，登录态失效也只是
-退回匿名（iwara 公开内容含 R18 本来就不需要登录）。
+三个自检项以及 ``login_check`` 都**不中止启动**：没装 curl_cffi 时启动本身会走
+``deps.bootstrap`` 自动补，登录态失效也只是退回匿名（iwara 公开内容含 R18 本来就
+不需要登录）。``login_check`` 只在 ``--check`` 里用：没配 token 也算通过。
 """
 
 from __future__ import annotations
@@ -83,12 +82,33 @@ async def _network_check() -> CheckResult:
     return CheckResult(NET_NAME, True, detail)
 
 
+# 进程内缓存上一次登录校验的结果，元素是 (token, CheckResult)。
+_AUTH_MEMO: tuple[str, CheckResult] | None = None
+
+
 async def _auth_check(settings) -> CheckResult:
-    """有 token 就验一次，没有就说明匿名模式够用。"""
+    """有 token 就验一次，没有就说明匿名模式够用。
+
+    ``--check`` 会问两次同一件事：``Site.checks`` 先把它打进 ``[环境检查]`` 表，
+    ``Site.login_check`` 再用它定退出码。token 刷新是有副作用的请求，所以按
+    token 值在进程内缓存，第二次直接复用结果。
+    """
+    global _AUTH_MEMO
+
     from . import tokens
 
     data_dir = getattr(settings, "data_dir", None)
     token = tokens.resolve(data_dir, env_token=os.environ.get(tokens.ENV_VAR, ""))
+    if _AUTH_MEMO is not None and _AUTH_MEMO[0] == token:
+        return _AUTH_MEMO[1]
+
+    result = await _auth_check_once(token)
+    _AUTH_MEMO = (token, result)
+    return result
+
+
+async def _auth_check_once(token: str) -> CheckResult:
+    """真正去验一次登录态（不带缓存，见 ``_auth_check``）。"""
     if not token:
         return CheckResult(
             AUTH_NAME,
@@ -127,10 +147,15 @@ async def _auth_check(settings) -> CheckResult:
 
 
 def extra_checks(settings) -> list[CheckResult]:
-    """``pixiv_bridge.cli.main(extra_checks=...)`` 要的钩子。
+    """``Site.checks`` 要的钩子：iwara 自己的三项自检。
 
-    同步返回，内部自己起一次事件循环（``--check`` 路径本来就是同步的）。
+    同步返回，内部自己起一次事件循环（``--check`` 路径本来就是同步的）。每次
+    都清掉登录缓存，好让紧接着的 ``login_check``（只复用、不重跑）用上这次的
+    结果，而重复调用本函数仍然各自真验一次。
     """
+    global _AUTH_MEMO
+
+    _AUTH_MEMO = None
     results = [deps_check()]
     results.extend(asyncio.run(_async_checks(settings)))
     return results
@@ -138,3 +163,17 @@ def extra_checks(settings) -> list[CheckResult]:
 
 async def _async_checks(settings) -> list[CheckResult]:
     return list(await asyncio.gather(_network_check(), _auth_check(settings)))
+
+
+def login_check(settings) -> int:
+    """``Site.login_check`` 要的钩子：``--check`` 时验一次 iwara 登录态。
+
+    没配 token 时 ``_auth_check`` 返回「匿名模式」且算通过 —— 匿名本来就能看
+    公开内容（含 R18）。但如果配了 token 却验不过（失效 / 网络失败），就给非零
+    退出码：用户专门跑 ``--check``，多半是想确认登录态真的可用。
+
+    这里**不重新打印**那一行：``Site.checks`` 已经把它打进 ``[环境检查]`` 表了，
+    而且 ``_auth_check`` 的进程内缓存会让这次调用直接复用上一次的结果。
+    """
+    result = asyncio.run(_auth_check(settings))
+    return 0 if result.ok else 1

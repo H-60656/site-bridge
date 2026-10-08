@@ -1,4 +1,7 @@
-"""杂项路由：健康检查、``next_url`` 翻页，以及图片代理（``/img``）。
+"""杂项路由：``next_url`` 翻页，以及图片代理（``/img``）。
+
+健康检查（``/api/health``）不在这里：它属于框架（``pixiv_bridge/routes/health.py``），
+每个接口站点都天生有。
 """
 
 from mimetypes import guess_type
@@ -9,11 +12,6 @@ from fastapi.responses import StreamingResponse
 from . import get_api, get_image_proxy
 
 router = APIRouter(tags=["misc"])
-
-
-@router.get("/api/health")
-async def health():
-    return {"ok": True}
 
 
 @router.get("/api/next")

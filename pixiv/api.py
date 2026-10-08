@@ -11,10 +11,11 @@ from urllib.parse import urlparse
 
 import httpx
 
+from pixiv_bridge.rate_limit import RateLimiter
+
 from .config import Settings
 from .hoster import resolve, resolve_ech
 from .oauth import OAuthManager
-from .rate_limit import RateLimiter
 from . import ech_client, sni_client
 
 

@@ -147,7 +147,7 @@ def is_termux():
 
     判定逻辑与 ``deps.is_termux()`` 同源，避免两处标准不一致（那里据此挑依赖清单）。
     """
-    from . import deps
+    from pixiv_bridge import deps
 
     return deps.is_termux()
 

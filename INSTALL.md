@@ -6,7 +6,7 @@
 - 安卓 / Termux（以及其它 Linux）走 [第 2 节](#2-安卓--termux以及-其它-linux)
 - 只想给别的程序调用接口：装好、登录好之后，接口地址是 `http://127.0.0.1:8765/api/...`
 
-> **入口只有两个，别搞混**：一键脚本（`start.bat` / `start.sh`）和 `python run.py` 跑的是**同一个接口项目**，浏览器打开 `http://127.0.0.1:8765/` 会看到**导航页**（不挂扩展时列出接口文档等自带入口）；要下面第 5 步那个小说阅读器页面，请在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel` 后**还是用原来那个启动方式**（阅读器没有自己的入口脚本了，见「附属项目（扩展）」），阅读器在 `/novel`。另有第二个入口 `python iwara\run.py`，在接口之上多挂 iwara.tv 视频接口（视频页面 `iwara_web` 同样是扩展、默认不挂，见第 5 节）。
+> **入口只有两个，别搞混**：一键脚本（`start.bat` / `start.sh`）和 `python pixiv/run.py` 跑的是**同一个接口项目**（Pixiv），浏览器打开 `http://127.0.0.1:8765/` 会看到**导航页**（不挂扩展时列出接口文档等自带入口）；要下面第 5 步那个小说阅读器页面，请在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel` 后**还是用原来那个启动方式**（阅读器没有自己的入口脚本了，见「附属项目（扩展）」），阅读器在 `/novel`。第二个入口 `python iwara\run.py` 是**与 `pixiv/` 同级的另一个接口项目**（iwara.tv）：它只提供 `/api/iwara/*`、不挂任何 Pixiv 路由（视频页面 `iwara_web` 是扩展、默认不挂，见第 5 节）。一键脚本会自动挑一个：目录里有 `pixiv/` 就起 Pixiv，否则起 iwara（也可以用环境变量 `BRIDGE_SITE=iwara` 指定）。
 
 ---
 
@@ -16,10 +16,10 @@
 | --- | --- | --- |
 | **Python 3.10 或更高** | ❌ **必须自己装** | 唯一必须手动安装的东西，见第 1/2 节 |
 | fastapi / uvicorn / httpx / pydantic | ✅ 自动下载 | 第一次运行时自动用 pip 安装；装不上会自动换国内镜像重试 |
-| **refresh_token**（登录凭证） | ✅ 自动 | 运行 `python get_token.py` 登录一次，自动保存到 `data\tokens.json` |
+| **refresh_token**（登录凭证） | ✅ 自动 | 运行 `python pixiv/get_token.py` 登录一次，自动保存到 `data\tokens.json` |
 | 能连上 Pixiv 的网络 | ⚠️ 看环境 | 被墙时见第 4 节（ECH / SNI 绕过 / 代理 三选一） |
 | OpenSSL 4.0+（**只有 ECH 模式需要**） | ✅ **项目自带** | `openssl-libs/` 里已带 OpenSSL 4.x 的库，**Windows 与安卓 Termux 都开箱即用**；其它平台没带对应子目录时才需自己装（注意 3.x 全系都没有 ECH，装了也没用） |
-| curl_cffi（**只有 iwara 入口需要**） | ✅ 自动下载 | 想用 `iwara/run.py` 时第一次启动自动装；只跑 pixiv 的话完全不需要它 |
+| curl_cffi（**只有 iwara 站点需要**） | ✅ 自动下载 | 想用 `iwara/run.py` 时第一次启动自动装；只跑 Pixiv 的话完全不需要它 |
 | 完全没网的机器 | ❌ 需要提前准备 | 见 `README.md` 的「完全离线部署」（提前下载 `wheels/` 目录） |
 
 > 除了 Python 解释器，其它 Python 依赖都会自动安装。项目文件夹本身是自包含的。
@@ -48,7 +48,7 @@
 
 **第 3 步：启动**
 
-双击目录里的 **`start.bat`**（就是这个黑色窗口，别关它）——这是**纯接口**那一版。
+双击目录里的 **`start.bat`**（就是这个黑色窗口，别关它）——这是**Pixiv 接口**那一版（不挂阅读器）。
 
 > 想直接看小说阅读器页面（本文第 5 步要开的那个网页），**不需要换启动方式**，只要在 `.env` 里加一行再照常用 `start.bat` 启动：
 >
@@ -57,9 +57,9 @@
 > PIXIV_BRIDGE_EXTENSIONS=novel
 > ```
 >
-> `--port` 等参数用法完全不变。两个入口的接口部分完全一样，差别只在多挂了什么：默认（不写扩展）时 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、`/api/health` 等自带入口，此时不会有阅读器链接），加了 `PIXIV_BRIDGE_EXTENSIONS=novel` 就多出 `/novel` 阅读器页面（导航页上也会多出指向它的链接）和阅读历史 / 下载 / 收藏 / 书架那几个接口，`iwara\run.py` 则多挂 `/api/iwara/*`；要 iwara 的视频页面，就在 `.env` 里再加一项 `iwara_web`（`PIXIV_BRIDGE_EXTENSIONS=iwara_web`，多项用逗号分隔；它调 `/api/iwara/*`，所以要配合 `iwara\run.py` 用）。
+> `--port` 等参数用法完全不变，两个接口项目共用同一套检查表。默认（不写扩展，走 `pixiv/run.py`）时 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、`/api/health` 等自带入口，此时不会有阅读器链接），加了 `PIXIV_BRIDGE_EXTENSIONS=novel` 就多出 `/novel` 阅读器页面（导航页上也会多出指向它的链接）和阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara\run.py` 是**另一个站点**，只提供 `/api/iwara/*`（不挂任何 Pixiv 接口），要 iwara 的视频页面，就在 `.env` 里再加一项 `iwara_web`（`PIXIV_BRIDGE_EXTENSIONS=iwara_web`，多项用逗号分隔；它调 `/api/iwara/*`，所以要配合 `iwara\run.py` 用）。
 
-- 第一次运行会：自动生成 `.env` 配置文件 → 自动下载依赖（**1~3 分钟，属正常**）→ 打印 5 行检查结果 → 开始监听。
+- 第一次运行会：自动生成 `.env` 配置文件 → 自动下载依赖（**1~3 分钟，属正常**）→ 打印环境检查结果（框架 4 项 + 本站点自己的检查项）→ 开始监听。
 - 看到类似下面的内容就成功了：
 
   ```
@@ -80,7 +80,7 @@
 
 ```bat
 cd /d C:\pixiv-bridge
-python get_token.py
+python pixiv/get_token.py
 ```
 
 按提示选 `2`（浏览器授权）：把打印出来的网址复制到浏览器打开 → 登录 Pixiv → 点「授权」→ 浏览器会跳到 `app-api.pixiv.net` 的一个空白/报错页面（**这是正常的**）→ **复制地址栏里的整条网址**，粘回窗口回车。
@@ -122,7 +122,7 @@ cd pixiv-bridge
 sh start.sh
 ```
 
-> 这条命令跑的是默认（纯接口）那一版（Windows 的 `start.bat` 同此），要看**小说阅读器页面**（第 5 步要开的那个网页）**不用换命令**，在 `.env` 里加一行再照常启动即可：
+> 这条命令跑的是默认（只跑 Pixiv 接口、不挂扩展）那一版（Windows 的 `start.bat` 同此），要看**小说阅读器页面**（第 5 步要开的那个网页）**不用换命令**，在 `.env` 里加一行再照常启动即可：
 >
 > ```sh
 > nano .env            # 没有就先跑一次 sh start.sh 让它生成
@@ -133,14 +133,14 @@ sh start.sh
 > 端口之类参数完全一样（`sh start.sh --port 9000`）。不加扩展时打开 `http://127.0.0.1:8765/` 是导航页（只列接口自带的入口，没有阅读器链接）——只看/调接口的话用默认这版就够了。
 
 - 第一次会：生成 `.env` → 自动安装依赖。Termux 上会**自动改用 `requirements-termux.txt`**（纯 Python 的 pydantic 1.x），因此**不需要** Rust/编译器，也不会卡在 `pydantic-core` 编译失败上。程序里取配置字段走的是 pydantic 1.x / 2.x 都认的写法，不用管装到的是哪一代（早先的版本在 Termux 上「保存配置」必报 500，就是这里不兼容）。
-- 安装期间屏幕滚动几分钟是正常的；看到 5 行检查结果和监听地址就好了。
+- 安装期间屏幕滚动几分钟是正常的；看到环境检查结果和监听地址就好了。
 
 **第 4 步：登录一次**
 
 从 Termux 左侧边缘向右滑 → `NEW SESSION`（新开一个会话），然后：
 
 ```sh
-cd ~/pixiv-bridge && python get_token.py
+cd ~/pixiv-bridge && python pixiv/get_token.py
 ```
 
 选 `2`，把网址复制到手机浏览器打开授权，再把回调网址粘回来。
@@ -164,7 +164,7 @@ cd ~/pixiv-bridge && python get_token.py
 
 ## 3. 登录一次就够了
 
-`python get_token.py` 提供两种方式：
+`python pixiv/get_token.py` 提供两种方式：
 
 | 方式 | 怎么用 | 什么时候用 |
 | --- | --- | --- |
@@ -182,11 +182,11 @@ cd ~/pixiv-bridge && python get_token.py
 先自检：
 
 ```sh
-python run.py --check        # 查的是同一套环境，跟挂没挂扩展无关
+python pixiv/run.py --check        # 查的是同一套环境，跟挂没挂扩展无关
 python iwara/run.py --check  # 同一套 + 3 项 iwara 专属（依赖 / api.iwara.tv / 登录态）
 ```
 
-（各入口的 `--check` 查的是同一套环境：Python / 依赖 / 项目文件 / 端口 / 网络 / ECH，其中 `port` 在 `--check` 下只警告不中止——毕竟这条路不监听端口。iwara 入口再追加 3 项：`iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录`（没配 token 就报匿名模式，配了就真刷一次并读用户名）。这 3 项都只警告、不中止，因为 iwara 挂了不影响入口继续提供 pixiv 接口。）
+（各入口的 `--check` 查的是同一套环境：Python / 依赖 / 项目文件 / 端口 / 网络 / ECH，其中 `port` 在 `--check` 下只警告不中止——毕竟这条路不监听端口。iwara 入口再追加 3 项：`iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录`（没配 token 就报匿名模式，配了就真刷一次并读用户名）。这 3 项都只警告、不中止，因为它们失败只影响 iwara 自己的接口，入口照样能启动。）
 
 > **为什么有这些通道、各自对付什么**，以及换到别的站点时怎么从头定位，见 **[DIRECT.md](DIRECT.md)**（直连思路）。这里只讲「按现象选哪一条」。
 
@@ -252,14 +252,14 @@ PIXIV_PROXY=http://127.0.0.1:7890
 
 | 平台 | 启动 |
 | --- | --- |
-| Windows | 只需接口：`start.bat`；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `start.bat`；要用 iwara 视频：`python iwara\run.py`（要 iwara 视频页面再加 `iwara_web`） |
+| Windows | 只需 Pixiv 接口：`start.bat`（目录里有 `pixiv/` 就自动起它；只有 iwara 包时会自动起 iwara，也可用 `BRIDGE_SITE=iwara` 指定）；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `start.bat`；要用 iwara：`python iwara\run.py`（要 iwara 视频页面再加 `iwara_web`） |
 | Termux / Linux | 只需接口：`cd pixiv-bridge && sh start.sh`；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `sh start.sh`；要用 iwara 视频：`python3 iwara/run.py`（要 iwara 视频页面再加 `iwara_web`） |
 
-> 差别只在多挂了什么：默认（`run.py`，含 `start.bat` / `start.sh`）是纯接口，浏览器打开 `/` 是**导航页**（列出接口文档、健康检查等自带入口）；在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 就在同一个入口上多挂了小说阅读器页面（`http://127.0.0.1:8765/novel`，导航页上也会多一段链接）与阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara/run.py` 多挂的是 `/api/iwara/*`（视频浏览、解析直链、代转播放），它的 `/` 是同一个导航页、额外多一段 iwara 自己的入口。命令行参数（`--host` / `--port` / `--reload` / `--check`）都一样。
+> 差别只在多挂了什么：默认（`pixiv/run.py`，含 `start.bat` / `start.sh`）只跑 Pixiv 接口、不挂扩展，浏览器打开 `/` 是**导航页**（列出接口文档、健康检查等自带入口）；在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 就在同一个入口上多挂了小说阅读器页面（`http://127.0.0.1:8765/novel`，导航页上也会多一段链接）与阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara/run.py` 提供的是 `/api/iwara/*`（视频浏览、解析直链、代转播放），它的 `/` 也是导航页、额外多一段 iwara 自己的入口。命令行参数（`--host` / `--port` / `--reload` / `--check`）都一样。
 
 > **阅读器为什么没有自己的启动命令？** 它现在按「扩展」的方式挂到接口项目上：配置里写目录名（`PIXIV_BRIDGE_EXTENSIONS=novel`），程序自己去找 `novel/extension.py`。这样两个接口项目各留一个入口，阅读器不再需要单独的脚本。写错目录名不会静默降级——启动前会打印一条错误并退出。
 
-> iwara 那个入口第一次启动会额外装一个 `curl_cffi`（会编译或下载预编译轮子，比主依赖慢一点，属正常）。
+> iwara 那条入口第一次启动会额外装一个 `curl_cffi`（会编译或下载预编译轮子，比框架依赖慢一点，属正常）。
 >
 > **iwara 登录是可选的**：公开内容（含 R18）匿名就能看、能解析直链、能播。登录只为两件事——「订阅作者的内容」和「自己账号下的私密视频」。想登录就跑一次 `python iwara/get_token.py`（Termux：`python3 iwara/get_token.py`，只收邮箱 + 密码，没有浏览器授权），token 存到 `data/iwara_tokens.json`；`--status` 看当前登录态，`--logout` 删掉。也可以用环境变量 `IWARA_REFRESH_TOKEN` 临时覆盖。token 失效不会拖垮整站：自动退回匿名，接口照常可用。
 
@@ -269,8 +269,8 @@ PIXIV_PROXY=http://127.0.0.1:7890
 - 网页（小说阅读器，**需在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel`**，在 `/novel`）：<http://127.0.0.1:8765/novel>；没启用扩展时这里是 404，属正常
 - 自带的交互式接口文档（各入口都有）：<http://127.0.0.1:8765/docs>
 - 健康检查：<http://127.0.0.1:8765/api/health>
-- iwara 视频页面（**需 `iwara/run.py` 入口 + `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`**）：<http://127.0.0.1:8765/iwara>；用另一个入口、或没挂 `iwara_web` 时是 404，属正常
-- iwara 视频接口（**需 `iwara/run.py` 入口**）：<http://127.0.0.1:8765/api/iwara/videos>；用另一个入口时是 404，属正常
+- iwara 视频页面（**需 `iwara/run.py` 入口 + `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`**）：<http://127.0.0.1:8765/iwara>；用 `pixiv/run.py` 启动、或没挂 `iwara_web` 时是 404，属正常
+- iwara 视频接口（**需 `iwara/run.py` 入口**）：<http://127.0.0.1:8765/api/iwara/videos>；用 `pixiv/run.py` 启动时是 404，属正常
 - 给别的程序调用，例如：
 
   ```sh
@@ -281,7 +281,7 @@ PIXIV_PROXY=http://127.0.0.1:7890
 
 **搬机器 / 分享给别人**：整个项目文件夹拷过去即可，但**不要拷** `.env`、`data\` 目录（里面有你的账号凭证 `data\tokens.json`，以及阅读历史、下载记录、收藏台账和页面配置）、`.venv`、`__pycache__`。反过来，如果只是自己换台电脑、想把进度带走，**只拷 `data\` 目录**就够了。详见 `README.md` 的「打包与移植」。
 
-**只分享一部分**：项目现在是四块（两个接口项目 + 两个扩展包），可以按用途单独打包。跑一条命令就能生成六个现成的分享包（纯接口 / 纯 iwara 接口 / 两个扩展包 / 两个配好的组合包）：
+**只分享一部分**：项目现在是四层（框架 + 两个同级接口项目 + 两个扩展），可以按用途单独打包。跑一条命令就能生成六个现成的分享包（Pixiv 接口 / 只有 iwara 的接口 / 两个扩展包 / 两个配好的组合包）：
 
 ```bash
 python scripts/make_share_packages.py          # 六个包全做，产物在 dist/
@@ -304,17 +304,17 @@ python scripts/make_share_packages.py --list   # 看看有哪几个
 | `ech WARN 且含 SSL_get_error=5` | 本机到 Cloudflare 这一段在阻断 ECH 扩展（与配置、IP、服务端无关），换网络或设 `PIXIV_PROXY` 走代理，见第 4 节 |
 | `ech WARN ECH 直连失败`（其他原因） | ECH 外层域名被封锁或配置过期，改用代理，见第 4 节 |
 | Termux 里 `pydantic-core` 编译失败 | 不应该发生：Termux 会自动用 `requirements-termux.txt`（纯 Python）。若出现，删掉 `.venv`/重装并确认 `python -m pip install -r requirements-termux.txt` |
-| `未配置 refresh_token` / 网页显示未登录 | 先跑 `python get_token.py` 登录一次 |
+| `未配置 refresh_token` / 网页显示未登录 | 先跑 `python pixiv/get_token.py` 登录一次 |
 | 登录时报验证码/错误 | 改用 `get_token.py` 的「2) 浏览器授权」 |
-| 网页（小说阅读器）打不开 / `404` | 阅读器现在在 `/novel`，不在 `/`（`/` 是导航页，一定打得开）。没启用扩展时 `/novel` 返回 404 属正常，要阅读器就在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel`，然后**用原来的方式重启**（`start.bat` / `sh start.sh` / `python run.py`） |
+| 网页（小说阅读器）打不开 / `404` | 阅读器现在在 `/novel`，不在 `/`（`/` 是导航页，一定打得开）。没启用扩展时 `/novel` 返回 404 属正常，要阅读器就在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel`，然后**用原来的方式重启**（`start.bat` / `sh start.sh` / `python pixiv/run.py`） |
 | 启动时打印 `[扩展] …找不到入口文件…` 后退出 | `.env` 里 `PIXIV_BRIDGE_EXTENSIONS` 写的目录名不对（相对路径按项目根算）。要小说阅读器就写 `novel`，并确认 `novel/extension.py` 确实拷过来了 |
 | `/iwara` 打不开 / 404 | 视频页面现在归 **`iwara_web` 扩展包**：要 `python iwara\run.py` 入口 + `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`，并且 `iwara_web/` 目录要拷过来 |
-| `/api/iwara/...` 全部 404 | 用错入口了：iwara 接口只在 `python iwara\run.py` 下挂载，另一个入口没有 |
+| `/api/iwara/...` 全部 404 | 用错入口了：iwara 接口只在 `python iwara\run.py` 下挂载，`pixiv/run.py` 那个站点没有（两个站点互不挂对方的路由） |
 | iwara 入口报缺 `curl_cffi` | 依赖没装上。手动补一次：`pip install -r iwara/requirements.txt`（Termux 上若编不过，用 `pkg install python-cryptography` 之类先从 `pkg` 装好底层库再重试） |
 | iwara 接口返回 `cloudflare_challenge` | 站点把本机 IP 或 TLS 指纹拦了：换个网络/出口 IP 重试，或确认装的是真正的 `curl_cffi`（不要用别的 HTTP 库顶替） |
 | iwara 视频能解析出直链但播不动 | 该视频某个 CDN 花名主机（或种子 IP）在本机不通。`/api/iwara/resolve` 默认会逐个源探测并返回能用的那个（`chosen`）；`chosen` 为 `null` 时看 `probe_error` 里已尝试过哪些主机 |
 | iwara 全部接口都说「没有可用的候选地址」 | 内置的种子 IP（`iwara/client.py` 的 `SEED_HOSTS` / `SEED_IPS`）在这个网络里全不通，而 DoH 又只给了污染答案。换网络，或把实测可用的 iwara 边缘 IP 补进那张表 |
-| `files` 检查项提到缺 `web/index.html` | 已拆成两个项目：阅读器页面现在在 `novel/web/index.html`，接口项目的必需文件清单只剩 `run.py` / `requirements.txt` |
+| `files` 检查项说缺文件 | 这个检查分两处：框架根要 `requirements.txt`，站点目录要自己的 `run.py`（`pixiv/run.py` 或 `iwara/run.py`）。阅读器页面在 `novel/web/index.html`，由扩展提供，不在清单里 |
 | 网页打得开但列表空白 | 看启动窗口里的报错；多半是网络被阻断（见第 4 节）。iwara 视频页面（`/iwara`）列表空白时同理，另外它的封面图要走 `/api/iwara/image` 代转，连不上 iwara 图片主机时也会是空白 |
 | 设置里保存配置提示「写入失败」 | 先看提示里写的**文件路径和系统原因**：`data\settings.json` 被别的程序占着或带了只读属性（编辑器/同步盘/杀软）最常见，服务会自动摘只读位、重试、再退回直接覆盖写，一般会自动好；仍失败就关掉占用它的程序，或直接删掉该文件（会退回默认值）。**安卓上还要看数据目录是不是在项目外**：`PIXIV_DATA_DIR`/`PIXIV_*_FILE` 指到 `/sdcard/...` 会被自动收回项目里的 `data/`（启动日志和设置页会逐条提示）；项目本身也别放在 `/sdcard` 下，放到 Termux 家目录（`~/pixiv-bridge`）最稳 |
 | 保存配置报 `500`，提示里带 `AttributeError: … has no attribute 'model_dump'` | 用的是旧版代码（Termux 装的是 pydantic 1.x，没有 `model_dump`）。换成最新版的 `pixiv_bridge/`（里面有 `compat.py`，两个 pydantic 大版本都认）后重跑 `sh start.sh` |
@@ -325,7 +325,7 @@ python scripts/make_share_packages.py --list   # 看看有哪几个
 
 1. **Python 3.10+**：Windows 从 python.org 装；Termux `pkg install python`。
 2. **能访问 Pixiv 的网络**：被墙时需要代理，或依赖 ECH/SNI 绕过（不一定成功）。
-3. **你自己的 Pixiv 登录**：`python get_token.py`（需要能连上 Pixiv 才能完成）。
+3. **你自己的 Pixiv 登录**：`python pixiv/get_token.py`（需要能连上 Pixiv 才能完成）。
 4. **OpenSSL 4.0+**：只有用 ECH 模式才需要；**项目自带 `openssl-libs/`，Windows 与安卓 Termux 版都直接可用**，其它平台缺对应子目录时再自行准备 4.0+（注意 3.x 全系没有 ECH，Termux 官方源也是 3.x，不能用 pip 装）。
 5. 完全离线的机器：提前在能上网的同类机器上执行
    `pip download -r requirements.txt -d wheels`，把 `wheels/` 一起拷过去。

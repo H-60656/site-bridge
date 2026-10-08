@@ -4,14 +4,20 @@
 用法::
 
     python scripts/make_share_packages.py            # 生成全部 6 个包到 dist/
-    python scripts/make_share_packages.py --check     # 只做内容检查，不写 zip
-    python scripts/make_share_packages.py pixiv_bridge-api novel-extension
+    python scripts/make_share_packages.py --check     # 只做内容与结构检查，不写 zip
+    python scripts/make_share_packages.py pixiv-api novel-extension
 
 每个包解压后是一个同名文件夹，根目录里有一份**该包自己的** ``README.md``
 （说明这东西是什么、怎么启动、包里有什么），完整文档放在 ``手册/`` 里。
 
+布局约定（重构后）：两个接口项目 ``pixiv/`` 与 ``iwara/`` 是**同级**目录，
+各自有 ``run.py`` 入口，都只依赖框架 ``pixiv_bridge/``；根目录不再有 ``run.py``。
+所以每个接口包 = ``pixiv_bridge/`` + 一个（或两个）站点目录 + 根目录的启动文件。
+
 约定：扩展包（``novel`` / ``iwara_web``）只是可挂载的目录，不能单独启动 ——
 它们要放进一个接口项目的**项目根**，再在 ``.env`` 里写扩展名。
+
+站点清单来自 ``scripts/sites.py``（唯一事实来源），本脚本只负责内容与文案。
 """
 
 from __future__ import annotations
@@ -20,20 +26,29 @@ import argparse
 import shutil
 import sys
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+
+from sites import (  # noqa: E402  （脚本目录要在 sys.path 上）
+    EXTENSIONS_BY_NAME,
+    FRAMEWORK_PACKAGE,
+    SITE_ASSETS,
+    SITES,
+    SITES_BY_NAME,
+)
+
 DIST_DIR = PROJECT_ROOT / "dist"
 
-# 共享的根目录文件：接口项目的启动与配置那一套。
+# 共享的根目录文件：启动脚本与依赖清单。站点自己的入口在 <站点>/run.py 里，
+# 不在这一份清单里 —— 它就是「根目录不再有 run.py」这条约定的落点。
 API_ROOT_FILES = (
-    "run.py",
     "requirements.txt",
     "requirements-termux.txt",
     "start.bat",
     "start.sh",
-    "get_token.py",
     "Dockerfile",
     ".env.example",
     ".gitattributes",
@@ -46,6 +61,9 @@ DOC_FILES = ("README.md", "INSTALL.md", "DIRECT.md")
 # 打包时永远不要带上的东西。
 IGNORED_DIRS = {"__pycache__", ".venv", "venv", "dist", "_tmp_tests", "_scratch", "data"}
 IGNORED_SUFFIXES = (".pyc", ".pyo")
+
+# 所有接口包都带的公共目录。
+SHARED_DIRS = ("examples",)
 
 
 @dataclass(frozen=True)
@@ -67,95 +85,139 @@ class PackageSpec:
     def entries(self) -> tuple:
         return tuple(self.files) + tuple(self.extra_files) + tuple(self.dirs)
 
+    @property
+    def site_names(self) -> tuple:
+        """这个包里的站点目录名（api 包一个、组合包一个、扩展包没有）。"""
+        return tuple(name for name in self.dirs if name in SITES_BY_NAME)
 
-COMMON_SETUP = (
+    @property
+    def extension_names(self) -> tuple:
+        return tuple(name for name in self.dirs if name in EXTENSIONS_BY_NAME)
+
+
+BASE_SETUP = (
     "安装 Python **3.10+**（这是唯一必须自己准备的东西；其余依赖首次启动会自动下载）。",
-    "把 `.env.example` 复制成 `.env`，填上自己的 `PIXIV_REFRESH_TOKEN`"
-    "（怎么拿见 `手册/INSTALL.md`，或跑一次 `python get_token.py`）。",
 )
 
-COMMON_NOTES = (
+PIXIV_SETUP = (
+    "把 `.env.example` 复制成 `.env`，填上自己的 `PIXIV_REFRESH_TOKEN`"
+    "（怎么拿见 `手册/INSTALL.md`，或跑一次 `python pixiv/get_token.py`）。",
+)
+
+IWARA_SETUP = (
+    "Pixiv 的登录对 iwara 接口没有影响；iwara 的登录也是可选的"
+    "（公开内容含 R18 匿名就能看）：想登录订阅内容再跑一次 `python iwara/get_token.py`。",
+)
+
+BASE_NOTES = (
     "第一次启动会打印一份 `[环境检查]`，其中 `deps` 一项会自动装依赖，慢一点属正常。",
     "个人数据都在 `data/` 里（登录凭据 / 阅读历史 / 下载记录 / 收藏台账 / 页面配置）；"
     "换机只拷这一个目录。",
+    "两个接口项目 `pixiv/` 与 `iwara/` 是**同级**的：各自一个 `run.py`，"
+    "互相不挂载，都只用框架 `pixiv_bridge/`。",
+)
+
+PIXIV_NOTES = (
     "连不上 Pixiv 时先看 `手册/DIRECT.md`（直连思路：怎么分层定位是 DNS、IP、TLS 还是应用层的问题）。",
     "`openssl-libs/` 是项目自带的 OpenSSL 4.x 动态库（Windows 与安卓两套），"
     "ECH 模式要用；不用 ECH 的话删掉它也不影响启动。",
 )
 
+IWARA_NOTES = (
+    "iwara 的接口走 `curl_cffi`（Cloudflare 只认浏览器 TLS 指纹），"
+    "首次启动会多装一个编译包，比 pixiv 那边慢一点。",
+    "本包不含 `openssl-libs/`：那是 Pixiv 的 ECH 直连用的，iwara 用不到。",
+)
+
+
+def _site_dirs(*names, with_assets=True) -> tuple:
+    """组装包里要带的目录：框架 + 指定站点（+ 站点资产 + 公共目录）。"""
+    dirs = [FRAMEWORK_PACKAGE]
+    for name in names:
+        dirs.append(name)
+        if with_assets:
+            dirs.extend(SITE_ASSETS.get(name, ()))
+    dirs.extend(SHARED_DIRS)
+    return tuple(dirs)
+
+
+PIXIV = SITES_BY_NAME["pixiv"]
+IWARA = SITES_BY_NAME["iwara"]
 
 PACKAGES = (
     PackageSpec(
-        key="pixiv_bridge-api",
-        zip_name="pixiv_bridge-api",
-        title="pixiv_bridge 接口包",
+        key="pixiv-api",
+        zip_name="pixiv-api",
+        title="Pixiv 接口包",
         kind="api",
         summary="纯 Pixiv 接口服务：认证 / 插画 / 搜索 / 动态 / 用户 / 小说接口 / 图片代理 + `/` 导航页。",
-        dirs=("pixiv_bridge", "openssl-libs", "examples"),
+        dirs=_site_dirs(PIXIV.directory),
         files=API_ROOT_FILES,
         start_commands=(
             "# Windows",
             "start.bat",
             "",
             "# 其它平台",
-            "python run.py",
+            PIXIV.command(),
         ),
-        setup_lines=COMMON_SETUP,
+        setup_lines=BASE_SETUP + PIXIV_SETUP,
         notes=(
             "启动后浏览器打开 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、"
             "`/api/health` 等入口）。",
+            "入口是 `pixiv/run.py`；它只提供 Pixiv 接口，`/api/iwara/*` 不在本包里。",
         )
-        + COMMON_NOTES,
+        + PIXIV_NOTES
+        + BASE_NOTES,
     ),
     PackageSpec(
         key="iwara-api",
         zip_name="iwara-api",
         title="iwara 接口包",
         kind="api",
-        summary="Pixiv 接口 + iwara.tv 视频接口（`/api/iwara/*`）。",
-        dirs=("pixiv_bridge", "iwara", "openssl-libs", "examples"),
+        summary="iwara.tv 视频接口（`/api/iwara/videos`、搜索、直链解析、代理播放等）+ `/` 导航页。",
+        dirs=_site_dirs(IWARA.directory, with_assets=False),
         files=API_ROOT_FILES,
         start_commands=(
             "# Windows",
-            "python iwara\\run.py",
+            "start.bat",
             "",
             "# 其它平台",
-            "python iwara/run.py",
+            IWARA.command(),
         ),
-        setup_lines=COMMON_SETUP
-        + (
-            "iwara 的登录是可选的（公开内容含 R18 匿名就能看）：想登录订阅内容再跑一次 "
-            "`python iwara/get_token.py`。",
-        ),
+        setup_lines=BASE_SETUP + IWARA_SETUP,
         notes=(
-            "入口是 `iwara/run.py`，它在接口之上多挂 iwara 的接口；`run.py` 那版入口"
-            "不认识 iwara，`/api/iwara/*` 会 404。",
-            "会多装一个 `curl_cffi`（Cloudflare 只认浏览器 TLS 指纹），比主依赖慢一点。",
+            "入口是 `iwara/run.py`，它**只挂 iwara 的接口** —— Pixiv 的路由不在本包里"
+            "（两个接口项目同级，互不挂载），要用 Pixiv 接口请用 `pixiv-api` 那个包。",
             "iwara 的**视频页面**不在本包里，它是单独的扩展包 `iwara_web-extension`。",
         )
-        + COMMON_NOTES,
+        + IWARA_NOTES
+        + BASE_NOTES,
     ),
     PackageSpec(
         key="novel-extension",
         zip_name="novel-extension",
         title="novel 扩展包（小说阅读器）",
         kind="extension",
-        summary="小说阅读器页面与阅读历史 / 下载 / 收藏 / 书架接口，作为**扩展**挂到接口项目上。",
+        summary="小说阅读器页面与阅读历史 / 下载 / 收藏 / 书架接口，作为**扩展**挂到 Pixiv 接口项目上。",
         dirs=("novel",),
         start_commands=(
             "# 这是一个扩展，本身不能单独启动。用法：",
-            "# 1) 把 novel/ 整个目录拷到接口项目的项目根（与 run.py 同级）",
+            "# 1) 把 novel/ 整个目录拷到 Pixiv 接口包的项目根（与 pixiv/ 同级）",
             "# 2) 在接口项目的 .env 里加一行：",
             "PIXIV_BRIDGE_EXTENSIONS=novel",
-            "# 3) 用接口项目原来的方式启动（start.bat / sh start.sh / python run.py）",
+            "# 3) 用接口项目原来的方式启动：",
+            "start.bat",
+            "# 或：python pixiv/run.py",
         ),
         setup_lines=(
-            "先有一个能跑的接口包（`pixiv_bridge-api` 或任意含 `pixiv_bridge/` 的项目根）。",
+            "先有一个能跑的 Pixiv 接口包（`pixiv-api`，或任意含 `pixiv_bridge/` 与 `pixiv/` 的项目根）。",
             "把 `novel/` 拷到那个项目根里，保持目录名不变。",
         ),
         notes=(
             "启用后阅读器页面在 `http://127.0.0.1:8765/novel`；接口项目自己的 `/` 仍是导航页，"
             "挂上扩展后它上面会多一段指向阅读器的链接。",
+            "阅读器要用 Pixiv 的接口取数据，所以它是挂在 `pixiv/` 站点上的；"
+            "用 `iwara/run.py` 启动时不要挂它。",
             "程序按固定文件名 `novel/extension.py` 加载扩展；目录名写错会在启动时报错并退出，"
             "不会静默降级。",
             "目录里必须保留 `.py` 文件与 `web/index.html`（阅读器页面本体）。",
@@ -170,7 +232,7 @@ PACKAGES = (
         dirs=("iwara_web",),
         start_commands=(
             "# 这是一个扩展，本身不能单独启动。用法：",
-            "# 1) 把 iwara_web/ 整个目录拷到 iwara 接口项目的项目根（与 run.py 同级）",
+            "# 1) 把 iwara_web/ 整个目录拷到 iwara 接口包的项目根（与 iwara/ 同级）",
             "# 2) 在 .env 里加一行：",
             "PIXIV_BRIDGE_EXTENSIONS=iwara_web",
             "# 3) 用 iwara 的入口启动：",
@@ -182,18 +244,18 @@ PACKAGES = (
         ),
         notes=(
             "启用后视频页面在 `http://127.0.0.1:8765/iwara`。",
-            "它必须配合 `iwara/run.py` 入口：用 `run.py` 启动时 iwara 的接口本身就不在，"
-            "页面会打开但列表是空的。",
+            "它挂在 `iwara/` 站点上：必须用 `python iwara/run.py`（或 `start.bat`）启动，"
+            "用 `pixiv/run.py` 启动时那个站点上没有 iwara 接口，页面会打开但列表是空的。",
             "封面图走 `/api/iwara/image` 代转、播放走 `/api/iwara/stream`，两者都由接口项目提供。",
         ),
     ),
     PackageSpec(
-        key="pixiv_bridge-novel",
-        zip_name="pixiv_bridge-novel",
-        title="pixiv_bridge + novel 组合包",
+        key="pixiv-novel",
+        zip_name="pixiv-novel",
+        title="Pixiv 接口 + novel 组合包",
         kind="bundle",
         summary="纯 Pixiv 接口 + 小说阅读器（已把 `novel` 扩展放进包里，配好一行配置即可用）。",
-        dirs=("pixiv_bridge", "novel", "openssl-libs", "examples"),
+        dirs=_site_dirs(PIXIV.directory, "novel"),
         files=API_ROOT_FILES,
         start_commands=(
             "# 先在 .env 里加一行：PIXIV_BRIDGE_EXTENSIONS=novel",
@@ -202,48 +264,99 @@ PACKAGES = (
             "start.bat",
             "",
             "# 其它平台",
-            "python run.py",
+            PIXIV.command(),
         ),
-        setup_lines=COMMON_SETUP,
+        setup_lines=BASE_SETUP + PIXIV_SETUP,
         notes=(
             "启动后阅读器在 `http://127.0.0.1:8765/novel`；`/` 是导航页，"
             "上面也会多出一段指向阅读器的链接。",
             "`.env` 里那一行是开关：删掉它就退回纯接口（那样 `/novel` 是 404）。",
+            "入口是 `pixiv/run.py`；`/api/iwara/*` 不在本包里。",
         )
-        + COMMON_NOTES,
+        + PIXIV_NOTES
+        + BASE_NOTES,
     ),
     PackageSpec(
         key="iwara-iwara_web",
         zip_name="iwara-iwara_web",
-        title="iwara + iwara_web 组合包",
+        title="iwara 接口 + iwara_web 组合包",
         kind="bundle",
-        summary="Pixiv 接口 + iwara 视频接口 + iwara 视频页面（`iwara_web` 已在包里）。",
-        dirs=("pixiv_bridge", "iwara", "iwara_web", "openssl-libs", "examples"),
+        summary="iwara 视频接口 + iwara 视频页面（`iwara_web` 已在包里）。",
+        dirs=_site_dirs(IWARA.directory, "iwara_web", with_assets=False),
         files=API_ROOT_FILES,
         start_commands=(
             "# 先在 .env 里加一行：PIXIV_BRIDGE_EXTENSIONS=iwara_web",
             "",
             "# Windows",
-            "python iwara\\run.py",
+            "start.bat",
             "",
             "# 其它平台",
-            "python iwara/run.py",
+            IWARA.command(),
         ),
-        setup_lines=COMMON_SETUP
-        + (
-            "iwara 的登录是可选的：公开内容（含 R18）匿名就能看，登录只为订阅内容与私密视频 —— "
-            "`python iwara/get_token.py`。",
-        ),
+        setup_lines=BASE_SETUP + IWARA_SETUP,
         notes=(
             "启动后视频页面在 `http://127.0.0.1:8765/iwara`，视频接口在 `/api/iwara/*`。",
-            "必须用 `iwara/run.py` 这个入口：`run.py` 不挂 iwara，页面会打开但拿不到数据。",
-            "会多装一个 `curl_cffi`（Cloudflare 只认浏览器 TLS 指纹），比主依赖慢一点。",
+            "入口是 `iwara/run.py`：本包只提供 iwara 接口（没有 Pixiv 路由）。",
         )
-        + COMMON_NOTES,
+        + IWARA_NOTES
+        + BASE_NOTES,
     ),
 )
 
 PACKAGES_BY_KEY = {spec.key: spec for spec in PACKAGES}
+
+
+def validate_specs():
+    """结构自检：包清单必须与站点注册表一致（同级布局 / 一个站点只配自己的扩展）。
+
+    返回问题列表；空列表表示清单成立。这些规则就是「两个接口项目同级」在打包
+    这一层的落点，写错了会在 ``--check`` 里直接报出来。
+    """
+    problems = []
+    kinds = {}
+    for spec in PACKAGES:
+        kinds[spec.kind] = kinds.get(spec.kind, 0) + 1
+        if spec.key != spec.zip_name:
+            problems.append(f"{spec.key}: key 与 zip_name 不一致")
+        if FRAMEWORK_PACKAGE not in spec.dirs and spec.kind != "extension":
+            problems.append(f"{spec.key}: 接口包必须带框架 {FRAMEWORK_PACKAGE}/")
+        if len(spec.site_names) > 1:
+            problems.append(
+                f"{spec.key}: 一个包只能带一个接口项目，现在是 {spec.site_names}"
+                "（两个站点同级，不组合分发）"
+            )
+        for name in spec.extension_names:
+            ext = EXTENSIONS_BY_NAME[name]
+            # 扩展包本身不带站点目录；只有组合包才要求宿主站点也在包里。
+            if spec.site_names and ext.host not in spec.site_names:
+                problems.append(
+                    f"{spec.key}: 扩展 {name} 挂在 {ext.host} 上，包里却没有 {ext.host}/"
+                )
+        if spec.kind == "api" and len(spec.site_names) != 1:
+            problems.append(f"{spec.key}: 接口包要恰好带一个接口项目")
+        if spec.kind == "extension" and spec.site_names:
+            problems.append(f"{spec.key}: 扩展包不该带接口项目目录")
+        if spec.kind == "bundle" and (
+            len(spec.site_names) != 1 or len(spec.extension_names) != 1
+        ):
+            problems.append(f"{spec.key}: 组合包要恰好一个接口项目 + 一个扩展")
+        for name in spec.entries():
+            source = PROJECT_ROOT / name
+            if not source.exists():
+                problems.append(f"{spec.key}: 清单里的 {name} 在磁盘上不存在")
+    if kinds.get("api") != 2 or kinds.get("extension") != 2 or kinds.get("bundle") != 2:
+        problems.append(f"包的构成变了：{kinds}（约定是 2 接口 + 2 扩展 + 2 组合）")
+    if len(PACKAGES) != 6:
+        problems.append(f"分享包数量是 {len(PACKAGES)}，约定是 6 个")
+    covered = {
+        name
+        for spec in PACKAGES
+        for name in spec.site_names + spec.extension_names
+    }
+    missing = ({site.directory for site in SITES} | set(EXTENSIONS_BY_NAME)) - covered
+    if missing:
+        problems.append(f"这些站点/扩展没有被任何分享包覆盖：{sorted(missing)}")
+    return problems
 
 
 def should_ignore(name: str) -> bool:
@@ -292,6 +405,12 @@ def stage_package(spec: PackageSpec) -> Path:
     if missing:
         raise SystemExit(f"分享包 {spec.key} 缺这些内容：{', '.join(missing)}")
 
+    # 接口包里的站点目录必须带着自己的入口，否则解压后没法启动。
+    for name in spec.site_names:
+        entry = target / name / "run.py"
+        if not entry.is_file():
+            raise SystemExit(f"分享包 {spec.key} 里 {name}/run.py 没拷进来")
+
     docs = target / "手册"
     docs.mkdir()
     for name in DOC_FILES:
@@ -326,7 +445,7 @@ def render_readme(spec: PackageSpec) -> str:
         lines += [
             "## 包里是什么",
             "",
-            "接口项目（`pixiv_bridge/`）+ 一个扩展目录，已经放在一起了。"
+            "框架（`pixiv_bridge/`）+ 一个接口项目 + 一个扩展目录，已经放在一起了。"
             "接口项目启动时会在项目根找扩展目录，配置里写名字即可。",
             "",
         ]
@@ -334,7 +453,8 @@ def render_readme(spec: PackageSpec) -> str:
         lines += [
             "## 包里是什么",
             "",
-            "接口项目（`pixiv_bridge/`）本体。它不依赖任何子项目，单独就能跑。",
+            "框架（`pixiv_bridge/`）+ 一个接口项目。框架不认识任何接口项目，"
+            "接口项目之间也互不依赖 —— 这里装的是其中一个。",
             "",
         ]
 
@@ -438,6 +558,13 @@ def main(argv=None) -> int:
         for spec in PACKAGES:
             print(f"{spec.key:<24} {spec.zip_name + '.zip':<28} {spec.summary}")
         return 0
+
+    problems = validate_specs()
+    if problems:
+        for problem in problems:
+            print(f"[FAIL] {problem}", file=sys.stderr)
+        print(f"分享包清单不成立：{len(problems)} 项", file=sys.stderr)
+        return 1
 
     unknown = [key for key in args.keys if key not in PACKAGES_BY_KEY]
     if unknown:

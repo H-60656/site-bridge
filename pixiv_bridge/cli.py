@@ -1,36 +1,29 @@
 """命令行入口：解析参数、跑环境自检、按配置挂扩展、交给 uvicorn 启动。
 
-默认入口（调用方不传 ``app_factory``）在这里读 ``PIXIV_BRIDGE_EXTENSIONS``
-并挂扩展；传了 ``app_factory`` 的调用方自己负责组装（``iwara/run.py`` 走这条）。
+入口不认识任何站点：站点通过 :class:`pixiv_bridge.site.Site`（``<site>/app.py`` 里的
+``SITE``）把自己的应用工厂、专属自检、登录校验与网络提示传进来，入口只负责
+「参数 → 配置 → 自检 → 应用 → uvicorn」这条流水线。
 """
 
 import argparse
-import asyncio
 import sys
 
-import httpx
 import uvicorn
 
-from .config import Settings
 from .deps import ensure_dependencies
-from .envcheck import run_checks
+from .envcheck import REQUIRED_FILES, run_checks
 from .extensions import ExtensionError, load_extensions
-from .oauth import OAuthManager
-from .server import create_app
 
 FATAL_CHECKS = ("python", "deps", "port")
 
-MISSING_TOKEN_HINT = (
-    "  提示: 没有 refresh_token 也能用接口（公开内容照常返回），但登录态、"
-    "关注流这些要用到它 —— 在项目目录跑一次 `python get_token.py` 即可"
-    "（浏览器授权，结果写进 data/tokens.json），或在 .env 里直接填 PIXIV_REFRESH_TOKEN"
+NO_SITE_HINT = (
+    "请用具体接口项目的入口启动：python pixiv/run.py 或 python iwara/run.py"
+    "（也可以 python -m pixiv_bridge <站点>）"
 )
 
 
-def _parse_args(argv=None):
-    parser = argparse.ArgumentParser(
-        prog="pixiv-bridge", description="Pixiv App API 直连接口服务"
-    )
+def _parse_args(argv=None, prog="bridge", description="接口服务"):
+    parser = argparse.ArgumentParser(prog=prog, description=description)
     parser.add_argument(
         "--host", default=None, help="监听地址，默认取环境变量或 127.0.0.1"
     )
@@ -79,99 +72,6 @@ def _fail_on(results, skip=()):
     sys.exit(1)
 
 
-def _warn_network(results, settings):
-    network = next(
-        (result for result in results if result.name in ("network", "ech", "proxy")),
-        None,
-    )
-    if not (network and not network.ok):
-        return
-    if settings.proxy:
-        print(
-            f"  提示: 代理 {settings.proxy} 不可用，检查代理软件是否在运行、"
-            "端口是否写对；socks5:// 需要先 pip install \"httpx[socks]\"",
-            flush=True,
-        )
-    elif settings.ech:
-        print(
-            "  提示: ECH 模式仍无法直连。若错误里是 SSL_get_error=5（握手被重置），"
-            "说明本机到 Cloudflare 这一段在阻断 ECH 扩展（只与本地网络/运营商有关，"
-            "与服务端无关；同一台机器也可能时通时断），可重试、换网络/手机热点，"
-            "或设置 PIXIV_PROXY=http://127.0.0.1:7890 走代理；"
-            "也可检查 PIXIV_BRIDGE_ECH_CONFIG / PIXIV_BRIDGE_ECH_IPS，"
-            "或安装带 ECH 支持的 OpenSSL（4.0+）",
-            flush=True,
-        )
-    elif settings.bypass_sni:
-        print(
-            "  提示: SNI 绕过已开启仍无法直连，可改用 PIXIV_BRIDGE_ECH=1（加密 SNI），"
-            "或设置 PIXIV_PROXY 走代理",
-            flush=True,
-        )
-    else:
-        print(
-            "  提示: 无法直连 Pixiv，可设置 PIXIV_BRIDGE_ECH=1 走加密 SNI，"
-            "或设置 PIXIV_BRIDGE_BYPASS_SNI=1 开启 SNI 绕过，或设置 PIXIV_PROXY",
-            flush=True,
-        )
-
-
-def _refresh_hint(settings, exc):
-    """刷新失败时，指出是「本地链路」还是「服务端」的问题。"""
-    text = f"{exc.__class__.__name__}: {exc}"
-    if "getaddrinfo" in text or "NameResolution" in text or "No address" in text:
-        return (
-            "  提示: 域名解析失败（getaddrinfo）是**本地 DNS 问题**，不是服务端问题——"
-            "系统解析被污染时普通模式必然失败；请设置 PIXIV_BRIDGE_ECH=1（ECH 用 DoH 解析，"
-            "不走系统 DNS）或 PIXIV_PROXY 走代理"
-        )
-    if "SSL_get_error=5" in text or "SyscallError" in text or "EchConnectError" in text:
-        return (
-            "  提示: 握手被重置说明**本机到 Cloudflare 这一段**在阻断 ECH 扩展"
-            "（Pixiv/Cloudflare 服务端正常，同一台机器也可能时通时断），可换网络/手机热点，"
-            "或设置 PIXIV_PROXY=http://127.0.0.1:7890 走代理"
-        )
-    if isinstance(exc, (httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout)):
-        return (
-            "  提示: 连不上 Pixiv（连接失败/超时）属于**本地链路问题**，"
-            "不是服务端问题；可重试、换网络，或设置 PIXIV_PROXY 走代理"
-        )
-    status = getattr(exc, "status", None)
-    if status in (401, 403):
-        return (
-            f"  提示: 服务端返回 HTTP {status}，属于**账号/权限问题**（token 失效、"
-            "作品不可见或接口变更），与本地网络无关；可重新获取 refresh_token 后再试"
-        )
-    if status:
-        return (
-            f"  提示: 服务端返回 HTTP {status}，请求已经到达 Pixiv（说明本地链路是通的），"
-            "属于**服务端问题**"
-        )
-    return ""
-
-
-async def _check(settings):
-    async with httpx.AsyncClient(proxy=settings.proxy or None) as http:
-        oauth = OAuthManager(settings, http)
-        await oauth.load()
-        if not oauth.refresh_token:
-            print(
-                "未配置 refresh_token（PIXIV_REFRESH_TOKEN 或 tokens.json）",
-                flush=True,
-            )
-            print(MISSING_TOKEN_HINT, flush=True)
-            return 1
-        try:
-            await oauth.refresh()
-        except Exception as exc:
-            print(f"刷新失败: {exc}", flush=True)
-            print(_refresh_hint(settings, exc), flush=True)
-            return 1
-        user = oauth.user or {}
-        print(f"登录成功: {user.get('name')} ({user.get('account')})", flush=True)
-        return 0
-
-
 def _print_extensions(extensions):
     """报告按配置挂上的附属项目（扩展）。一个都没有就不打印。"""
     if not extensions:
@@ -184,9 +84,8 @@ def _print_extensions(extensions):
 def load_extensions_or_exit(settings):
     """按配置加载扩展，打印清单；配置写错就退出。
 
-    默认入口用它，自己组装应用的独立入口（`iwara/run.py`）也用它 ——
-    两边对「扩展加载失败」的处理必须一致：给一行可读报错并 `sys.exit(1)`，
-    而不是把栈甩给用户（配置写错目录 / 目录里没有 extension.py 等）。
+    任何入口都用它 —— 对「扩展加载失败」的处理必须一致：给一行可读报错并
+    ``sys.exit(1)``，而不是把栈甩给用户（配置写错目录 / 目录里没有 extension.py 等）。
     """
     try:
         extensions = load_extensions(settings)
@@ -197,23 +96,22 @@ def load_extensions_or_exit(settings):
     return extensions
 
 
-def main(argv=None, app_factory=None, extra_checks=None):
-    """启动服务。
+def main(argv=None, site=None):
+    """启动一个接口项目。
 
-    默认 `app_factory` 就是主项目的 `create_app`，并按配置
-    （`PIXIV_BRIDGE_EXTENSIONS`）把附属项目（扩展，例如 `novel`）挂上去 ——
-    也就是说「把扩展目录放进项目目录 + 在配置里写它的相对路径」就够了，
-    不需要专门的入口脚本。
+    `site` 是 :class:`pixiv_bridge.site.Site`：站点入口脚本（``<site>/run.py``）先
+    bootstrap 站点额外依赖，再把 `SITE` 传进来。框架本身不是服务，所以 `site=None`
+    直接报错退出。
 
-    传了 `app_factory(settings)` 的调用方自己负责组装（`iwara/run.py` 走这条，
-    它不是 pixiv 接口项目的扩展，而是自己独立的接口项目）；这类入口要挂扩展的话，
-    在自己的 factory 里调 `load_extensions_or_exit(settings)` 再传给 `create_app`
-    （`iwara/run.py` 就是这么挂 `iwara_web` 页面扩展的）。这类入口还可以传
-    `extra_checks(settings) -> list[CheckResult]`，把自己专属的自检项追加到
-    `[环境检查]` 里（`iwara/run.py` 用它报告 curl_cffi、api.iwara.tv 与 iwara 登录态）。
+    这条流水线对每个站点都一样：读配置（站点可以用自己的 Settings 子类）→ 通用自检
+    + ``site.environment_checks`` → 按 ``PIXIV_BRIDGE_EXTENSIONS`` 挂扩展 →
+    ``site.check_login``（``--check``）或 ``site.build_app`` + uvicorn。
     """
-    args = _parse_args(argv)
-    settings = Settings.load(args.env)
+    if site is None:
+        print(NO_SITE_HINT, file=sys.stderr, flush=True)
+        sys.exit(2)
+    args = _parse_args(argv, prog=site.name, description=f"{site.title} 直连接口服务")
+    settings = site.load_settings(args.env)
     if args.host:
         settings.host = args.host
     if args.port:
@@ -221,38 +119,27 @@ def main(argv=None, app_factory=None, extra_checks=None):
     ensure_dependencies()
     results = run_checks(
         port=settings.port,
-        api_ips=settings.api_ips,
-        oauth_ips=settings.oauth_ips,
-        image_ips=settings.image_ips,
-        ech=settings.ech,
-        ech_config=settings.ech_config,
-        ech_ips=settings.ech_ips,
-        proxy=settings.proxy,
-        api_base=settings.api_base,
-        project_root=settings.project_root,
+        files=(
+            (settings.project_root, REQUIRED_FILES),
+            (site.directory, site.required_files),
+        ),
     )
-    if extra_checks is not None:
-        # 入口专属的自检（iwara：curl_cffi / api.iwara.tv / iwara 登录态）跟通用检查
-        # 打在同一张表里 —— 它们都不在 FATAL_CHECKS 里，所以只提示、不中止。
-        results.extend(extra_checks(settings))
+    # 站点专属的自检（pixiv：网络 / ECH / 代理；iwara：curl_cffi / api.iwara.tv /
+    # 登录态）跟通用检查打在同一张表里 —— 它们都不在 FATAL_CHECKS 里，只提示不中止。
+    results.extend(site.environment_checks(settings))
 
     _print_checks(results)
     _print_warnings(settings)
     # --check 只校验，不监听端口：端口被占只提示，最终启动时才中止。
     _fail_on(results, skip=("port",) if args.check else ())
-    _warn_network(results, settings)
+    site.warn_network(results, settings)
 
-    if app_factory is None:
-        # 扩展只在默认入口这一条路上按配置加载；加载失败给一行可读报错，
-        # 而不是把栈甩给用户（配置写错目录 / 目录里没有 extension.py 等）。
-        extensions = load_extensions_or_exit(settings)
-        app_factory = lambda settings: create_app(  # noqa: E731 - 就地绑定已加载的扩展
-            settings, extensions=extensions
-        )
+    # 扩展按配置加载（`PIXIV_BRIDGE_EXTENSIONS`）；加载失败给一行可读报错。
+    extensions = load_extensions_or_exit(settings)
 
     if args.check:
-        sys.exit(asyncio.run(_check(settings)))
-    app = app_factory(settings)
+        sys.exit(site.check_login(settings))
+    app = site.build_app(settings, extensions)
     uvicorn.run(app, host=settings.host, port=settings.port, reload=args.reload)
 
 

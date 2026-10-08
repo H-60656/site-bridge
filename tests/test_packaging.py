@@ -146,7 +146,7 @@ class PackagingHelpersTestCase(unittest.TestCase):
         for name in ("x.pyc", "x.pyo"):
             with self.subTest(name=name):
                 self.assertTrue(packaging.should_ignore(name))
-        for name in ("pixiv_bridge", "README.md", "run.py", ".env.example"):
+        for name in ("pixiv_bridge", "README.md", "requirements.txt", ".env.example"):
             with self.subTest(name=name):
                 self.assertFalse(packaging.should_ignore(name))
 
@@ -278,19 +278,21 @@ class RenderReadmeTestCase(unittest.TestCase):
         fields = {
             "key": "demo", "zip_name": "demo", "title": "演示包", "kind": "api",
             "summary": "一句话说明。",
-            "dirs": ("novel",), "files": ("run.py",),
-            "start_commands": ("# 启动", "python run.py"),
+            "dirs": ("pixiv",), "files": ("requirements.txt",),
+            "start_commands": ("# 启动", "python pixiv/run.py"),
             "setup_lines": ("第一步",),
             "notes": ("注意点",),
         }
         fields.update(overrides)
         return packaging.render_readme(packaging.PackageSpec(**fields))
 
-    def test_api_package_says_it_runs_alone(self):
+    def test_api_package_says_it_carries_one_api_project(self):
         text = self.render(kind="api")
         self.assertIn("# 演示包", text)
         self.assertIn("一句话说明。", text)
-        self.assertIn("单独就能跑", text)
+        # 接口包 = 框架 + 恰好一个接口项目；两个接口项目互不依赖。
+        self.assertIn("一个接口项目", text)
+        self.assertIn("互不依赖", text)
 
     def test_extension_package_says_it_cannot_start_alone(self):
         text = self.render(kind="extension")
@@ -304,7 +306,10 @@ class RenderReadmeTestCase(unittest.TestCase):
 
     def test_includes_start_commands_setup_and_notes(self):
         text = self.render()
-        for piece in ("## 怎么启动", "python run.py", "## 还要做什么", "1. 第一步", "## 说明", "- 注意点"):
+        for piece in (
+            "## 怎么启动", "python pixiv/run.py", "## 还要做什么", "1. 第一步",
+            "## 说明", "- 注意点",
+        ):
             with self.subTest(piece=piece):
                 self.assertIn(piece, text)
 
@@ -317,12 +322,13 @@ class RenderReadmeTestCase(unittest.TestCase):
             self.assertIn("手册/" + name, text)
 
     def test_tree_preview_lists_the_root_folder_and_readme(self):
-        spec = packaging.PACKAGES_BY_KEY["pixiv_bridge-api"]
+        spec = packaging.PACKAGES_BY_KEY["pixiv-api"]
         tree = packaging._tree_preview(spec)
         self.assertTrue(tree.startswith(spec.zip_name + "/"))
         self.assertIn("README.md", tree)
         self.assertIn("手册/", tree)
         self.assertIn("pixiv_bridge/", tree)
+        self.assertIn("pixiv/", tree)
         for name in spec.files:
             self.assertIn(name, tree)
 
@@ -334,6 +340,76 @@ class RenderReadmeTestCase(unittest.TestCase):
         self.assertNotIn("## 怎么启动", text)
         self.assertNotIn("## 还要做什么", text)
         self.assertNotIn("## 说明", text)
+
+
+class ValidateSpecsTestCase(unittest.TestCase):
+    """``validate_specs()`` 是「两个接口项目同级」在打包这一层的守门人。"""
+
+    def test_the_real_manifest_is_valid(self):
+        self.assertEqual(packaging.validate_specs(), [])
+
+    def test_rejects_a_package_that_mixes_two_api_projects(self):
+        bogus = packaging.PackageSpec(
+            key="pixiv-api", zip_name="pixiv-api", title="t", kind="api", summary="s",
+            dirs=("pixiv_bridge", "pixiv", "iwara"),
+        )
+        with patch.object(packaging, "PACKAGES", (bogus,)):
+            problems = packaging.validate_specs()
+        self.assertTrue(
+            any("只能带一个接口项目" in problem for problem in problems), problems
+        )
+
+    def test_accepts_an_extension_package_without_its_host_directory(self):
+        # 回归：扩展包本来就不带站点目录，不该被当成「宿主缺失」。
+        bogus = packaging.PackageSpec(
+            key="novel-extension", zip_name="novel-extension", title="t",
+            kind="extension", summary="s", dirs=("novel",),
+        )
+        with patch.object(packaging, "PACKAGES", (bogus,)):
+            problems = packaging.validate_specs()
+        self.assertFalse(
+            [problem for problem in problems if "挂在" in problem], problems
+        )
+
+    def test_rejects_a_bundle_whose_host_is_another_api_project(self):
+        # iwara_web 挂在 iwara 上，放进 pixiv 的组合包里必须报出来。
+        bogus = packaging.PackageSpec(
+            key="pixiv-novel", zip_name="pixiv-novel", title="t", kind="bundle",
+            summary="s", dirs=("pixiv_bridge", "pixiv", "iwara_web"),
+        )
+        with patch.object(packaging, "PACKAGES", (bogus,)):
+            problems = packaging.validate_specs()
+        self.assertTrue(
+            any("挂在 iwara 上" in problem for problem in problems), problems
+        )
+
+
+class SiteRegistryTestCase(unittest.TestCase):
+    """分享包覆盖面对齐 ``scripts/sites.py``（构建侧唯一事实来源）。"""
+
+    def test_every_registered_site_ships_in_an_api_package(self):
+        covered = {name for spec in packaging.PACKAGES for name in spec.site_names}
+        expected = {site.directory for site in packaging.SITES}
+        self.assertEqual(covered, expected)
+
+    def test_every_registered_extension_ships_in_an_extension_package(self):
+        covered = {
+            name for spec in packaging.PACKAGES for name in spec.extension_names
+        }
+        self.assertEqual(covered, set(packaging.EXTENSIONS_BY_NAME))
+
+    def test_api_packages_use_the_registry_entry_command(self):
+        for spec in packaging.PACKAGES:
+            if spec.kind == "extension":
+                continue
+            with self.subTest(key=spec.key):
+                site = packaging.SITES_BY_NAME[spec.site_names[0]]
+                self.assertIn(site.command(), "\n".join(spec.start_commands))
+
+    def test_iwara_package_does_not_ship_pixiv_openssl_assets(self):
+        # openssl-libs 是 Pixiv 的 ECH 直连用的，iwara 包不该带。
+        self.assertNotIn("openssl-libs", packaging.PACKAGES_BY_KEY["iwara-api"].dirs)
+        self.assertIn("openssl-libs", packaging.PACKAGES_BY_KEY["pixiv-api"].dirs)
 
 
 class ZipRoundTripTestCase(unittest.TestCase):

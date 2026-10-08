@@ -25,7 +25,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from pixiv_bridge import deps as deps_module
-from pixiv_bridge.api import (
+from pixiv.api import (
     PixivApi,
     PixivApiError,
     PixivRateLimitError,
@@ -39,8 +39,6 @@ from pixiv_bridge.config import Settings
 from pixiv_bridge.envcheck import (
     CheckResult,
     dependencies,
-    ech_transport,
-    network,
     port_available,
     project_files,
     python_version,
@@ -58,9 +56,11 @@ from novel.app import create_app as create_novel_app
 from novel.bookmarks import BookmarkStore, normalize_bookmark
 from novel.downloads import DownloadStore, normalize_download
 from novel.history import HistoryStore, normalize_entry
-from pixiv_bridge.image_proxy import ImageProxy
-from pixiv_bridge.oauth import OAuthManager
-from pixiv_bridge.server import create_app
+from pixiv.image_proxy import ImageProxy
+from pixiv.oauth import OAuthManager
+from pixiv.app import create_app
+from pixiv.envcheck import ech_transport, network
+from pixiv.config import PixivSettings
 
 from pixiv_bridge import nav as nav_module
 
@@ -79,7 +79,7 @@ _TEMP_COUNTER = itertools.count(1)
 
 
 def make_settings(token="test-refresh"):
-    return Settings(
+    return PixivSettings(
         refresh_token=token,
         token_file=TEST_TOKEN_FILE,
         rate_limit_rpm=10000,
@@ -200,21 +200,27 @@ class EnvCheckTestCase(unittest.TestCase):
         self.assertFalse(result.ok)
 
     def test_network_reachable(self):
-        with patch("pixiv_bridge.envcheck._probe", return_value="app-api.pixiv.net"):
+        with patch("pixiv.envcheck._probe", return_value="app-api.pixiv.net"):
             result = network()
         self.assertTrue(result.ok)
 
     def test_network_unreachable(self):
-        with patch("pixiv_bridge.envcheck._probe", return_value=None):
+        with patch("pixiv.envcheck._probe", return_value=None):
             result = network()
         self.assertFalse(result.ok)
 
     def test_run_checks_with_port(self):
-        with patch("pixiv_bridge.envcheck._probe", return_value=None):
-            results = run_checks(port=0)
-        self.assertEqual(
-            [r.name for r in results], ["python", "deps", "files", "port", "network"]
-        )
+        # 通用自检只列框架自己的项；站点专属探测由 SITE.checks 追加到同一张表。
+        results = run_checks(port=0)
+        self.assertEqual([r.name for r in results], ["python", "deps", "files", "port"])
+
+    def test_site_network_check_is_a_separate_hook(self):
+        from pixiv.envcheck import extra_checks
+
+        with patch("pixiv.envcheck._probe", return_value=None):
+            results = extra_checks(PixivSettings())
+        self.assertEqual([r.name for r in results], ["network"])
+        self.assertFalse(results[0].ok)
 
 
 class DepsTestCase(unittest.TestCase):
@@ -873,7 +879,7 @@ class ImageProxyTestCase(unittest.IsolatedAsyncioTestCase):
 
 class HosterTestCase(unittest.TestCase):
     def test_resolve_default_pool(self):
-        from pixiv_bridge import hoster
+        from pixiv import hoster
 
         self.assertIn("210.140.92.136", hoster.resolve("app-api.pixiv.net"))
         self.assertIn(
@@ -882,7 +888,7 @@ class HosterTestCase(unittest.TestCase):
         self.assertEqual(hoster.resolve("unknown.example.com"), ("unknown.example.com",))
 
     def test_resolve_custom_ips(self):
-        from pixiv_bridge import hoster
+        from pixiv import hoster
 
         self.assertEqual(
             hoster.resolve("app-api.pixiv.net", "1.2.3.4, 5.6.7.8"),
@@ -892,7 +898,7 @@ class HosterTestCase(unittest.TestCase):
 
 class SniClientTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_build_request_form(self):
-        from pixiv_bridge.sni_client import _build_request
+        from pixiv.sni_client import _build_request
 
         raw = _build_request(
             "POST",
@@ -910,7 +916,7 @@ class SniClientTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(raw.endswith("a=1&b=2"))
 
     async def test_build_request_json(self):
-        from pixiv_bridge.sni_client import _build_request
+        from pixiv.sni_client import _build_request
 
         raw = _build_request(
             "GET",
@@ -924,7 +930,7 @@ class SniClientTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Content-Type: application/json", raw)
 
     async def test_request_succeeds_on_first_ip(self):
-        from pixiv_bridge import sni_client
+        from pixiv import sni_client
 
         calls = []
 
@@ -978,7 +984,7 @@ class SniClientTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.json(), {"ok": True})
 
     async def test_request_raises_on_all_failures(self):
-        from pixiv_bridge import sni_client
+        from pixiv import sni_client
 
         async def fail_open(ip, port, ssl=None, server_hostname=None):
             raise OSError("no route")
@@ -992,7 +998,7 @@ class SniClientTestCase(unittest.IsolatedAsyncioTestCase):
                 )
 
     async def test_request_retries_next_ip_after_protocol_error(self):
-        from pixiv_bridge import sni_client
+        from pixiv import sni_client
 
         class FakeWriter:
             def write(self, chunk):
@@ -1046,8 +1052,8 @@ class SniClientTestCase(unittest.IsolatedAsyncioTestCase):
 
 class BypassApiTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_api_request_uses_bypass_when_enabled(self):
-        from pixiv_bridge import hoster
-        from pixiv_bridge import sni_client
+        from pixiv import hoster
+        from pixiv import sni_client
 
         settings = make_settings()
         settings.bypass_sni = True
@@ -1083,7 +1089,7 @@ class BypassApiTestCase(unittest.IsolatedAsyncioTestCase):
         await http.aclose()
 
     async def test_api_bypass_connect_error_maps_to_502(self):
-        from pixiv_bridge import sni_client
+        from pixiv import sni_client
 
         settings = make_settings()
         settings.bypass_sni = True
@@ -1150,7 +1156,7 @@ class SettingsEnvPathTestCase(unittest.TestCase):
             encoding="utf-8",
         )
         with patch.dict(os.environ, {}, clear=True):
-            settings = Settings.load(raw_path, migrate=False)
+            settings = PixivSettings.load(raw_path, migrate=False)
         self.assertEqual(settings.refresh_token, "from-file")
         self.assertEqual(settings.port, 9999)
         # 项目根取 .env 所在目录，token 文件仍落在项目内（个人数据统一在 data/ 下）
@@ -1160,7 +1166,7 @@ class SettingsEnvPathTestCase(unittest.TestCase):
     def test_env_directory_path_still_supported(self):
         target = PROJECT_ROOT / "pixiv_bridge"
         with patch.dict(os.environ, {}, clear=True):
-            settings = Settings.load(str(target), migrate=False)
+            settings = PixivSettings.load(str(target), migrate=False)
         self.assertEqual(settings.project_root, target)
         self.assertEqual(settings.token_file, target / "data" / "tokens.json")
         self.assertEqual(settings.history_file, target / "data" / "history.jsonl")
@@ -1176,7 +1182,7 @@ class SettingsEnvPathTestCase(unittest.TestCase):
             encoding="utf-8",
         )
         with patch.dict(os.environ, {}, clear=True):
-            settings = Settings.load(raw_path, migrate=False)
+            settings = PixivSettings.load(raw_path, migrate=False)
         self.assertEqual(settings.token_file, PROJECT_ROOT / "data" / "tokens.json")
         self.assertEqual(settings.history_file, PROJECT_ROOT / "data" / "history.jsonl")
         self.assertFalse(settings.history_file.is_dir())
@@ -1192,7 +1198,7 @@ class EnvCheckIpPoolTestCase(unittest.TestCase):
             seen[host] = extra_ips
             return host if host == "app-api.pixiv.net" else None
 
-        with patch("pixiv_bridge.envcheck._probe", fake_probe):
+        with patch("pixiv.envcheck._probe", fake_probe):
             result = network(
                 api_ips="1.1.1.1", oauth_ips="2.2.2.2", image_ips="3.3.3.3"
             )
@@ -1201,16 +1207,20 @@ class EnvCheckIpPoolTestCase(unittest.TestCase):
         self.assertEqual(seen["i.pximg.net"], "3.3.3.3")
         self.assertTrue(result.ok)
 
-    def test_run_checks_forwards_custom_pools(self):
-        with patch("pixiv_bridge.envcheck.network") as fake_network:
+    def test_site_extra_checks_forwards_custom_pools(self):
+        from pixiv.envcheck import extra_checks
+
+        with patch("pixiv.envcheck.network") as fake_network:
             fake_network.return_value = CheckResult("network", True, "ok")
-            run_checks(
-                port=0,
-                api_ips="1.1.1.1",
-                oauth_ips="2.2.2.2",
-                image_ips="3.3.3.3",
+            results = extra_checks(
+                PixivSettings(
+                    api_ips="1.1.1.1",
+                    oauth_ips="2.2.2.2",
+                    image_ips="3.3.3.3",
+                )
             )
         fake_network.assert_called_once_with("1.1.1.1", "2.2.2.2", "3.3.3.3")
+        self.assertEqual([r.name for r in results], ["network"])
 
     def test_network_default_pools_unchanged(self):
         seen = {}
@@ -1219,7 +1229,7 @@ class EnvCheckIpPoolTestCase(unittest.TestCase):
             seen[host] = extra_ips
             return None
 
-        with patch("pixiv_bridge.envcheck._probe", fake_probe):
+        with patch("pixiv.envcheck._probe", fake_probe):
             network()
         self.assertEqual(set(seen.values()), {""})
 
@@ -1244,7 +1254,7 @@ class SniHostHeaderTestCase(unittest.IsolatedAsyncioTestCase):
             pass
 
     async def _run(self, reader):
-        from pixiv_bridge import sni_client
+        from pixiv import sni_client
 
         sink = []
 
@@ -1292,7 +1302,7 @@ class SniHostHeaderTestCase(unittest.IsolatedAsyncioTestCase):
                 return b""
 
         # 复用 _run 的调用路径，但由调用方显式提供 Host
-        from pixiv_bridge import sni_client
+        from pixiv import sni_client
 
         sink = []
 
@@ -1311,7 +1321,7 @@ class SniHostHeaderTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("custom.example", raw)
 
     async def test_malformed_status_line_maps_to_connect_error(self):
-        from pixiv_bridge import sni_client
+        from pixiv import sni_client
 
         class Reader:
             async def readline(self):
@@ -1336,7 +1346,7 @@ class HeaderTerminatorTestCase(unittest.IsolatedAsyncioTestCase):
     """
 
     def _raw(self, *args):
-        from pixiv_bridge.sni_client import _build_request
+        from pixiv.sni_client import _build_request
 
         return _build_request(*args).decode("latin-1")
 
@@ -1377,14 +1387,14 @@ class EchSettingsTestCase(unittest.TestCase):
             "PIXIV_BRIDGE_ECH_IPS": "1.2.3.4,5.6.7.8",
         }
         with patch.dict(os.environ, env, clear=True):
-            settings = Settings.load(str(PROJECT_ROOT / "_no_such_env_file"))
+            settings = PixivSettings.load(str(PROJECT_ROOT / "_no_such_env_file"))
         self.assertTrue(settings.ech)
         self.assertEqual(settings.ech_config, "AAAA")
         self.assertEqual(settings.ech_ips, "1.2.3.4,5.6.7.8")
 
     def test_ech_defaults_off(self):
         with patch.dict(os.environ, {}, clear=True):
-            settings = Settings.load(str(PROJECT_ROOT / "_no_such_env_file"))
+            settings = PixivSettings.load(str(PROJECT_ROOT / "_no_such_env_file"))
         self.assertFalse(settings.ech)
         self.assertEqual(settings.ech_config, "")
         self.assertEqual(settings.ech_ips, "")
@@ -1392,16 +1402,16 @@ class EchSettingsTestCase(unittest.TestCase):
 
     def test_proxy_from_env(self):
         with patch.dict(os.environ, {"PIXIV_PROXY": "http://127.0.0.1:7890"}, clear=True):
-            settings = Settings.load(str(PROJECT_ROOT / "_no_such_env_file"))
+            settings = PixivSettings.load(str(PROJECT_ROOT / "_no_such_env_file"))
         self.assertEqual(settings.proxy, "http://127.0.0.1:7890")
         with patch.dict(os.environ, {"PIXIV_BRIDGE_PROXY": "socks5://127.0.0.1:1080"}, clear=True):
-            settings = Settings.load(str(PROJECT_ROOT / "_no_such_env_file"))
+            settings = PixivSettings.load(str(PROJECT_ROOT / "_no_such_env_file"))
         self.assertEqual(settings.proxy, "socks5://127.0.0.1:1080")
 
 
 class EchConfigTestCase(unittest.TestCase):
     def test_builtin_config_decodes_and_hides_pixiv_name(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         raw = ech_client._decode_config(ech_client.DEFAULT_ECH_CONFIG)
         # ECHConfigList = uint16 总长 + ECHConfig；版本号 0xfe0d 在总长之后。
@@ -1411,16 +1421,16 @@ class EchConfigTestCase(unittest.TestCase):
         self.assertNotIn(b"pixiv", raw)
 
     def test_override_wins_over_constant(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
-        settings = Settings(ech_config=ech_client.DEFAULT_ECH_CONFIG)
+        settings = PixivSettings(ech_config=ech_client.DEFAULT_ECH_CONFIG)
         self.assertEqual(
             ech_client.ech_config(settings),
             ech_client._decode_config(ech_client.DEFAULT_ECH_CONFIG),
         )
 
     def test_pem_wrapped_config_is_accepted(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         pem = (
             "-----BEGIN ECHCONFIG-----\n"
@@ -1433,14 +1443,14 @@ class EchConfigTestCase(unittest.TestCase):
         )
 
     def test_invalid_config_raises_unavailable(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with self.assertRaises(ech_client.EchUnavailable):
             ech_client._decode_config("not base64 !!!")
 
     def test_doh_answer_with_quoted_ech_value_is_parsed(self):
         """真实形状 data='1 . alpn="h3,h2" ... ech="AEX+..." ...'：旧实现按空格分词后取空串。"""
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         payload = {
             "Status": 0,
@@ -1466,7 +1476,7 @@ class EchConfigTestCase(unittest.TestCase):
         self.assertIsNone(ech_client._ech_from_doh({"Answer": [{"type": 65, "data": "1 . alpn=h2"}]}))
 
     def test_fetch_ech_config_falls_back_to_reachable_doh(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         calls = []
 
@@ -1493,7 +1503,7 @@ class EchConfigTestCase(unittest.TestCase):
         self.assertEqual(calls, list(ech_client.DOH_ENDPOINTS[:2]))
 
     def test_fetch_ech_config_reports_all_endpoint_failures(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with patch.object(
             ech_client.httpx, "get", side_effect=httpx.ConnectError("blocked")
@@ -1504,7 +1514,7 @@ class EchConfigTestCase(unittest.TestCase):
         self.assertIn(ech_client.DOH_ENDPOINTS[1], str(ctx.exception))
 
     def test_cached_config_is_refreshed_after_ttl_or_on_demand(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         fresh = ech_client._decode_config(ech_client.DEFAULT_ECH_CONFIG)
         calls = []
@@ -1517,8 +1527,8 @@ class EchConfigTestCase(unittest.TestCase):
         with patch.object(ech_client, "fetch_ech_config", side_effect=fake_fetch), patch.object(
             ech_client, "ECH_CONFIG_TTL", 0.0
         ):
-            first = ech_client.ech_config(Settings(ech_config=""))
-            second = ech_client.ech_config(Settings(ech_config=""))
+            first = ech_client.ech_config(PixivSettings(ech_config=""))
+            second = ech_client.ech_config(PixivSettings(ech_config=""))
         self.assertEqual(first, fresh)
         self.assertEqual(second, fresh)
         # TTL=0 时每次都视为过期 → 重新取（而不是进程内永久缓存）
@@ -1526,13 +1536,13 @@ class EchConfigTestCase(unittest.TestCase):
 
         ech_client.reset_config_cache()
         with patch.object(ech_client, "fetch_ech_config", side_effect=fake_fetch):
-            ech_client.ech_config(Settings(ech_config=""))
+            ech_client.ech_config(PixivSettings(ech_config=""))
         self.assertEqual(len(calls), 3)
         ech_client.reset_config_cache()
 
     def test_transport_refreshes_config_when_tls_fails(self):
         """TLS 层失败（SSL_get_error=1，常见于配置过期）刷新一次配置再试；被 RST 则不刷。"""
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         class FakeConn:
             def __init__(self, ip, port, timeout):
@@ -1556,7 +1566,7 @@ class EchConfigTestCase(unittest.TestCase):
         ):
             with self.assertRaises(ech_client.EchConnectError) as ctx:
                 ech_client._request_sync(
-                    "GET", "https://app-api.pixiv.net/v1/x", None, None, None, {}, 1.0, ["1.1.1.1"], Settings()
+                    "GET", "https://app-api.pixiv.net/v1/x", None, None, None, {}, 1.0, ["1.1.1.1"], PixivSettings()
                 )
         self.assertIn("刷新 ECH 配置后重试", str(ctx.exception))
         self.assertEqual(seen, [False, True])
@@ -1566,7 +1576,7 @@ class EchConfigTestCase(unittest.TestCase):
 
 class EchHosterTestCase(unittest.TestCase):
     def test_resolve_ech_default_pool(self):
-        from pixiv_bridge import hoster
+        from pixiv import hoster
 
         pool = hoster.resolve_ech("app-api.pixiv.net")
         self.assertIn("104.18.10.118", pool)
@@ -1575,7 +1585,7 @@ class EchHosterTestCase(unittest.TestCase):
         self.assertIn("104.18.10.118", hoster.resolve_ech("i.pximg.net"))
 
     def test_resolve_ech_custom_ips(self):
-        from pixiv_bridge import hoster
+        from pixiv import hoster
 
         self.assertEqual(
             hoster.resolve_ech("app-api.pixiv.net", "1.1.1.1, 2.2.2.2"),
@@ -1587,7 +1597,7 @@ class EchTransportTestCase(unittest.IsolatedAsyncioTestCase):
     """ECH 打开时 API / OAuth 必须走 ech_client，且优先于 BYPASS_SNI。"""
 
     def _parts(self, **flags):
-        from pixiv_bridge.api import PixivApi
+        from pixiv.api import PixivApi
 
         settings = make_settings()
         for key, value in flags.items():
@@ -1600,7 +1610,7 @@ class EchTransportTestCase(unittest.IsolatedAsyncioTestCase):
         return settings, http, PixivApi(settings, oauth, http)
 
     async def test_api_prefers_ech_over_bypass_sni(self):
-        from pixiv_bridge import ech_client, hoster, sni_client
+        from pixiv import ech_client, hoster, sni_client
 
         settings, http, api = self._parts(ech=True, bypass_sni=True)
         seen = {}
@@ -1633,8 +1643,8 @@ class EchTransportTestCase(unittest.IsolatedAsyncioTestCase):
         await http.aclose()
 
     async def test_proxy_transport_skips_ech_and_sni(self):
-        from pixiv_bridge import ech_client, sni_client
-        from pixiv_bridge.api import PixivApi
+        from pixiv import ech_client, sni_client
+        from pixiv.api import PixivApi
 
         settings = make_settings()
         settings.ech = True
@@ -1663,7 +1673,7 @@ class EchTransportTestCase(unittest.IsolatedAsyncioTestCase):
         await http.aclose()
 
     async def test_api_ech_errors_map_to_502(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         for error in (
             ech_client.EchConnectError("握手失败"),
@@ -1678,7 +1688,7 @@ class EchTransportTestCase(unittest.IsolatedAsyncioTestCase):
                 await http.aclose()
 
     async def test_ech_custom_ips_are_forwarded(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         settings, http, api = self._parts(ech=True, ech_ips="9.9.9.9")
         seen = {}
@@ -1693,7 +1703,7 @@ class EchTransportTestCase(unittest.IsolatedAsyncioTestCase):
         await http.aclose()
 
     async def test_oauth_token_request_uses_ech(self):
-        from pixiv_bridge import ech_client, hoster
+        from pixiv import ech_client, hoster
 
         settings = make_settings()
         settings.ech = True
@@ -1753,7 +1763,7 @@ class ImageProxyTransportTestCase(unittest.IsolatedAsyncioTestCase):
         return b"".join([chunk async for chunk in image.aiter_raw()])
 
     async def test_stream_uses_ech_when_enabled(self):
-        from pixiv_bridge import ech_client, hoster, sni_client
+        from pixiv import ech_client, hoster, sni_client
 
         settings, http, proxy = self._parts(ech=True, bypass_sni=True)
         seen = {}
@@ -1787,7 +1797,7 @@ class ImageProxyTransportTestCase(unittest.IsolatedAsyncioTestCase):
         await http.aclose()
 
     async def test_stream_uses_bypass_sni_with_custom_image_ips(self):
-        from pixiv_bridge import ech_client, hoster, sni_client
+        from pixiv import ech_client, hoster, sni_client
 
         settings, http, proxy = self._parts(bypass_sni=True, image_ips="5.5.5.5")
         seen = {}
@@ -1816,7 +1826,7 @@ class ImageProxyTransportTestCase(unittest.IsolatedAsyncioTestCase):
         await http.aclose()
 
     async def test_stream_errors_map_to_connect_error(self):
-        from pixiv_bridge import ech_client, sni_client
+        from pixiv import ech_client, sni_client
 
         settings, http, proxy = self._parts(ech=True)
         with patch.object(
@@ -1847,7 +1857,7 @@ class EchEnvCheckTestCase(unittest.TestCase):
     """--check 在 ECH 模式下做真实握手，而不是探测明文 SNI。"""
 
     def test_ech_transport_ok(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with patch.object(ech_client, "available", return_value=True), patch.object(
             ech_client, "request", AsyncMock(return_value=httpx.Response(400, json={}))
@@ -1859,7 +1869,7 @@ class EchEnvCheckTestCase(unittest.TestCase):
 
     def test_ech_transport_reports_bundled_library(self):
         """--check 要说清用的是项目自带那份还是系统装的，便于排错。"""
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         bundled = ech_client.bundle_root() / "win32-amd64" / "libssl-4-x64.dll"
         with patch.object(ech_client, "available", return_value=True), patch.object(
@@ -1872,7 +1882,7 @@ class EchEnvCheckTestCase(unittest.TestCase):
         self.assertIn("项目自带", result.detail)
 
     def test_ech_transport_reports_system_library(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         system = Path(r"C:\Program Files\OpenSSL-Win64\bin\libssl-4-x64.dll")
         with patch.object(ech_client, "available", return_value=True), patch.object(
@@ -1886,7 +1896,7 @@ class EchEnvCheckTestCase(unittest.TestCase):
 
     def test_ech_transport_ok_without_library_path(self):
         """拿不到库路径（极端情况）不该影响结论，也不该冒出空标签。"""
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with patch.object(ech_client, "available", return_value=True), patch.object(
             ech_client, "library_path", return_value=""
@@ -1898,7 +1908,7 @@ class EchEnvCheckTestCase(unittest.TestCase):
         self.assertNotIn("OpenSSL：", result.detail)
 
     def test_ech_transport_without_openssl(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with patch.object(ech_client, "available", return_value=False):
             result = ech_transport()
@@ -1906,7 +1916,7 @@ class EchEnvCheckTestCase(unittest.TestCase):
         self.assertIn("OpenSSL", result.detail)
 
     def test_ech_transport_failure_detail(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with patch.object(ech_client, "available", return_value=True), patch.object(
             ech_client, "request", AsyncMock(side_effect=ech_client.EchConnectError("x"))
@@ -1917,7 +1927,7 @@ class EchEnvCheckTestCase(unittest.TestCase):
 
     def test_ech_transport_hints_when_reset(self):
         """SSL_get_error=5（握手被中间盒重置）时给出代理这条出路。"""
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         error = ech_client.EchConnectError(
             "ECH 直连失败: 104.18.10.118: EchConnectError(ECH 握手失败（SSL_get_error=5）)"
@@ -1931,7 +1941,7 @@ class EchEnvCheckTestCase(unittest.TestCase):
         self.assertIn("阻断", result.detail)
 
     def test_proxy_check_ok_and_failure(self):
-        from pixiv_bridge.envcheck import proxy_transport
+        from pixiv.envcheck import proxy_transport
 
         with patch.object(
             httpx,
@@ -1952,7 +1962,7 @@ class EchEnvCheckTestCase(unittest.TestCase):
         self.assertIn("代理不可用", result.detail)
 
     def test_ech_transport_forwards_config_and_ips(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         seen = {}
 
@@ -1982,83 +1992,88 @@ class EchEnvCheckTestCase(unittest.TestCase):
             seen["url"], "https://app-api.pixiv.net/v1/illust/detail?illust_id=1"
         )
 
-    def test_run_checks_with_ech_replaces_network_probe(self):
-        with patch("pixiv_bridge.envcheck.network") as fake_network, patch(
-            "pixiv_bridge.envcheck.ech_transport"
+    def test_site_extra_checks_with_ech_replaces_network_probe(self):
+        from pixiv.envcheck import extra_checks
+
+        with patch("pixiv.envcheck.network") as fake_network, patch(
+            "pixiv.envcheck.ech_transport"
         ) as fake_ech:
             fake_ech.return_value = CheckResult("ech", True, "ok")
-            results = run_checks(
-                ech=True,
-                ech_config="c",
-                ech_ips="1.1.1.1",
-                api_base="https://x.example",
+            results = extra_checks(
+                PixivSettings(
+                    ech=True,
+                    ech_config="c",
+                    ech_ips="1.1.1.1",
+                    api_base="https://x.example",
+                )
             )
         fake_network.assert_not_called()
         fake_ech.assert_called_once_with("c", "1.1.1.1", "https://x.example")
-        self.assertEqual(
-            [r.name for r in results], ["python", "deps", "files", "ech"]
-        )
+        # 站点钩子只回自己的那几项；python/deps/files 由框架的 run_checks 负责。
+        self.assertEqual([r.name for r in results], ["ech"])
 
-    def test_run_checks_without_ech_unchanged(self):
-        with patch("pixiv_bridge.envcheck.network") as fake_network, patch(
-            "pixiv_bridge.envcheck.ech_transport"
+    def test_site_extra_checks_without_ech_probes_the_network(self):
+        from pixiv.envcheck import extra_checks
+
+        with patch("pixiv.envcheck.network") as fake_network, patch(
+            "pixiv.envcheck.ech_transport"
         ) as fake_ech:
             fake_network.return_value = CheckResult("network", True, "ok")
-            results = run_checks(
-                api_ips="1.1.1.1", oauth_ips="2.2.2.2", image_ips="3.3.3.3"
+            results = extra_checks(
+                PixivSettings(
+                    api_ips="1.1.1.1", oauth_ips="2.2.2.2", image_ips="3.3.3.3"
+                )
             )
         fake_ech.assert_not_called()
         fake_network.assert_called_once_with("1.1.1.1", "2.2.2.2", "3.3.3.3")
-        self.assertEqual(
-            [r.name for r in results], ["python", "deps", "files", "network"]
-        )
+        self.assertEqual([r.name for r in results], ["network"])
 
 
 class RefreshHintTestCase(unittest.TestCase):
     """--check 刷新失败时要说清是本地链路问题还是服务端问题。"""
 
     def test_dns_failure_is_local(self):
-        from pixiv_bridge.cli import _refresh_hint
-        from pixiv_bridge.config import Settings
+        from pixiv.envcheck import _refresh_hint
+        from pixiv.config import PixivSettings
 
-        hint = _refresh_hint(Settings(), RuntimeError("[Errno 11001] getaddrinfo failed"))
+        hint = _refresh_hint(PixivSettings(), RuntimeError("[Errno 11001] getaddrinfo failed"))
         self.assertIn("本地 DNS", hint)
         self.assertIn("不是服务端问题", hint)
 
     def test_ech_reset_is_local(self):
-        from pixiv_bridge.cli import _refresh_hint
-        from pixiv_bridge.config import Settings
+        from pixiv.envcheck import _refresh_hint
+        from pixiv.config import PixivSettings
 
         hint = _refresh_hint(
-            Settings(), RuntimeError("ECH 握手失败（SSL_get_error=5）")
+            PixivSettings(), RuntimeError("ECH 握手失败（SSL_get_error=5）")
         )
         self.assertIn("本机到 Cloudflare", hint)
         self.assertIn("PIXIV_PROXY", hint)
 
     def test_timeout_is_local(self):
-        from pixiv_bridge.cli import _refresh_hint
-        from pixiv_bridge.config import Settings
+        from pixiv.envcheck import _refresh_hint
+        from pixiv.config import PixivSettings
 
-        hint = _refresh_hint(Settings(), httpx.ConnectTimeout("timed out"))
+        hint = _refresh_hint(PixivSettings(), httpx.ConnectTimeout("timed out"))
         self.assertIn("本地链路问题", hint)
 
     def test_upstream_status_is_server_side(self):
-        from pixiv_bridge.api import PixivApiError
-        from pixiv_bridge.cli import _refresh_hint
-        from pixiv_bridge.config import Settings
+        from pixiv.api import PixivApiError
+        from pixiv.envcheck import _refresh_hint
+        from pixiv.config import PixivSettings
 
-        hint = _refresh_hint(Settings(), PixivApiError("specified not found", status=404))
+        hint = _refresh_hint(PixivSettings(), PixivApiError("specified not found", status=404))
         self.assertIn("服务端问题", hint)
         self.assertIn("404", hint)
 
-        hint = _refresh_hint(Settings(), PixivApiError("invalid token", status=401))
+        hint = _refresh_hint(PixivSettings(), PixivApiError("invalid token", status=401))
         self.assertIn("账号/权限问题", hint)
 
     def test_unknown_error_has_no_hint(self):
-        from pixiv_bridge.cli import _refresh_hint
-        from pixiv_bridge.config import Settings
+        from pixiv.envcheck import _refresh_hint
+        from pixiv.config import PixivSettings
 
-        self.assertEqual(_refresh_hint(Settings(), RuntimeError("weird")), "")
+        self.assertEqual(_refresh_hint(PixivSettings(), RuntimeError("weird")), "")
 
 
 class QueryEncodingTestCase(unittest.TestCase):
@@ -2071,7 +2086,7 @@ class QueryEncodingTestCase(unittest.TestCase):
     """
 
     def _raw(self, **kwargs):
-        from pixiv_bridge.sni_client import _build_request
+        from pixiv.sni_client import _build_request
 
         return _build_request(**kwargs).decode("latin-1")
 
@@ -2185,7 +2200,7 @@ class NextUrlQueryForwardingTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_sni_transport_keeps_next_url_query(self):
-        from pixiv_bridge import sni_client
+        from pixiv import sni_client
 
         sink = []
 
@@ -2206,7 +2221,7 @@ class NextUrlQueryForwardingTestCase(unittest.IsolatedAsyncioTestCase):
 
     async def test_transport_merges_next_url_query_with_params(self):
         """显式 params 与 URL 里已有的查询串要能并存（用 & 连接，不能吃掉任一方）。"""
-        from pixiv_bridge import sni_client
+        from pixiv import sni_client
 
         sink = []
 
@@ -2234,7 +2249,7 @@ class EchNextUrlQueryTestCase(unittest.TestCase):
     """
 
     def test_ech_transport_keeps_next_url_query(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         sent = {}
 
@@ -2268,7 +2283,7 @@ class EchNextUrlQueryTestCase(unittest.TestCase):
                 {"Authorization": "Bearer x"},
                 5.0,
                 ["1.1.1.1"],
-                Settings(),
+                PixivSettings(),
             )
         request_line = sent["raw"].decode("latin-1").split("\r\n")[0]
         self.assertIn("offset=30", request_line)
@@ -2279,7 +2294,7 @@ class BundledOpenSslTestCase(unittest.TestCase):
     """项目自带的 OpenSSL（openssl-libs/）优先于系统安装，载入失败才回退。"""
 
     def test_bundle_root_is_sibling_of_package(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         self.assertEqual(
             ech_client.bundle_root(),
@@ -2288,7 +2303,7 @@ class BundledOpenSslTestCase(unittest.TestCase):
         self.assertEqual(ech_client.BUNDLE_DIR_NAME, "openssl-libs")
 
     def test_platform_tags_prefer_specific_then_generic(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         tags = ech_client._platform_tags()
         # 具体平台-架构 在最前，之后才是松松的兜底名；顺序即查找优先级。
@@ -2297,7 +2312,7 @@ class BundledOpenSslTestCase(unittest.TestCase):
         self.assertEqual(len(set(tags)), len(tags))
 
     def test_bundled_dir_precedes_system_dirs(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with patch.dict(os.environ, {"PIXIV_BRIDGE_OPENSSL_DIR": ""}):
             dirs = ech_client._candidate_dirs()
@@ -2315,7 +2330,7 @@ class BundledOpenSslTestCase(unittest.TestCase):
                 self.assertLess(first_bundled, dirs.index(marker))
 
     def test_explicit_env_dir_still_wins(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with patch.dict(os.environ, {"PIXIV_BRIDGE_OPENSSL_DIR": str(PROJECT_ROOT)}):
             dirs = ech_client._candidate_dirs()
@@ -2325,7 +2340,7 @@ class BundledOpenSslTestCase(unittest.TestCase):
 
     def test_library_pairs_yields_every_candidate(self):
         """候选是逐个产出的，不是只认第一个——载入失败才有下一个可试。"""
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         dirs = [Path("/dir-a"), Path("/dir-b")]
         with patch.object(ech_client, "_candidate_dirs", return_value=dirs), patch.object(
@@ -2336,7 +2351,7 @@ class BundledOpenSslTestCase(unittest.TestCase):
         self.assertEqual([ssl.parent for _, ssl in pairs], dirs)
 
     def test_library_pairs_skips_dirs_without_libcrypto(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with patch.object(
             ech_client, "_candidate_dirs", return_value=[Path("/empty")]
@@ -2344,7 +2359,7 @@ class BundledOpenSslTestCase(unittest.TestCase):
             self.assertEqual(list(ech_client._library_pairs()), [])
 
     def test_find_pair_error_points_at_bundle_dir(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with patch.object(ech_client, "_library_pairs", lambda: iter(())), patch.object(
             ech_client, "_candidate_dirs", return_value=[]
@@ -2356,7 +2371,7 @@ class BundledOpenSslTestCase(unittest.TestCase):
 
     def test_lib_falls_through_and_reports_reasons(self):
         """内置库载入失败 → 用系统那份；两份都不行时错误里带上失败原因。"""
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         class FakeLib:
             def __init__(self, crypto_path, ssl_path):
@@ -2394,7 +2409,7 @@ class BundledOpenSslTestCase(unittest.TestCase):
 
     def test_repo_bundle_layout_if_present(self):
         """仓库里若带了内置库，目录布局必须符合约定，且能真的载入。"""
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         bundle = ech_client.bundle_root()
         if not bundle.is_dir():
@@ -2432,7 +2447,7 @@ class BundledAndroidBundleTestCase(unittest.TestCase):
     EM_AARCH64 = 183
 
     def _bundle_dir(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         directory = ech_client.bundle_root() / self.ANDROID_TAG
         if not directory.is_dir():
@@ -2521,7 +2536,7 @@ class BundledAndroidBundleTestCase(unittest.TestCase):
         self.assertIn("SSL_ech_set1_server_names", names)
 
     def test_android_soname_matches_lookup_names(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         directory = self._bundle_dir()
         _, _, dynamic = self._elf(directory / "libssl.so")
@@ -2540,7 +2555,7 @@ class PlatformDirsTestCase(unittest.TestCase):
     """别的系统也要能找到系统 OpenSSL，不能只按 x86_64 Linux 写死。"""
 
     def _dirs_for(self, platform_str, machine, prefix=None, env=None):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         real_sp = sys.platform
         real_machine = platform.machine
@@ -2575,7 +2590,7 @@ class PlatformDirsTestCase(unittest.TestCase):
         return " ".join(dirs).replace("\\", "/")
 
     def test_system_name_does_not_merge_bsd_into_linux(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         real = sys.platform
         try:
@@ -2593,7 +2608,7 @@ class PlatformDirsTestCase(unittest.TestCase):
             sys.platform = real
 
     def test_platform_tags_use_real_system_name(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         real = sys.platform
         real_machine = platform.machine
@@ -2645,7 +2660,7 @@ class TermuxTestCase(unittest.TestCase):
         return env
 
     def test_detects_termux_by_prefix(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with patch.dict(os.environ, {"PREFIX": self.TERMUX}, clear=False):
             os.environ.pop("TERMUX_VERSION", None)
@@ -2653,7 +2668,7 @@ class TermuxTestCase(unittest.TestCase):
             self.assertEqual(ech_client.termux_prefix(), self.TERMUX)
 
     def test_detects_termux_by_version_marker(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         env = dict(os.environ)
         env.pop("PREFIX", None)
@@ -2662,7 +2677,7 @@ class TermuxTestCase(unittest.TestCase):
             self.assertTrue(ech_client.is_termux())
 
     def test_not_termux_on_plain_linux(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         env = {"PATH": "/usr/bin:/bin", "PREFIX": "/usr"}
         with patch.dict(os.environ, env, clear=True):
@@ -2670,14 +2685,14 @@ class TermuxTestCase(unittest.TestCase):
             self.assertEqual(ech_client.termux_prefix(), "")
 
     def test_system_name_is_android_not_linux(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with patch.dict(os.environ, self._env(), clear=False):
             self.assertEqual(ech_client._system_name(), "android")
             self.assertIn("android", ech_client._platform_tags()[0])
 
     def test_bundle_tag_targets_android_dir(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         real_machine = platform.machine
         platform.machine = lambda: "aarch64"  # Termux 上通常是 aarch64
@@ -2690,7 +2705,7 @@ class TermuxTestCase(unittest.TestCase):
         self.assertIn("android", tags)
 
     def test_looks_in_termux_prefix_lib(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with patch.dict(os.environ, self._env(), clear=False):
             with patch.object(Path, "is_dir", lambda self: True):
@@ -2701,7 +2716,7 @@ class TermuxTestCase(unittest.TestCase):
         self.assertNotIn("linux-gnu", joined)
 
     def test_does_not_use_glibc_linux_dirs_on_termux(self):
-        from pixiv_bridge import ech_client
+        from pixiv import ech_client
 
         with patch.dict(os.environ, self._env(), clear=False):
             with patch.object(Path, "is_dir", lambda self: True):
@@ -2715,25 +2730,42 @@ class ProjectFilesTestCase(unittest.TestCase):
     """移植自检：运行必需的文件是否随项目文件夹一起拷全。"""
 
     def test_real_project_has_required_files(self):
-        result = project_files(PROJECT_ROOT)
+        result = project_files([PROJECT_ROOT])
         self.assertTrue(result.ok, result.detail)
         self.assertEqual(result.detail, "项目文件完整")
 
     def test_missing_files_are_reported(self):
-        result = project_files(PROJECT_ROOT / "pixiv_bridge")
+        # 拿站点目录当「项目根」：它没有框架的 requirements.txt，必然报缺。
+        result = project_files([(PROJECT_ROOT / "pixiv", ("run.py", "requirements.txt"))])
         self.assertFalse(result.ok)
-        for name in ("run.py", "requirements.txt"):
-            self.assertIn(name, result.detail)
+        self.assertIn("requirements.txt", result.detail)
+
+    def test_site_directory_has_its_entry_point(self):
+        # 每个接口项目的必需文件是它自己的 run.py —— 由站点的 SITE 声明。
+        for site in ("pixiv", "iwara"):
+            result = project_files([(PROJECT_ROOT / site, ("run.py",))])
+            self.assertTrue(result.ok, f"{site}: {result.detail}")
+
+    def test_multiple_directories_prefix_the_missing_name(self):
+        # 要查多个目录时，缺的文件名必须带目录名，否则看不出是谁缺。
+        result = project_files(
+            [
+                (PROJECT_ROOT / "pixiv", ("run.py",)),
+                (PROJECT_ROOT / "iwara", ("run.py", "nope.txt")),
+            ]
+        )
+        self.assertFalse(result.ok)
+        self.assertIn("iwara/nope.txt", result.detail)
 
     def test_run_checks_includes_files_check(self):
-        with patch("pixiv_bridge.envcheck.network") as fake_network:
-            fake_network.return_value = CheckResult("network", True, "ok")
-            results = run_checks(project_root=PROJECT_ROOT / "pixiv_bridge")
-        self.assertEqual(
-            [r.name for r in results], ["python", "deps", "files", "network"]
-        )
+        results = run_checks(files=((PROJECT_ROOT / "pixiv", ("run.py",)),))
+        self.assertEqual([r.name for r in results], ["python", "deps", "files"])
         files_result = next(r for r in results if r.name == "files")
-        self.assertFalse(files_result.ok)
+        self.assertTrue(files_result.ok, files_result.detail)
+
+    def test_run_checks_adds_the_port_check_only_when_asked(self):
+        results = run_checks(port=0, files=((PROJECT_ROOT / "pixiv", ("run.py",)),))
+        self.assertEqual([r.name for r in results], ["python", "deps", "files", "port"])
 
 
 class OfflineWheelTestCase(unittest.TestCase):
@@ -2814,11 +2846,18 @@ class PipBootstrapTestCase(unittest.TestCase):
         self.assertIn("pip download", str(ctx.exception))
 
     def test_entry_points_share_the_same_bootstrap(self):
-        """两个入口的自举都走 ``deps.bootstrap()``，不再各抄一遍 try/except。"""
-        for name in ("run.py", "pixiv_bridge/__main__.py"):
+        """两个站点入口的自举都走 ``deps.bootstrap()``，不再各抄一遍 try/except。"""
+        for name in ("pixiv/run.py", "iwara/run.py"):
             source = (PROJECT_ROOT / name).read_text(encoding="utf-8")
             with self.subTest(name=name):
-                self.assertIn("bootstrap()", source)
+                self.assertIn("bootstrap(", source)
+                self.assertNotIn("except RuntimeError", source)
+
+    def test_module_entry_dispatches_to_a_site_entry(self):
+        """``python -m pixiv_bridge <站点>`` 只负责找到并运行 ``<站点>/run.py``。"""
+        source = (PROJECT_ROOT / "pixiv_bridge/__main__.py").read_text(encoding="utf-8")
+        self.assertIn("runpy.run_path", source)
+        self.assertIn('"run.py"', source)
 
     def test_bootstrap_reports_failure_without_traceback(self):
         """``bootstrap()`` 抓到 RuntimeError 时只打一行 ``[deps]``，然后 exit(1)。"""
@@ -2887,9 +2926,9 @@ class BodyValidationTestCase(unittest.TestCase):
         self.assertEqual(resp.status_code, 422)
 
     def test_body_defaults(self):
-        from pixiv_bridge.routes.illust import BookmarkAddBody, CommentAddBody
-        from pixiv_bridge.routes.pixiv_novel import NovelBookmarkAddBody
-        from pixiv_bridge.routes.user import FollowAddBody
+        from pixiv.routes.illust import BookmarkAddBody, CommentAddBody
+        from pixiv.routes.pixiv_novel import NovelBookmarkAddBody
+        from pixiv.routes.user import FollowAddBody
 
         body = BookmarkAddBody(illust_id=1)
         self.assertEqual(body.restrict, "public")
@@ -3953,7 +3992,7 @@ class LocalLibraryTestCase(unittest.TestCase):
 
 
 class SettingsDataDirTestCase(unittest.TestCase):
-    """Settings 新默认值：个人数据都在 data/ 下；load(migrate=True) 自动搬旧数据。"""
+    """PixivSettings 新默认值：个人数据都在 data/ 下；load(migrate=True) 自动搬旧数据。"""
 
     def setUp(self):
         self.root = make_temp_dir("settings_root")
@@ -3961,7 +4000,7 @@ class SettingsDataDirTestCase(unittest.TestCase):
 
     def test_defaults_land_under_data_dir(self):
         with patch.dict(os.environ, {}, clear=True):
-            settings = Settings.load(str(self.root), migrate=False)
+            settings = PixivSettings.load(str(self.root), migrate=False)
         self.assertEqual(settings.project_root, self.root)
         self.assertEqual(settings.data_dir, self.root / "data")
         self.assertEqual(settings.token_file, self.root / "data" / "tokens.json")
@@ -3976,7 +4015,7 @@ class SettingsDataDirTestCase(unittest.TestCase):
         self.addCleanup(drop_temp_dir, outside)
         (outside / "tokens.json").write_text('{"refresh_token":"rt"}', encoding="utf-8")
         with patch.dict(os.environ, {"PIXIV_DATA_DIR": str(outside)}, clear=True):
-            settings = Settings.load(str(self.root), migrate=True)
+            settings = PixivSettings.load(str(self.root), migrate=True)
         # 路径全部落回项目里的 data/
         self.assertEqual(settings.data_dir, self.root / "data")
         self.assertEqual(settings.token_file, self.root / "data" / "tokens.json")
@@ -4001,7 +4040,7 @@ class SettingsDataDirTestCase(unittest.TestCase):
         cfg.write_text('{"scan_depth": 2}', encoding="utf-8")
         env = {"PIXIV_CONFIG_FILE": str(cfg)}
         with patch.dict(os.environ, env, clear=True):
-            settings = Settings.load(str(self.root), migrate=False)
+            settings = PixivSettings.load(str(self.root), migrate=False)
         # 配置文件必须写在项目里（否则项目外写不动时又变成 500）
         self.assertEqual(settings.config_file, self.root / "data" / "settings.json")
         self.assertTrue(cfg.exists())          # migrate=False 不搬文件
@@ -4009,7 +4048,7 @@ class SettingsDataDirTestCase(unittest.TestCase):
 
     def test_relative_data_dir_inside_project_is_kept(self):
         with patch.dict(os.environ, {"PIXIV_DATA_DIR": "mydata"}, clear=True):
-            settings = Settings.load(str(self.root), migrate=False)
+            settings = PixivSettings.load(str(self.root), migrate=False)
         self.assertEqual(settings.data_dir, self.root / "mydata")
         self.assertEqual(settings.token_file, self.root / "mydata" / "tokens.json")
         self.assertEqual(settings.warnings, ())
@@ -4018,7 +4057,7 @@ class SettingsDataDirTestCase(unittest.TestCase):
         (self.root / "tokens.json").write_text('{"refresh_token":"rt"}', encoding="utf-8")
         (self.root / "history.jsonl").write_text('{"id":1}\n', encoding="utf-8")
         with patch.dict(os.environ, {}, clear=True):
-            settings = Settings.load(str(self.root), migrate=True)
+            settings = PixivSettings.load(str(self.root), migrate=True)
         self.assertEqual(settings.migrated_files, ("tokens.json", "history.jsonl"))
         self.assertFalse((self.root / "tokens.json").exists())
         self.assertFalse((self.root / "history.jsonl").exists())
@@ -4029,7 +4068,7 @@ class SettingsDataDirTestCase(unittest.TestCase):
     def test_migrate_false_leaves_legacy_files_alone(self):
         (self.root / "tokens.json").write_text("t", encoding="utf-8")
         with patch.dict(os.environ, {}, clear=True):
-            settings = Settings.load(str(self.root), migrate=False)
+            settings = PixivSettings.load(str(self.root), migrate=False)
         self.assertEqual(settings.migrated_files, ())
         self.assertTrue((self.root / "tokens.json").exists())
         self.assertFalse((self.root / "data" / "tokens.json").exists())
@@ -4410,21 +4449,21 @@ class ExtensionSpecsTestCase(unittest.TestCase):
         self.assertEqual(parse_extension_specs(None), [])
 
     def test_settings_default_is_empty(self):
-        # 默认构造与 Settings.load 在没配 PIXIV_BRIDGE_EXTENSIONS 时都得是空元组，
+        # 默认构造与 PixivSettings.load 在没配 PIXIV_BRIDGE_EXTENSIONS 时都得是空元组，
         # 否则「默认只跑纯接口」这条约定会被破坏。
-        self.assertEqual(Settings().extensions, ())
-        self.assertIsInstance(Settings().extensions, tuple)
+        self.assertEqual(PixivSettings().extensions, ())
+        self.assertIsInstance(PixivSettings().extensions, tuple)
 
     def test_settings_load_reads_the_env_var(self):
         with patch.dict(
             os.environ, {"PIXIV_BRIDGE_EXTENSIONS": "novel, extra"}, clear=False
         ):
-            settings = Settings.load(str(PROJECT_ROOT))
+            settings = PixivSettings.load(str(PROJECT_ROOT))
         self.assertEqual(settings.extensions, ("novel", "extra"))
 
     def test_blank_env_var_gives_empty_tuple(self):
         with patch.dict(os.environ, {"PIXIV_BRIDGE_EXTENSIONS": ""}, clear=False):
-            settings = Settings.load(str(PROJECT_ROOT))
+            settings = PixivSettings.load(str(PROJECT_ROOT))
         self.assertEqual(settings.extensions, ())
 
 
@@ -4521,7 +4560,7 @@ class ExtensionLoadingTestCase(unittest.TestCase):
         self.assertEqual(len(extensions), 1)
 
     def test_load_extensions_reads_settings(self):
-        settings = Settings(project_root=PROJECT_ROOT, extensions=("novel",))
+        settings = PixivSettings(project_root=PROJECT_ROOT, extensions=("novel",))
         extensions = load_extensions(settings)
         self.assertEqual([ext.name for ext in extensions], ["novel"])
 
@@ -4675,10 +4714,16 @@ class ExtensionMountTestCase(unittest.TestCase):
 class ExtensionLayoutTestCase(unittest.TestCase):
     """出入口整理：接口项目各留一个入口，阅读项目改由扩展机制启用。"""
 
-    def test_two_api_entry_points_still_exist(self):
-        for name in ("run.py", "iwara/run.py"):
+    def test_two_api_entry_points_are_peers(self):
+        # 两个接口项目同级：各自 <站点>/run.py，根目录不再有 run.py。
+        for name in ("pixiv/run.py", "iwara/run.py"):
             with self.subTest(name=name):
                 self.assertTrue((PROJECT_ROOT / name).is_file(), name)
+        self.assertFalse((PROJECT_ROOT / "run.py").exists())
+        # 框架包里不许混进任何站点知识。
+        for name in ("pixiv", "iwara", "novel", "iwara_web"):
+            with self.subTest(framework=name):
+                self.assertFalse((PROJECT_ROOT / "pixiv_bridge" / name).exists(), name)
 
     def test_extension_packages_have_no_dedicated_entry_point(self):
         for name in ("novel", "iwara_web"):
@@ -4822,7 +4867,7 @@ class NavigationPageTestCase(unittest.TestCase):
         with patch.dict(
             os.environ, {"PIXIV_BRIDGE_NAV_LINKS": "iwara=http://127.0.0.1:8766/"}, clear=False
         ):
-            settings = Settings.load(str(PROJECT_ROOT))
+            settings = PixivSettings.load(str(PROJECT_ROOT))
         self.assertEqual(settings.nav_links, "iwara=http://127.0.0.1:8766/")
 
     # ---- HTTP 层 ----
@@ -4932,11 +4977,11 @@ class CliCheckTestCase(unittest.IsolatedAsyncioTestCase):
         _fail_on(self._fatal_results(), skip=("port",))
 
     async def test_check_hints_get_token_when_no_refresh_token(self):
-        from pixiv_bridge.cli import MISSING_TOKEN_HINT, _check
+        from pixiv.envcheck import MISSING_TOKEN_HINT, _check
 
         directory = make_temp_dir("cli_notoken")
         self.addCleanup(drop_temp_dir, directory)
-        settings = Settings(refresh_token="", token_file=directory / "absent.json")
+        settings = PixivSettings(refresh_token="", token_file=directory / "absent.json")
 
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
@@ -4945,17 +4990,30 @@ class CliCheckTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, 1)
         text = buffer.getvalue()
         self.assertIn("未配置 refresh_token", text)
-        self.assertIn("python get_token.py", text)
+        self.assertIn("python pixiv/get_token.py", text)
         self.assertIn(MISSING_TOKEN_HINT.strip(), text)
 
-    def test_main_prints_extra_checks_in_the_same_table(self):
+    def _demo_site(self, checks):
+        """一个最小站点：只挂一个专属自检，应用工厂是空壳（uvicorn 被 mock）。"""
+        from pixiv_bridge.site import Site
+
+        return Site(
+            name="demo",
+            directory=PROJECT_ROOT / "pixiv",
+            title="演示站点",
+            create_app=lambda settings, extensions=(): None,
+            settings_class=PixivSettings,
+            checks=checks,
+        )
+
+    def test_main_calls_site_checks_in_the_same_table(self):
         from pixiv_bridge import cli
 
         seen = {}
 
         def extra(settings):
             seen["settings"] = settings
-            return [CheckResult("iwara 网络", False, "api.iwara.tv 不可达（测试）")]
+            return [CheckResult("站点网络", False, "不可达（测试）")]
 
         buffer = io.StringIO()
         with patch.object(cli, "ensure_dependencies"), patch.object(
@@ -4963,21 +5021,34 @@ class CliCheckTestCase(unittest.IsolatedAsyncioTestCase):
         ), patch.object(cli, "load_extensions", return_value=[]), patch.object(
             cli.uvicorn, "run"
         ) as uvicorn_run, contextlib.redirect_stdout(buffer):
-            cli.main([], extra_checks=extra)
+            cli.main([], site=self._demo_site(extra))
 
         text = buffer.getvalue()
-        # 与通用检查打在同一张 [环境检查] 表里，而且顺序排在它们后面。
+        # 站点自己的检查与通用检查打在同一张 [环境检查] 表里，顺序排在它们后面。
         self.assertIn("[环境检查]", text)
-        self.assertLess(text.index("python"), text.index("iwara 网络"))
-        self.assertIn("api.iwara.tv 不可达（测试）", text)
-        self.assertIsInstance(seen.get("settings"), Settings)
+        self.assertLess(text.index("python"), text.index("站点网络"))
+        self.assertIn("不可达（测试）", text)
+        # 站点用自己的 Settings 子类读配置，入口不认识任何站点字段。
+        self.assertIsInstance(seen.get("settings"), PixivSettings)
         uvicorn_run.assert_called_once()
 
-    def test_main_reports_extra_checks_failure_without_stopping(self):
+    def test_main_without_a_site_tells_the_user_where_to_start(self):
+        from pixiv_bridge import cli
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stderr(buffer), self.assertRaises(SystemExit) as ctx:
+            cli.main([])
+
+        # 框架本身不是服务：没有站点入口时退出码 2 并指出该用哪个入口。
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("pixiv/run.py", buffer.getvalue())
+        self.assertIn("iwara/run.py", buffer.getvalue())
+
+    def test_main_reports_site_checks_failure_without_stopping(self):
         from pixiv_bridge import cli
 
         def extra(settings):
-            return [CheckResult("iwara 依赖", False, "不可用")]
+            return [CheckResult("站点依赖", False, "不可用")]
 
         buffer = io.StringIO()
         with patch.object(cli, "ensure_dependencies"), patch.object(
@@ -4985,9 +5056,9 @@ class CliCheckTestCase(unittest.IsolatedAsyncioTestCase):
         ), patch.object(cli, "load_extensions", return_value=[]), patch.object(
             cli.uvicorn, "run"
         ) as uvicorn_run, contextlib.redirect_stdout(buffer):
-            cli.main([], extra_checks=extra)
+            cli.main([], site=self._demo_site(extra))
 
-        # 专属检查不在 FATAL_CHECKS 里：WARN 之后照样进 uvicorn.run。
+        # 站点专属检查不在 FATAL_CHECKS 里：WARN 之后照样进 uvicorn.run。
         self.assertIn("WARN", buffer.getvalue())
         uvicorn_run.assert_called_once()
 

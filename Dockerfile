@@ -4,7 +4,7 @@ FROM python:3.12-slim
 # SSL_set1_ech_config_list（ECH 是 OpenSSL 4.0 才加入的，3.x 全系都没有）。
 # 项目自带的 openssl-libs/ 目前是 win32-amd64 与 android-arm64，在 Linux 容器里
 # 用不了；容器内要用 ECH 模式，请把 Linux 版库放进 openssl-libs/linux-x86_64/
-# 再一起 COPY，或换用自带 OpenSSL 4.0+ 的基础镜像；否则用
+# （下面的 COPY . . 会一起带进镜像），或换用自带 OpenSSL 4.0+ 的基础镜像；否则用
 # PIXIV_BRIDGE_BYPASS_SNI=1 或挂 HTTPS_PROXY 走代理。
 # 详见 README「ECH 模式」「OpenSSL 4.0+」。
 
@@ -13,27 +13,24 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# iwara 子项目的额外依赖（curl_cffi）。镜像里默认跑纯接口（CMD 是 run.py），
-# 但既然 iwara/ 已 COPY 进来，就把它的依赖一并装好，容器里改跑
-# `python iwara/run.py` 即可用；不想要这几 MB 的可以删掉这两行。
-COPY iwara/requirements.txt iwara/requirements.txt
-RUN pip install --no-cache-dir -r iwara/requirements.txt
+# 整个项目一起进镜像：框架 pixiv_bridge/ 加上**镜像里实际有的**站点与扩展目录。
+# 所以这份 Dockerfile 在 pixiv-api / iwara-api 等分享包里都能直接构建 ——
+# 分享包里没有的目录（比如 iwara 包里的 pixiv/）不会被 COPY，也就不会报错。
+# 凭据与虚拟环境由 .dockerignore 排除。
+COPY . .
 
-COPY pixiv_bridge pixiv_bridge
-COPY novel novel
-COPY iwara iwara
-COPY iwara_web iwara_web
-COPY run.py .
-# 可选：容器里要用 ECH，把 Linux 版库放进 openssl-libs/linux-x86_64/ 后取消下面一行的注释。
-# （COPY 要求源路径存在，仓库目前只带 Windows 与 Android 版，所以默认注释掉，保证镜像能直接构建。）
-# COPY openssl-libs/linux-x86_64 openssl-libs/linux-x86_64
+# iwara 站点的额外依赖（curl_cffi，编译包）。它跟着进镜像时才装；没跟进来
+# 也不影响构建，真去跑 iwara 时 deps.py 会自己补装。
+RUN if [ -f iwara/requirements.txt ]; then \
+        pip install --no-cache-dir -r iwara/requirements.txt; \
+    fi
 
 EXPOSE 8765
 
-# 默认只跑纯接口。要在容器里带上小说阅读器，加一个环境变量即可 ——
-# 扩展目录已 COPY 进来，程序会去找 novel/extension.py：
+# 站点用一个入口脚本挑（与 start.sh 同一套逻辑：有 pixiv/ 就跑 pixiv，否则跑
+# iwara），所以同一份镜像换个包也能用；要显式指定就加环境变量：
+#   docker run -e BRIDGE_SITE=iwara ...
+# 挂扩展照旧（扩展目录已在镜像里，程序自己去找 <扩展>/extension.py）：
 #   docker run -e PIXIV_BRIDGE_EXTENSIONS=novel ...
-# iwara 是另一个独立接口项目，容器里改跑 `python iwara/run.py` 即可；
-# 要 iwara 的视频页面再加上扩展（它调 /api/iwara/*，所以必须跟 iwara 入口一起用）：
-#   docker run -e PIXIV_BRIDGE_EXTENSIONS=iwara_web python iwara/run.py
-CMD ["python", "run.py"]
+#   docker run -e PIXIV_BRIDGE_EXTENSIONS=iwara_web -e BRIDGE_SITE=iwara ...
+CMD ["sh", "start.sh"]
