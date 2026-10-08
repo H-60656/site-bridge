@@ -313,7 +313,7 @@ pixiv-bridge/
 │       ├── user.py     用户 / 关注
 │       ├── pixiv_novel.py  小说 / 追更（/api/novel/* 属于接口层，仍在主项目；名字里的 pixiv_ 是为了和 novel/ 阅读器区分）
 │       └── misc.py     健康检查 / 通用翻页 / 图片代理
-├── tests/              单元测试（402 项：305 主项目 + 97 iwara）
+├── tests/              单元测试（403 项：305 主项目 + 98 iwara）
 ├── openssl-libs/       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -580,7 +580,7 @@ iwara 是另一个站点，与 Pixiv 无关，由子项目 `iwara/` 挂载；用
 | GET | `/api/iwara/thumbnail/{video_id}?index=&original=` | 按视频 id 直接取缩略图，省得前端自己拼 `file.id` |
 | GET | `/api/iwara/image?url=` | 代转任意 iwara 图片地址（只允许 iwara CDN 主机） |
 | GET | `/api/iwara/me` | 当前登录用户；未登录返回 401 |
-| GET | `/api/iwara/auth` | 只看登录态：`{configured, authenticated, anonymous, error, token_file}`。**不会**去打 `/user`（匿名时那返回 401，看着像报错），所以它永远 200 |
+| GET | `/api/iwara/auth` | 只看登录态：`{configured, authenticated, anonymous, error, token_file}`，登录成功后再补 `expires_at` 与 `username_hint`。**匿名时刻意不去打 `/user`**（那返回 401，看着像报错），所以它永远 200；一旦拿到 access token 就会问一次 `/user` —— 因为 token 的载荷里只有 `exp`/`id`/`role`，没有用户名 |
 
 > **登录是可选的**。iwara 的公开内容（含 R18）匿名就能看，登录只为「订阅作者的内容」和「自己账号下的私密视频」。想登录就跑一次 `python iwara/get_token.py`（邮箱 + 密码，没有浏览器授权那条路），token 存到项目里的 `data/iwara_tokens.json`，也可以用环境变量 `IWARA_REFRESH_TOKEN` 临时覆盖。**token 失效不会拖垮整站**：续期失败只记在 `auth_error` 里并退回匿名，`/api/iwara/videos` 之类的接口照常可用。
 
@@ -681,13 +681,13 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 - `GET /api/config` 多返回两个字段：`warnings`（上面那些提示）与 `writable`（真写一个探针文件判断数据目录能不能写，`{"ok": bool, "dir": "...", "reason": "..."}`），页面在保存前就能提示；
 - 跨文件系统的 `os.replace`（安卓 `/sdcard` 的 FUSE 就会这样，报 `EXDEV`）不再白等重试，直接退回「原地覆盖写」。
 
-还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，主项目的用例应全绿（iwara 的 97 项会跳过，见下）。
+还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，主项目的用例应全绿（iwara 的 98 项会跳过，见下）。
 > **安卓 / Termux**：请把项目放在 Termux 家目录里（例如 `~/pixiv-bridge`），不要把数据目录指到 `/sdcard` 下的路径。Termux 上依赖会自动换成纯 Python 的 `requirements-termux.txt`（见 INSTALL.md，pydantic 1.x 与 2.x 都支持），与这条路径限制无关。
 
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 或 python -m pytest tests -q，402 项应全绿
+python -m unittest discover -s tests       # 或 python -m pytest tests -q，403 项应全绿
 python scripts/check_boundary.py           # 拆分边界自检
 ```
 
@@ -700,7 +700,7 @@ python scripts/check_boundary.py           # 拆分边界自检
 
 改了 imports、挪了路由或动了入口脚本后跑一下它，比等到运行时才 404 省事。测试给 `novel` 那一层的用例统一走 helper（`tests/test_bridge.py`），因为三台账 / 配置 / 书架 / 阅读器页面现在都由子项目挂载，用主项目的 `create_app` 打这些路径会 404。
 
-`iwara` 的用例在 `tests/test_iwara.py`（97 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求（`--check` 那三项也是把 `IwaraClient` 整个换掉再断言）。换 token 那一层也不例外：把真正发请求的 `_call_with_ip_retry` 换成「按队列吐假响应」，就能让 `refresh_access()` 的请求形状（POST `/user/token`、空 body、refresh token 放 `authorization` 头）和 `request()` 收到 403 后的那次强制重放真实跑一遍，不需要账号。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 97 项会**整片跳过**（显示 `OK (skipped=97)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
+`iwara` 的用例在 `tests/test_iwara.py`（98 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求（`--check` 那三项也是把 `IwaraClient` 整个换掉再断言）。换 token 那一层也不例外：把真正发请求的 `_call_with_ip_retry` 换成「按队列吐假响应」，就能让 `refresh_access()` 的请求形状（POST `/user/token`、空 body、refresh token 放 `authorization` 头）和 `request()` 收到 403 后的那次强制重放真实跑一遍，不需要账号。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 98 项会**整片跳过**（显示 `OK (skipped=98)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
 
 ## 打包与移植（换机 / 离线部署）
 

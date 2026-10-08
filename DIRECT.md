@@ -194,7 +194,7 @@ else:                   # 普通路径
 - **子项目隔离，单向依赖。** `pixiv_bridge/` 永远不认识 `novel/` 和 `iwara/`；子项目只能 `import pixiv_bridge.*`。`scripts/check_boundary.py` 用 AST + 子进程探路由来强制这条边界。
 - **重依赖不进根清单。** `curl_cffi` 是编译包，只有 iwara 需要，所以写在 `iwara/requirements.txt` 里，由 `pixiv_bridge/deps.py` 的通用 `ensure_packages(names, requirements)` 按需安装。只跑 Pixiv 的用户完全不必碰它。
 - **可选能力要有回退，且失败要安静。** 登录态失效不该让整站不可用 —— iwara 的 `_prepare_auth`（`iwara/client.py:465-485`）换不出 access token 时只把原因记进 `auth_error` 并退回匿名，因为「iwara 的绝大部分内容匿名就能看，为了一个失效的 token 让整站不可用是本末倒置」。
-- **能力自检要暴露给用户。** `/api/iwara/auth` 只报告登录态而不去打 `/user`（匿名时那返回 401，看着像报错），所以它永远 200。
+- **能力自检要暴露给用户。** `/api/iwara/auth` 匿名时刻意不去打 `/user`（那返回 401，看着像报错），所以它永远 200；只有真拿到 access token 才问一次 `/user` 填 `username_hint` —— 顺带一条教训：token 载荷里**没有**用户名字段（只有 `exp`/`id`/`role`），早期直接读载荷的 `username` 于是恒为 `None`，而当时的测试替身自己往载荷里塞了 `username`，正好把这个 bug 盖住了。
 
 ---
 

@@ -219,7 +219,11 @@ class _FakeIwaraClient:
 
     async def me(self):
         self.calls.append(("me",))
-        raise IwaraError("匿名访问", status=401, reason="auth_required")
+        # 匿名（没有 access token）时 /user 就是 401，和真实 API 一致；
+        # 认证成功后返回账号信息，好让 /auth 的 username_hint 有来源。
+        if not self.access_token:
+            raise IwaraError("匿名访问", status=401, reason="auth_required")
+        return {"user": {"username": "huanghe19512", "name": "huanghe"}}
 
     async def ensure_access_token(self):
         self.calls.append(("ensure_access_token",))
@@ -679,14 +683,22 @@ class IwaraAuthTestCase(unittest.TestCase):
         self.assertEqual(client.headers()["authorization"], "Bearer access-xyz")
 
 
-def _make_jwt(exp: int, username: str = "tester") -> str:
-    """造一个形状正确的 JWT（不验签，客户端也只 base64 解载荷）。"""
+def _make_jwt(exp: int, username: str | None = None) -> str:
+    """造一个形状正确的 JWT（不验签，客户端也只 base64 解载荷）。
+
+    **刻意默认不带 ``username``**：真实 access token 的载荷是
+    ``['exp','iat','id','iss','premium','role','type']``，没有用户名。以前这里
+    塞了 ``username``，正好把「从载荷取用户名」那个 bug 掩盖住了。
+    """
 
     def seg(payload: dict) -> str:
         raw = json.dumps(payload).encode("utf-8")
         return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
-    return f"{seg({'alg': 'HS256', 'typ': 'JWT'})}.{seg({'exp': exp, 'username': username})}.sig"
+    claims = {"exp": exp, "iat": exp - 3600, "id": "user-uuid", "iss": "iwara", "type": "access_token"}
+    if username is not None:  # 只有明确要求时才加，模拟不存在的场景
+        claims["username"] = username
+    return f"{seg({'alg': 'HS256', 'typ': 'JWT'})}.{seg(claims)}.sig"
 
 
 class _FakeResp:
@@ -1118,6 +1130,18 @@ class IwaraRouteTestCase(unittest.TestCase):
         self.assertTrue(body["authenticated"])
         self.assertFalse(body["anonymous"])
         self.assertIn(("ensure_access_token",), self.fake.calls)
+        # access token 的载荷里没有用户名，所以只能问一次 /user —— 这条路径必须
+        # 真的去问了，否则 username_hint 永远是 None（曾经就是这个 bug）。
+        self.assertIn(("me",), self.fake.calls)
+        self.assertEqual(body["username_hint"], "huanghe19512")
+
+    def test_auth_does_not_ask_for_the_user_while_anonymous(self):
+        client = self._client()
+        body = client.get("/api/iwara/auth").json()
+        self.assertTrue(body["anonymous"])
+        self.assertNotIn("username_hint", body)
+        # 匿名时 /user 会返回 401，看着像报错 —— 不许去打。
+        self.assertNotIn(("me",), self.fake.calls)
 
     def test_auth_surfaces_a_dead_token_without_500(self):
         client = self._client()

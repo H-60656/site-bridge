@@ -227,10 +227,12 @@ async def me(request: Request):
 
 @router.get("/auth")
 async def auth_status(request: Request):
-    """登录态诊断：只报「有没有配 token、能不能换出 access token」。
+    """登录态诊断：报「有没有配 token、能不能换出 access token、是哪个账号」。
 
-    不请求 ``/user``（匿名时那会返回 401，看起来像出错），而是直接看客户端
+    **匿名时刻意不请求 ``/user``**（那会返回 401，看起来像出错），只看客户端
     手里的 token 状态；``auth_error`` 非空说明 token 没救，已经退回匿名。
+    一旦认证成功就会问一次 ``/user``：access token 的载荷里没有用户名，想问出
+    「现在是谁」只有这条路（见下面的注释）。
     """
     client = get_client(request)
     configured = bool(client.refresh_token or client.access_token)
@@ -254,8 +256,21 @@ async def auth_status(request: Request):
     if result["authenticated"]:
         payload = jwt_payload(client.access_token or "")
         result["expires_at"] = payload.get("exp")
-        result["username_hint"] = payload.get("username")
+        # access token 的载荷只有 exp/iat/id/iss/premium/role/type —— **没有
+        # username**。想报出「现在是哪个账号」只能问一次 /user；此处已认证，
+        # 那次请求不会再看到 401。
+        result["username_hint"] = await _username_hint(client)
     return result
+
+
+async def _username_hint(client) -> str | None:
+    """认证成功后问一次 ``/user`` 拿用户名；失败就返回 None（不影响诊断）。"""
+    try:
+        info = await client.me()
+    except Exception:  # noqa: BLE001 - 只是锦上添花的字段
+        return None
+    user = (info or {}).get("user") or {}
+    return user.get("username") or user.get("name") or None
 
 
 def _token_path_hint(request: Request):
