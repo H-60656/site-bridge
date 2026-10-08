@@ -662,6 +662,14 @@ class IwaraClient:
     async def video(self, video_id: str) -> dict:
         return await self.get_json(f"/video/{video_id}")
 
+    async def related(self, video_id: str) -> dict:
+        """相关视频。返回的形状和 ``/videos`` 一样：``{count,limit,page,results}``。
+
+        每项都是完整的视频对象（含 ``file`` / ``user`` / ``tags``），所以详情页
+        可以直接拿它渲染卡片，也可以复用 ``decorate_video`` 补缩略图。
+        """
+        return await self.get_json(f"/video/{video_id}/related")
+
     async def resolve(self, video_id: str) -> Resolved:
         """把视频详情换成一组可直接播放的直链。
 

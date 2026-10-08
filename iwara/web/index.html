@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<title>iwara 视频</title>
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#fff; --text:#1d2129; --muted:#86909c; --line:#e5e6eb;
+  --primary:#f0563f; --primary-soft:#fff1ee; --danger:#e5484d; --shadow:0 2px 10px rgba(20,24,35,.08);
+  --r:14px; --toast-bg:rgba(29,33,41,.94); --toast-fg:#fff;
+}
+body.theme-dark{--bg:#16181d;--panel:#1f2229;--text:#dfe2e8;--muted:#8b93a1;--line:#2e323b;
+  --primary:#ff7a63;--primary-soft:#2a2124;--shadow:0 2px 10px rgba(0,0,0,.4);
+  --toast-bg:rgba(240,242,246,.95);--toast-fg:#16181d;}
+[hidden]{display:none!important}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--text);-webkit-text-size-adjust:100%;
+  font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+button{font:inherit;color:inherit;cursor:pointer;touch-action:manipulation}
+a{color:var(--primary)}
+img{max-width:100%;display:block}
+html{-webkit-tap-highlight-color:transparent}
+
+header{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:10px;
+  padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:8px;min-width:0}
+.logo{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;flex:0 0 auto;
+  background:var(--primary);color:#fff;font-size:15px;font-weight:700}
+.brand h1{margin:0;font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hdr-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.icon-btn{border:1px solid var(--line);background:transparent;border-radius:10px;padding:5px 10px;font-size:13px;color:var(--muted)}
+#auth-badge{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 9px;white-space:nowrap}
+#auth-badge.ok{color:var(--primary);border-color:var(--primary);background:var(--primary-soft)}
+
+main{max-width:1200px;margin:0 auto;padding:14px 14px 80px}
+
+.filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+input,select{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;padding:7px 10px;min-width:0}
+#q{flex:1 1 200px;min-width:140px}
+button.primary{background:var(--primary);border:1px solid var(--primary);color:#fff;border-radius:10px;padding:7px 16px}
+button.ghost{background:transparent;border:1px solid var(--line);border-radius:10px;padding:7px 14px}
+
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;
+  box-shadow:var(--shadow);cursor:pointer;display:flex;flex-direction:column;transition:transform .12s}
+.card:hover{transform:translateY(-2px)}
+.thumb{position:relative;aspect-ratio:16/9;background:#000;overflow:hidden}
+.thumb img{width:100%;height:100%;object-fit:cover}
+.badge{position:absolute;left:8px;top:8px;font-size:11px;padding:2px 7px;border-radius:999px;
+  background:rgba(0,0,0,.66);color:#fff;letter-spacing:.02em}
+.badge.ecchi{background:rgba(224,72,48,.86)}
+.dur{position:absolute;right:8px;bottom:8px;font-size:11px;padding:2px 6px;border-radius:6px;
+  background:rgba(0,0,0,.66);color:#fff}
+.card-body{padding:9px 11px 11px;display:flex;flex-direction:column;gap:5px}
+.card-title{font-size:14px;font-weight:600;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;
+  -webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+.card-meta{font-size:12px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}
+.card-user{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+#more-wrap{display:flex;justify-content:center;margin:20px 0 0}
+.status{text-align:center;color:var(--muted);padding:26px 10px}
+.status.err{color:var(--danger)}
+
+/* ---------- 详情页 ---------- */
+#detail{max-width:1000px;margin:0 auto}
+.back{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:6px 13px;margin-bottom:12px;color:var(--muted)}
+.player-wrap{background:#000;border-radius:var(--r);overflow:hidden;position:relative;aspect-ratio:16/9}
+.player-wrap video{width:100%;height:100%;display:block;background:#000}
+.player-note{position:absolute;inset:0;display:grid;place-items:center;color:#fff;font-size:14px;
+  background:rgba(0,0,0,.72);text-align:center;padding:20px;gap:8px}
+.player-note .sp{width:22px;height:22px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;
+  border-radius:50%;animation:spin .8s linear infinite;margin:0 auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+h2.v-title{margin:14px 0 6px;font-size:19px;line-height:1.4;word-break:break-word}
+.v-meta{display:flex;flex-wrap:wrap;gap:8px 16px;color:var(--muted);font-size:13px;margin-bottom:10px}
+.v-meta b{color:var(--text);font-weight:600}
+.v-user{display:flex;align-items:center;gap:8px;margin:10px 0;font-size:14px}
+.avatar{width:30px;height:30px;border-radius:50%;object-fit:cover;background:var(--line);flex:0 0 auto}
+.tags{display:flex;flex-wrap:wrap;gap:7px;margin:10px 0}
+.tag-button{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:3px 11px;font-size:12.5px;color:var(--muted)}
+.tag-button:hover{border-color:var(--primary);color:var(--primary)}
+.body-text{white-space:pre-wrap;word-break:break-word;color:var(--muted);font-size:13.5px;margin:10px 0;
+  border-left:3px solid var(--line);padding-left:10px}
+.sources{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0}
+.sources .lbl{font-size:13px;color:var(--muted)}
+#quality{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:6px 10px}
+.hint{font-size:12.5px;color:var(--muted)}
+.hint.err{color:var(--danger)}
+h3.sec{margin:26px 0 12px;font-size:16px}
+.toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--toast-bg);
+  color:var(--toast-fg);padding:9px 18px;border-radius:999px;font-size:13.5px;z-index:100;
+  opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo">i</div>
+    <h1>iwara 视频</h1>
+  </div>
+  <div class="hdr-right">
+    <span id="auth-badge">…</span>
+    <button class="icon-btn" id="theme-btn" title="切换主题">主题</button>
+  </div>
+</header>
+
+<main>
+  <!-- 列表视图 -->
+  <section id="browse">
+    <div class="filters">
+      <input id="q" type="search" placeholder="搜标题 / 标签…" autocomplete="off" />
+      <select id="sort">
+        <option value="date">最新</option>
+        <option value="trending">热门</option>
+        <option value="popularity">人气</option>
+        <option value="views">播放</option>
+        <option value="likes">点赞</option>
+      </select>
+      <select id="rating">
+        <option value="all">全部</option>
+        <option value="general">一般</option>
+        <option value="ecchi">R18</option>
+      </select>
+      <button class="primary" id="go">搜索</button>
+      <button class="ghost" id="reset">重置</button>
+      <span class="hint" id="browse-count"></span>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div id="browse-status" class="status">加载中…</div>
+    <div id="more-wrap" hidden><button class="ghost" id="more">加载更多</button></div>
+  </section>
+
+  <!-- 详情视图 -->
+  <section id="detail" hidden>
+    <button class="back" id="back">← 返回列表</button>
+    <div class="player-wrap">
+      <video id="player" controls playsinline preload="metadata"></video>
+      <div class="player-note" id="player-note"><div><div class="sp"></div>正在解析可播放直链…</div></div>
+    </div>
+    <h2 class="v-title" id="d-title"></h2>
+    <div class="v-meta" id="d-meta"></div>
+    <div class="sources">
+      <span class="lbl">清晰度</span>
+      <select id="quality"></select>
+      <span class="hint" id="quality-hint"></span>
+    </div>
+    <div class="v-user" id="d-user"></div>
+    <div class="tags" id="d-tags"></div>
+    <div class="body-text" id="d-body"></div>
+    <h3 class="sec">相关视频</h3>
+    <div class="grid" id="related"></div>
+    <div id="related-status" class="status"></div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const API = "/api/iwara";
+const $ = (id) => document.getElementById(id);
+
+let theme = localStorage.getItem("iwara-theme") || "light";
+document.body.className = theme === "dark" ? "theme-dark" : "";
+
+/* ---------------- 通用 ---------------- */
+let toastTimer = null;
+function toast(msg) {
+  const el = $("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
+async function api(path, params) {
+  const url = new URL(API + path, location.origin);
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
+  }
+  const resp = await fetch(url, { headers: { accept: "application/json" } });
+  const text = await resp.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+  if (!resp.ok) {
+    const detail = data && (data.detail || (data.error && data.error.message));
+    throw new Error(typeof detail === "string" ? detail : `HTTP ${resp.status}`);
+  }
+  return data;
+}
+
+function esc(value) {
+  return String(value == null ? "" : value).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function duration(sec) {
+  if (!sec && sec !== 0) return "";
+  const s = Math.max(0, Math.round(Number(sec)));
+  const m = Math.floor(s / 60), h = Math.floor(m / 60);
+  const mm = String(m % 60).padStart(2, "0"), ss = String(s % 60).padStart(2, "0");
+  return (h ? h + ":" + String(m % 60).padStart(2, "0") : String(m)) + ":" + ss;
+}
+
+function sizeText(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return n + " B";
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v >= 10 ? 0 : 1) + " " + units[i];
+}
+
+function dateText(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  return d.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
+}
+
+/* 缩略图走服务端代转：浏览器解析不了 files.iwara.tv */
+function thumbSrc(video, big) {
+  if (!video || !video.thumbnailUrl) return "";
+  return API + "/image?url=" + encodeURIComponent(big ? (video.posterUrl || video.thumbnailUrl) : video.thumbnailUrl);
+}
+
+function cardHtml(video) {
+  const rating = video.rating === "ecchi"
+    ? '<span class="badge ecchi">R18</span>'
+    : (video.rating ? `<span class="badge">${esc(video.rating)}</span>` : "");
+  const dur = video.file && video.file.duration ? `<span class="dur">${duration(video.file.duration)}</span>` : "";
+  const user = video.user ? (video.user.name || video.user.username || "") : "";
+  return `<article class="card" data-id="${esc(video.id)}">
+    <div class="thumb">${rating}${dur}<img loading="lazy" alt="" src="${esc(thumbSrc(video))}" /></div>
+    <div class="card-body">
+      <div class="card-title">${esc(video.title || "(无标题)")}</div>
+      <div class="card-user">${esc(user)}</div>
+      <div class="card-meta"><span>♥ ${Number(video.numLikes || 0)}</span><span>▶ ${Number(video.numViews || 0)}</span></div>
+    </div>
+  </article>`;
+}
+
+/* ---------------- 列表 ---------------- */
+const state = { mode: "browse", query: "", sort: "date", rating: "all", page: 0, items: [], loading: false, done: false };
+const LIMIT = 20;
+
+function currentListView() {
+  return state.mode === "search" ? "/search" : "/videos";
+}
+
+function currentListParams(page) {
+  if (state.mode === "search") return { query: state.query, page: page, limit: LIMIT };
+  return { sort: state.sort, rating: state.rating, page: page, limit: LIMIT };
+}
+
+async function loadPage(page) {
+  if (state.loading) return;
+  state.loading = true;
+  $("browse-status").hidden = false;
+  $("browse-status").className = "status";
+  $("browse-status").textContent = page === 0 ? "加载中…" : "加载更多…";
+  try {
+    const data = await api(currentListView(), currentListParams(page));
+    const results = (data && data.results) || [];
+    if (page === 0) { state.items = []; $("grid").innerHTML = ""; }
+    state.items = state.items.concat(results);
+    for (const item of results) $("grid").insertAdjacentHTML("beforeend", cardHtml(item));
+    state.page = page;
+    state.done = results.length < LIMIT;
+    $("browse-status").hidden = results.length > 0;
+    if (results.length === 0 && page === 0) {
+      $("browse-status").textContent = state.mode === "search" ? "没有匹配的视频。" : "这里暂时没有视频。";
+    }
+    $("more-wrap").hidden = state.done || results.length === 0;
+    const total = data && data.count;
+    $("browse-count").textContent = total != null ? `共 ${total} 个` : "";
+  } catch (err) {
+    $("browse-status").className = "status err";
+    $("browse-status").hidden = false;
+    $("browse-status").textContent = "加载失败：" + err.message;
+    $("more-wrap").hidden = true;
+  } finally {
+    state.loading = false;
+  }
+}
+
+function setListMode(mode, query) {
+  state.mode = mode;
+  state.query = query || "";
+  show("browse");
+  loadPage(0);
+}
+
+/* ---------------- 视图切换 ---------------- */
+function show(which, push) {
+  $("browse").hidden = which !== "browse";
+  $("detail").hidden = which !== "detail";
+  if (which === "browse") stopPlayer();
+  if (push !== false) {
+    const hash = which === "detail" ? state.currentId || "" : "";
+    if (location.hash.slice(1) !== hash) {
+      history.pushState(null, "", hash ? "#" + hash : location.pathname + location.search);
+    }
+  }
+}
+
+/* ---------------- 详情 / 播放 ---------------- */
+let hls = null; // 预留：目前 iwara 只有 mp4
+
+function stopPlayer() {
+  const player = $("player");
+  player.pause();
+  player.removeAttribute("src");
+  player.load();
+}
+
+function playerNote(html) {
+  const note = $("player-note");
+  note.hidden = !html;
+  note.innerHTML = html || "";
+}
+
+async function openVideo(videoId, push) {
+  state.currentId = videoId;
+  show("detail", push);
+  $("d-title").textContent = "加载中…";
+  $("d-meta").innerHTML = "";
+  $("d-user").innerHTML = "";
+  $("d-tags").innerHTML = "";
+  $("d-body").hidden = true;
+  $("quality").innerHTML = "";
+  $("quality-hint").textContent = "";
+  $("related").innerHTML = "";
+  $("related-status").textContent = "加载相关视频…";
+  playerNote('<div><div class="sp"></div>正在解析可播放直链…</div>');
+  stopPlayer();
+  window.scrollTo({ top: 0 });
+
+  // 详情与相关视频并行
+  api("/video/" + encodeURIComponent(videoId)).then(renderDetail).catch((err) => {
+    $("d-title").textContent = "打不开这个视频：" + err.message;
+  });
+  api("/related/" + encodeURIComponent(videoId)).then((data) => {
+    const results = (data && data.results) || [];
+    $("related-status").textContent = results.length ? "" : "没有相关视频。";
+    for (const item of results) $("related").insertAdjacentHTML("beforeend", cardHtml(item));
+  }).catch((err) => {
+    $("related-status").className = "status err";
+    $("related-status").textContent = "相关视频加载失败：" + err.message;
+  });
+
+  resolveAndPlay(videoId);
+}
+
+function renderDetail(video) {
+  $("d-title").textContent = video.title || "(无标题)";
+  const file = video.file || {};
+  $("d-meta").innerHTML = [
+    `<span><b>${Number(video.numViews || 0)}</b> 播放</span>`,
+    `<span><b>${Number(video.numLikes || 0)}</b> 点赞</span>`,
+    `<span><b>${Number(video.numComments || 0)}</b> 评论</span>`,
+    file.width && file.height ? `<span><b>${file.width}×${file.height}</b></span>` : "",
+    file.duration ? `<span><b>${duration(file.duration)}</b></span>` : "",
+    file.size ? `<span><b>${sizeText(file.size)}</b></span>` : "",
+    dateText(video.createdAt) ? `<span>${esc(dateText(video.createdAt))}</span>` : "",
+  ].filter(Boolean).join("");
+
+  const user = video.user || {};
+  const uname = user.username || "";
+  $("d-user").innerHTML =
+    (thumbSrc(video) ? `<img class="avatar" alt="" src="${esc(thumbSrc(video))}" hidden />` : "") +
+    `<span>${esc(user.name || uname || "匿名")}</span>` +
+    (uname ? `<a href="https://www.iwara.tv/profile/${encodeURIComponent(uname)}" target="_blank" rel="noreferrer noopener" class="hint">@${esc(uname)}</a>` : "");
+
+  const tags = video.tags || [];
+  $("d-tags").innerHTML = tags.map((tag) => {
+    const name = typeof tag === "string" ? tag : (tag && tag.id) || "";
+    return name ? `<button class="tag-button" data-tag="${esc(name)}">${esc(name)}</button>` : "";
+  }).join("");
+
+  if (video.body && video.body.trim()) {
+    $("d-body").hidden = false;
+    $("d-body").textContent = video.body.trim();
+  }
+
+  const note = video.fileUrl === null && video.file === null
+    ? "这是个外站嵌入（YouTube 之类），iwara 没有直链，播不了。"
+    : "";
+  if (note) playerNote('<div>' + esc(note) + "</div>");
+}
+
+let sourceMap = new Map();
+
+async function resolveAndPlay(videoId) {
+  sourceMap = new Map();
+  let data;
+  try {
+    data = await api("/resolve/" + encodeURIComponent(videoId), { probe: "true" });
+  } catch (err) {
+    playerNote(`<div>解析直链失败：${esc(err.message)}</div>`);
+    $("quality-hint").textContent = "解析失败：" + err.message;
+    return;
+  }
+  const sources = data.sources || [];
+  for (const src of sources) sourceMap.set(src.name, src);
+  const chosen = data.chosen;
+  const order = preferredOrder(sources);
+  $("quality").innerHTML = order
+    .map((s) => `<option value="${esc(s.name)}">${esc(s.name)} · ${esc(s.mime || "video/mp4")}</option>`)
+    .join("");
+
+  if (chosen) {
+    $("quality").value = chosen.name;
+    $("quality-hint").textContent = `当前源通过探活（${chosen.host || ""}）`;
+    playSource(chosen.name);
+  } else {
+    $("quality-hint").textContent = data.probe_error ? "没有可用源：" + data.probe_error : "没有可用源。";
+    playerNote(`<div>没有探到可用的视频源。<br />${esc(data.probe_error || "")}</div>`);
+  }
+  // 已经预选中的源记下就够，切换时复用同一份 sources。
+}
+
+function preferredOrder(sources) {
+  const want = ["Source", "540", "360", "preview"];
+  const ranked = [];
+  for (const name of want) {
+    const found = sources.find((s) => s.name === name);
+    if (found) ranked.push(found);
+  }
+  for (const s of sources) if (!ranked.includes(s)) ranked.push(s);
+  return ranked;
+}
+
+function playSource(name) {
+  const src = sourceMap.get(name);
+  if (!src) { toast("没有这个清晰度"); return; }
+  const url = API + "/stream?url=" + encodeURIComponent(src.download);
+  const player = $("player");
+  playerNote(null);
+  player.src = url;
+  const p = player.play();
+  if (p && p.catch) {
+    // 自动播放被拦下不算错误，用户点一下播放键就行。
+    p.catch(() => {});
+  }
+}
+
+/* ---------------- 登录态 ---------------- */
+async function refreshAuth() {
+  const badge = $("auth-badge");
+  try {
+    const data = await api("/auth");
+    if (data.authenticated) {
+      badge.textContent = "已登录";
+      badge.className = "ok";
+    } else if (data.configured && data.error) {
+      badge.textContent = "登录失效";
+      badge.title = data.error;
+    } else {
+      badge.textContent = "匿名";
+      badge.className = "";
+    }
+    badge.title = data.error || (data.configured ? "已配 token" : "未配 token；公开内容（含 R18）匿名可看");
+  } catch (err) {
+    badge.textContent = "状态未知";
+  }
+}
+
+/* ---------------- 事件 ---------------- */
+function bind() {
+  $("go").addEventListener("click", () => {
+    const q = $("q").value.trim();
+    if (!q) { syncSelects(); setListMode("browse"); return; }
+    setListMode("search", q);
+  });
+  $("q").addEventListener("keydown", (ev) => { if (ev.key === "Enter") $("go").click(); });
+  $("reset").addEventListener("click", () => {
+    $("q").value = "";
+    $("sort").value = "date";
+    $("rating").value = "all";
+    syncSelects();
+    setListMode("browse");
+  });
+  $("sort").addEventListener("change", () => { state.sort = $("sort").value; if (state.mode !== "search") loadPage(0); });
+  $("rating").addEventListener("change", () => { state.rating = $("rating").value; if (state.mode !== "search") loadPage(0); });
+  $("more").addEventListener("click", () => loadPage(state.page + 1));
+
+  document.addEventListener("click", (ev) => {
+    const card = ev.target.closest(".card");
+    if (card) { openVideo(card.dataset.id); return; }
+    const tag = ev.target.closest(".tag-button");
+    if (tag) {
+      $("q").value = tag.dataset.tag;
+      setListMode("search", tag.dataset.tag);
+      return;
+    }
+  });
+
+  $("back").addEventListener("click", () => history.back());
+  $("quality").addEventListener("change", () => playSource($("quality").value));
+  $("theme-btn").addEventListener("click", () => {
+    theme = document.body.classList.contains("theme-dark") ? "light" : "dark";
+    document.body.className = theme === "dark" ? "theme-dark" : "";
+    localStorage.setItem("iwara-theme", theme);
+  });
+  window.addEventListener("popstate", route);
+}
+
+function syncSelects() {
+  state.sort = $("sort").value;
+  state.rating = $("rating").value;
+}
+
+function route() {
+  const id = location.hash.slice(1);
+  if (id) openVideo(id, false);
+  else show("browse", false);
+}
+
+(async function init() {
+  bind();
+  refreshAuth();
+  if (location.hash.length > 1) route();
+  else loadPage(0);
+})();
+</script>
+</body>
+</html>

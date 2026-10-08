@@ -121,6 +121,7 @@ class _FakeIwaraClient:
         self.calls = []
         self.closed = False
         self.probe_error = None
+        self.related_error = None
         # 登录态相关（/api/iwara/auth 会读这几个字段）。
         self.refresh_token = None
         self.access_token = None
@@ -138,6 +139,17 @@ class _FakeIwaraClient:
     async def video(self, video_id):
         self.calls.append(("video", video_id))
         return dict(VIDEO, id=video_id)
+
+    async def related(self, video_id):
+        self.calls.append(("related", video_id))
+        if self.related_error:
+            raise IwaraError(self.related_error, status=502)
+        return {
+            "count": 2,
+            "limit": 12,
+            "page": 0,
+            "results": [dict(VIDEO, id="related-1"), dict(VIDEO, id="related-2")],
+        }
 
     async def resolve(self, video_id):
         self.calls.append(("resolve", video_id))
@@ -696,6 +708,42 @@ class IwaraRouteTestCase(unittest.TestCase):
         self.assertEqual(body["id"], "b0pRCNfo8Igu3p")
         self.assertIn("/image/thumbnail/", body["thumbnailUrl"])
 
+    def test_related_returns_envelope_with_thumbnails(self):
+        client = self._client()
+        body = client.get("/api/iwara/related/b0pRCNfo8Igu3p").json()
+        self.assertEqual(body["count"], 2)
+        self.assertEqual([item["id"] for item in body["results"]], ["related-1", "related-2"])
+        self.assertIn("/image/thumbnail/", body["results"][0]["thumbnailUrl"])
+        self.assertEqual(self.fake.calls[0], ("related", "b0pRCNfo8Igu3p"))
+
+    def test_related_pages_locally(self):
+        # 上游 /related 不接受分页参数，固定给 12 条；分页在本地裁剪。
+        client = self._client()
+        first = client.get("/api/iwara/related/b0pRCNfo8Igu3p?limit=1").json()
+        self.assertEqual([item["id"] for item in first["results"]], ["related-1"])
+        second = client.get("/api/iwara/related/b0pRCNfo8Igu3p?page=1&limit=1").json()
+        self.assertEqual([item["id"] for item in second["results"]], ["related-2"])
+
+    def test_related_limit_is_bounded(self):
+        client = self._client()
+        self.assertEqual(client.get("/api/iwara/related/b0pRCNfo8Igu3p?limit=999").status_code, 422)
+        self.assertEqual(client.get("/api/iwara/related/b0pRCNfo8Igu3p?limit=0").status_code, 422)
+
+    def test_related_surfaces_upstream_failure_without_500(self):
+        client = self._client()
+        self.fake.related_error = "上游炸了"
+        response = client.get("/api/iwara/related/b0pRCNfo8Igu3p")
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"], "上游炸了")
+
+    def test_video_page_is_served(self):
+        client = self._client()
+        response = client.get("/iwara")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("text/html"))
+        # 页面靠绝对路径调接口，所以根地址挂在哪个路径都行。
+        self.assertIn('"/api/iwara"', response.text)
+
     def test_resolve_reports_chosen_source(self):
         client = self._client()
         body = client.get("/api/iwara/resolve/b0pRCNfo8Igu3p").json()
@@ -833,10 +881,11 @@ class IwaraRouteTestCase(unittest.TestCase):
 class IwaraEntryPointTestCase(unittest.TestCase):
     """入口与打包：路由集合、路由超集、依赖清单。"""
 
-    def test_iwara_routers_are_the_video_router(self):
+    def test_iwara_routers_cover_the_video_api_and_the_page(self):
         from iwara.app import IWARA_ROUTERS, IWARA_STATE_KEYS, iwara_state_factory
 
-        self.assertEqual(len(IWARA_ROUTERS), 1)
+        # 视频页面路由 + 视频接口路由。
+        self.assertEqual(len(IWARA_ROUTERS), 2)
         # nav_sections 是给主项目导航页（`/`）用的：iwara 不改路由，
         # 而是把自己的页面加进那一页（见 iwara/app.py 的 IWARA_NAV）。
         self.assertEqual(IWARA_STATE_KEYS, ("iwara_client", "nav_sections"))
@@ -844,6 +893,13 @@ class IwaraEntryPointTestCase(unittest.TestCase):
             sorted(iwara_state_factory(make_settings())),
             ["iwara_client", "nav_sections"],
         )
+
+    def test_iwara_nav_lists_the_video_page(self):
+        from iwara.app import IWARA_NAV
+        from iwara.routes.web import WEB_PATH
+
+        self.assertEqual(IWARA_NAV.items[0].path, WEB_PATH)
+        self.assertEqual(WEB_PATH, "/iwara")
 
     def test_iwara_adds_routes_to_the_pure_app(self):
         def paths(app):
@@ -868,12 +924,15 @@ class IwaraEntryPointTestCase(unittest.TestCase):
                 "/api/iwara/videos",
                 "/api/iwara/search",
                 "/api/iwara/video/{video_id}",
+                "/api/iwara/related/{video_id}",
                 "/api/iwara/resolve/{video_id}",
                 "/api/iwara/stream",
                 "/api/iwara/image",
                 "/api/iwara/thumbnail/{video_id}",
                 "/api/iwara/me",
                 "/api/iwara/auth",
+                # 视频页面；根地址 `/` 仍是主项目的导航页，所以不在差集里。
+                "/iwara",
             },
         )
 

@@ -66,6 +66,32 @@ async def video_detail(request: Request, video_id: str):
     return decorate_video(await get_client(request).video(video_id))
 
 
+@router.get("/related/{video_id}")
+async def related_videos(
+    request: Request,
+    video_id: str,
+    page: int = 0,
+    limit: int = Query(12, ge=1, le=50),
+):
+    """相关视频，形状同 ``/videos``（``{count,limit,page,results}``）。
+
+    多余的 ``page``/``limit`` 只用于本地裁剪：上游这个端点一次返回 12 条，
+    不接受分页参数。
+    """
+    try:
+        result = await get_client(request).related(video_id)
+    except IwaraError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+
+    result = _decorate_page(result)
+    results = result.get("results")
+    if page or limit != 12:
+        if isinstance(results, list):
+            start = page * limit
+            result["results"] = results[start : start + limit]
+    return result
+
+
 @router.get("/resolve/{video_id}")
 async def resolve(request: Request, video_id: str, probe: bool = True):
     """把视频换成可直接播放的直链。

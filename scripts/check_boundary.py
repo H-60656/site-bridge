@@ -45,12 +45,15 @@ EXPECTED_EXTRA = {
         "/api/iwara/auth",
         "/api/iwara/image",
         "/api/iwara/me",
+        "/api/iwara/related/{video_id}",
         "/api/iwara/resolve/{video_id}",
         "/api/iwara/search",
         "/api/iwara/stream",
         "/api/iwara/thumbnail/{video_id}",
         "/api/iwara/video/{video_id}",
         "/api/iwara/videos",
+        # 视频页面（本入口独有）；根地址 `/` 留给主项目的导航页。
+        "/iwara",
     },
     "novel": {
         "/api/bookmarks",

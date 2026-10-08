@@ -24,9 +24,9 @@ from pixiv_bridge.server import create_app as _create_bridge_app
 
 from . import tokens
 from .client import IwaraClient
-from .routes import videos
+from .routes import videos, web
 
-IWARA_ROUTERS = (videos.router,)
+IWARA_ROUTERS = (web.router, videos.router)
 
 IWARA_STATE_KEYS = ("iwara_client", "nav_sections")
 
@@ -35,12 +35,13 @@ IWARA_STATE_KEYS = ("iwara_client", "nav_sections")
 IWARA_NAV = NavSection(
     title="iwara 视频（本入口独有）",
     items=(
+        NavItem("视频页面", web.WEB_PATH, "浏览 / 搜索 / 播放，带详情页与相关视频"),
         NavItem("视频列表", "/api/iwara/videos", "trending / 最新，支持 rating 过滤"),
         NavItem("搜索", "/api/iwara/search?query=dance", "按关键词搜视频"),
         NavItem("解析直链", "/api/iwara/resolve/{video_id}?probe=true", "拿到可播放的 mp4 直链并探活"),
         NavItem("登录状态", "/api/iwara/auth", "是否配了 token；不配也能匿名看公开内容"),
     ),
-    note="这些是 JSON 接口，用浏览器打开即可查看返回内容；播放请走 /api/iwara/stream。",
+    note="视频页面是给人看的；其余是 JSON 接口，用浏览器打开即可查看返回内容。",
 )
 
 

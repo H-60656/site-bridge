@@ -18,7 +18,7 @@ Pixiv 官方 App API（`app-api.pixiv.net`）调用方式（请求签名、OAuth
 - **可选的小说阅读器**（子项目 `novel/`，在配置里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 启用）：浏览器打开 `http://127.0.0.1:8765/novel` 即可搜作品/搜作者、看榜单/推荐/关注/追更/收藏、进作者主页关注或取关、连续阅读、正文插图内联显示（多来源兜底取图）、导出 EPUB（一本书一个文件，含插图与目录；零依赖单文件页面，已做移动端适配，手机浏览器可用）。接口本体不需要它，不启用扩展时这个地址是 404
 - **阅读与下载都有账**：阅读历史（`data/history.jsonl`）、下载历史（`data/downloads.jsonl`，**按章节记**）、收藏台账（`data/bookmarks.jsonl`）都落在项目里；书架分「云端记录 / 下载记录 / 本地文件」三类，同名系列的章节可在书架里**一键合并导出**成一个 EPUB
 - **数据都在 `data/`**：token、阅读历史、下载记录、收藏台账、页面配置统一放在项目下的 `data/` 目录（老版本的 `tokens.json` / `history.jsonl` 首次启动自动搬过去），换机只需拷这一个目录
-- **可选的 iwara.tv 站点**（子项目 `iwara/`，用 `python iwara/run.py` 启动）：把 iwara 的视频浏览 / 搜索 / 详情 / 直链解析 / 缩略图并到同一套服务上（`/api/iwara/*`）。直链是带签名的 MP4，服务端还能代转字节并透传 `Range`，浏览器里能直接播。用 `run.py` 启动时这些地址是 404
+- **可选的 iwara.tv 站点**（子项目 `iwara/`，用 `python iwara/run.py` 启动）：把 iwara 的视频浏览 / 搜索 / 详情 / 直链解析 / 缩略图并到同一套服务上（`/api/iwara/*`），还自带一个**视频页面**（`http://127.0.0.1:8766/iwara`）：列表 / 搜索 / 筛选、点开详情看简介与标签、看相关视频、`<video>` 直接播（服务端代转字节并透传 `Range`，清晰度可切换）。直链是带签名的 MP4，浏览器里能直接播。用 `run.py` 启动时这些地址是 404
 - **OpenAPI 文档**：启动后访问 `http://127.0.0.1:8765/docs` 在线调试
 
 ## 原理
@@ -139,7 +139,7 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 | --- | --- |
 | `run.py` | 接口主项目（`pixiv_bridge`）：认证、插画、搜索、动态、用户、`/api/novel/*`、图片代理、健康检查，以及 `/` 上的**导航页** |
 | `run.py` + `PIXIV_BRIDGE_EXTENSIONS=novel` | 上面那些，再挂上小说阅读子项目（`novel`）：阅读器页面 `/novel` 与 `/api/history`、`/api/downloads`、`/api/bookmarks`、`/api/config`、`/api/library`（导航页上也会多出一段指向阅读器） |
-| `iwara/run.py` | 接口之上再挂 iwara 子项目（`iwara`）：`/api/iwara/videos`、`/api/iwara/search`、`/api/iwara/video/{id}`、`/api/iwara/resolve/{id}`、`/api/iwara/stream`、`/api/iwara/image`、`/api/iwara/thumbnail/{id}`、`/api/iwara/me`、`/api/iwara/auth` |
+| `iwara/run.py` | 接口之上再挂 iwara 子项目（`iwara`）：视频页面 `/iwara`，以及 `/api/iwara/videos`、`/api/iwara/search`、`/api/iwara/video/{id}`、`/api/iwara/related/{id}`、`/api/iwara/resolve/{id}`、`/api/iwara/stream`、`/api/iwara/image`、`/api/iwara/thumbnail/{id}`、`/api/iwara/me`、`/api/iwara/auth` |
 
 两个入口脚本共用同一套命令行（`--host` / `--port` / `--reload` / `--check` / `--env`）与环境检查。只要接口的话，拷 `pixiv_bridge/` 一个包即可；要阅读器就连 `novel/` 一起拷（并在配置里启用扩展），要 iwara 就连 `iwara/` 一起拷（子项目都通过 `import pixiv_bridge.*` 用主项目，主项目不认识它们）。
 
@@ -267,8 +267,9 @@ pixiv-bridge/
 │   ├── tokens.py        登录态落盘（data/iwara_tokens.json，与 pixiv 的 tokens.json 分开）
 │   ├── get_token.py     可选：交互式登录一次（邮箱 + 密码），解锁订阅内容
 │   ├── app.py          组装：把 IwaraClient 挂到 app.state，再挂本子项目路由
+│   ├── web/index.html  内置 Web 页面：视频浏览 / 搜索 / 播放（详情页 + 相关视频 + 清晰度切换），挂在 `/iwara` 上
 │   ├── requirements.txt 本子项目额外依赖（curl_cffi，刻意不放进根清单）
-│   └── routes/         本子项目的路由（videos）
+│   └── routes/         本子项目的路由（web 页面 / videos 接口）
 ├── data/                               你的全部个人数据（换机只拷这一个目录；可用 PIXIV_DATA_DIR 换位置）
 │   ├── tokens.json                     登录凭据（首次启动自动从项目根搬进来）
 │   ├── iwara_tokens.json               iwara 登录态（只有跑过 iwara/get_token.py 才有）
@@ -303,7 +304,7 @@ pixiv-bridge/
 │       ├── user.py     用户 / 关注
 │       ├── pixiv_novel.py  小说 / 追更（/api/novel/* 属于接口层，仍在主项目；名字里的 pixiv_ 是为了和 novel/ 阅读器区分）
 │       └── misc.py     健康检查 / 通用翻页 / 图片代理
-├── tests/              单元测试（369 项：300 主项目 + 69 iwara）
+├── tests/              单元测试（375 项：300 主项目 + 75 iwara）
 ├── openssl-libs/       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -560,9 +561,11 @@ iwara 是另一个站点，与 Pixiv 无关，由子项目 `iwara/` 挂载；用
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| GET | `/iwara` | **视频页面**（给人看的）：列表 / 搜索 / 筛选（排序、分级）、点开详情、`<video>` 走 `/api/iwara/stream` 代转播放、清晰度切换、相关视频、标签跳转、深浅色主题。`iwara/run.py` 的导航页（`/`）上也有入口 |
 | GET | `/api/iwara/videos?page=&limit=&sort=&rating=&tags=&user=` | 视频列表。`sort`: `date`/`trending`/`popularity`/`likes`/`views`；`rating`: `all`/`general`/`ecchi`（R18 不需要登录，显式传 `ecchi` 即可取到）；返回上游的 `{count,limit,page,results}`，并给每条补上 `thumbnailUrl` / `posterUrl` |
 | GET | `/api/iwara/search?query=&type=&page=&limit=` | 搜索，`type` 默认 `videos` |
 | GET | `/api/iwara/video/{video_id}` | 视频详情（同样补 `thumbnailUrl` / `posterUrl`） |
+| GET | `/api/iwara/related/{video_id}?page=&limit=` | 相关视频；形状同 `/videos`（同样补缩略图）。上游固定只给 12 条且不接受分页参数，`page`/`limit` 是本地裁剪 |
 | GET | `/api/iwara/resolve/{video_id}?probe=true` | 解析可播放的直链：返回各清晰度 `sources`，`probe=true` 时真发一次 Range 请求，把结果放在 `chosen`（`{name,mime,url,host,content_range,verified}`）。`salt_used` 说明用了哪版签名盐 |
 | GET | `/api/iwara/stream?url=` | 代转视频字节并透传 `Range`（原样转发客户端的 `Range` / `If-Range`，返回上游的 206 与 `Content-Range`）。只允许 iwara CDN 主机 |
 | GET | `/api/iwara/thumbnail/{video_id}?index=&original=` | 按视频 id 直接取缩略图，省得前端自己拼 `file.id` |
@@ -675,7 +678,7 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 或 python -m pytest tests -q，369 项应全绿
+python -m unittest discover -s tests       # 或 python -m pytest tests -q，375 项应全绿
 python scripts/check_boundary.py           # 拆分边界自检
 ```
 
@@ -684,11 +687,11 @@ python scripts/check_boundary.py           # 拆分边界自检
 1. `pixiv_bridge/` 里没有任何模块 `import novel` / `import iwara` —— 依赖是单向的，主项目不认识子项目；
 2. 各子项目只用主项目 `pixiv_bridge`，不依赖本仓库其它本地包；
 3. 出入口布局成立：`run.py` 与 `iwara/run.py` 两个接口入口都在，`novel/run.py` 这个专属入口**不存在**（阅读项目改由扩展机制启用），且 `novel/extension.py` 这个扩展入口存在；
-4. 各子项目的应用恰好比纯接口多出那几条子项目路由（`novel`：`/novel`、`/api/history`、`/api/downloads*`、`/api/bookmarks*`、`/api/config`、`/api/library*`；`iwara`：`/api/iwara/*`）。`novel` 那一侧是通过**扩展机制**建的：`create_app(settings, extensions=load_extension_specs(["novel"], root))`。路由差集里没有 `/`，因为导航页两版都有。
+4. 各子项目的应用恰好比纯接口多出那几条子项目路由（`novel`：`/novel`、`/api/history`、`/api/downloads*`、`/api/bookmarks*`、`/api/config`、`/api/library*`；`iwara`：`/iwara`、`/api/iwara/*`）。`novel` 那一侧是通过**扩展机制**建的：`create_app(settings, extensions=load_extension_specs(["novel"], root))`。路由差集里没有 `/`，因为导航页两版都有。
 
 改了 imports、挪了路由或动了入口脚本后跑一下它，比等到运行时才 404 省事。测试给 `novel` 那一层的用例统一走 helper（`tests/test_bridge.py`），因为三台账 / 配置 / 书架 / 阅读器页面现在都由子项目挂载，用主项目的 `create_app` 打这些路径会 404。
 
-`iwara` 的用例在 `tests/test_iwara.py`（69 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 69 项会**整片跳过**（显示 `OK (skipped=69)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
+`iwara` 的用例在 `tests/test_iwara.py`（75 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 75 项会**整片跳过**（显示 `OK (skipped=75)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
 
 ## 打包与移植（换机 / 离线部署）
 
@@ -700,7 +703,7 @@ python scripts/check_boundary.py           # 拆分边界自检
 | --- | --- | --- |
 | `pixiv_bridge/`、`run.py`、`requirements.txt`、`README.md` | **必须拷** | 接口本体（只要接口、不要阅读器时，拷这些就够） |
 | `novel/`（含 `novel/extension.py`）、`novel/web/index.html` | **要阅读器就必须拷** | 小说阅读子项目；漏拷时 `/novel` 直接 404、书架那几个接口不可用。拷过去后在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 启用 |
-| `iwara/`、`iwara/requirements.txt` | **要 iwara 就必须拷** | iwara 子项目；漏拷时 `/api/iwara/*` 全部 404。首次启动会自动补装 `curl_cffi` |
+| `iwara/`、`iwara/requirements.txt` | **要 iwara 就必须拷** | iwara 子项目（含视频页面 `iwara/web/index.html`）；漏拷时 `/iwara` 与 `/api/iwara/*` 全部 404。首次启动会自动补装 `curl_cffi` |
 | `start.bat`、`start.sh`、`get_token.py`、`INSTALL.md`、`DIRECT.md`、`requirements-termux.txt` | **建议拷** | 一键启动脚本、登录助手、傻瓜版说明、直连思路文档、Termux 专用依赖清单 |
 | `.env.example` | **必须拷** | 配置模板 |
 | `openssl-libs/` | **要 ECH 就必须拷** | 项目自带的 OpenSSL 4.x 动态库（`win32-amd64` + `android-arm64`，按 `平台-架构` 分子目录，约 16 MB）；拷过去即可用 ECH，无需在目标机器安装 OpenSSL。不用 ECH 时可以不拷 |

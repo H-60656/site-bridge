@@ -268,6 +268,7 @@ PIXIV_PROXY=http://127.0.0.1:7890
 - 网页（小说阅读器，**需在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel`**，在 `/novel`）：<http://127.0.0.1:8765/novel>；没启用扩展时这里是 404，属正常
 - 自带的交互式接口文档（各入口都有）：<http://127.0.0.1:8765/docs>
 - 健康检查：<http://127.0.0.1:8765/api/health>
+- iwara 视频页面（**需 `iwara/run.py` 入口**）：<http://127.0.0.1:8765/iwara>；用另一个入口时是 404，属正常
 - iwara 视频接口（**需 `iwara/run.py` 入口**）：<http://127.0.0.1:8765/api/iwara/videos>；用另一个入口时是 404，属正常
 - 给别的程序调用，例如：
 
@@ -297,13 +298,13 @@ PIXIV_PROXY=http://127.0.0.1:7890
 | 登录时报验证码/错误 | 改用 `get_token.py` 的「2) 浏览器授权」 |
 | 网页（小说阅读器）打不开 / `404` | 阅读器现在在 `/novel`，不在 `/`（`/` 是导航页，一定打得开）。没启用扩展时 `/novel` 返回 404 属正常，要阅读器就在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel`，然后**用原来的方式重启**（`start.bat` / `sh start.sh` / `python run.py`） |
 | 启动时打印 `[扩展] …找不到入口文件…` 后退出 | `.env` 里 `PIXIV_BRIDGE_EXTENSIONS` 写的目录名不对（相对路径按项目根算）。要小说阅读器就写 `novel`，并确认 `novel/extension.py` 确实拷过来了 |
-| `/api/iwara/...` 全部 404 | 用错入口了：iwara 接口只在 `python iwara\run.py` 下挂载，另一个入口没有 |
+| `/iwara` 或 `/api/iwara/...` 全部 404 | 用错入口了：iwara 视频页面与接口只在 `python iwara\run.py` 下挂载，另一个入口没有 |
 | iwara 入口报缺 `curl_cffi` | 依赖没装上。手动补一次：`pip install -r iwara/requirements.txt`（Termux 上若编不过，用 `pkg install python-cryptography` 之类先从 `pkg` 装好底层库再重试） |
 | iwara 接口返回 `cloudflare_challenge` | 站点把本机 IP 或 TLS 指纹拦了：换个网络/出口 IP 重试，或确认装的是真正的 `curl_cffi`（不要用别的 HTTP 库顶替） |
 | iwara 视频能解析出直链但播不动 | 该视频某个 CDN 花名主机（或种子 IP）在本机不通。`/api/iwara/resolve` 默认会逐个源探测并返回能用的那个（`chosen`）；`chosen` 为 `null` 时看 `probe_error` 里已尝试过哪些主机 |
 | iwara 全部接口都说「没有可用的候选地址」 | 内置的种子 IP（`iwara/client.py` 的 `SEED_HOSTS` / `SEED_IPS`）在这个网络里全不通，而 DoH 又只给了污染答案。换网络，或把实测可用的 iwara 边缘 IP 补进那张表 |
 | `files` 检查项提到缺 `web/index.html` | 已拆成两个项目：阅读器页面现在在 `novel/web/index.html`，接口项目的必需文件清单只剩 `run.py` / `requirements.txt` |
-| 网页打得开但列表空白 | 看启动窗口里的报错；多半是网络被阻断（见第 4 节） |
+| 网页打得开但列表空白 | 看启动窗口里的报错；多半是网络被阻断（见第 4 节）。iwara 视频页面（`/iwara`）列表空白时同理，另外它的封面图要走 `/api/iwara/image` 代转，连不上 iwara 图片主机时也会是空白 |
 | 设置里保存配置提示「写入失败」 | 先看提示里写的**文件路径和系统原因**：`data\settings.json` 被别的程序占着或带了只读属性（编辑器/同步盘/杀软）最常见，服务会自动摘只读位、重试、再退回直接覆盖写，一般会自动好；仍失败就关掉占用它的程序，或直接删掉该文件（会退回默认值）。**安卓上还要看数据目录是不是在项目外**：`PIXIV_DATA_DIR`/`PIXIV_*_FILE` 指到 `/sdcard/...` 会被自动收回项目里的 `data/`（启动日志和设置页会逐条提示）；项目本身也别放在 `/sdcard` 下，放到 Termux 家目录（`~/pixiv-bridge`）最稳 |
 | 保存配置报 `500`，提示里带 `AttributeError: … has no attribute 'model_dump'` | 用的是旧版代码（Termux 装的是 pydantic 1.x，没有 `model_dump`）。换成最新版的 `pixiv_bridge/`（里面有 `compat.py`，两个 pydantic 大版本都认）后重跑 `sh start.sh` |
 
