@@ -244,7 +244,7 @@ curl http://127.0.0.1:8765/api/auth/status
 
 ```
 pixiv-bridge/
-├── run.py / pixiv_bridge/__main__.py   接口入口（先自动装依赖，再启动；按配置挂扩展）
+├── run.py / pixiv_bridge/__main__.py   接口入口（两者等价：都走 deps.bootstrap 先自动装依赖，再启动；按配置挂扩展）
 ├── start.bat / start.sh                一键启动脚本（跑的就是 run.py）
 ├── get_token.py                        交互式获取 refresh_token（浏览器授权 / 账号密码）
 ├── requirements.txt                    依赖清单（Termux 自动改用 requirements-termux.txt）
@@ -277,7 +277,7 @@ pixiv-bridge/
 │   ├── downloads.jsonl                 下载历史（一行一条 JSON，按章节记）
 │   └── bookmarks.jsonl                 收藏台账（一行一条 JSON，删一条写墓碑行）
 ├── pixiv_bridge/                       接口主项目（纯接口，不带阅读器页面）
-│   ├── deps.py         依赖检查与自动下载安装（支持本地 wheels/ 离线包）
+│   ├── deps.py         依赖检查与自动下载安装（支持本地 wheels/ 离线包；`bootstrap()` 是各入口共用的自举段）
 │   ├── envcheck.py     运行前环境检查（Python / 依赖 / 项目文件 / 网络 / 端口）
 │   ├── config.py       配置加载（.env / 环境变量 / data 目录与旧数据迁移）
 │   ├── compat.py       pydantic 大版本兼容（v2 的 model_dump / v1 的 dict）
@@ -303,7 +303,7 @@ pixiv-bridge/
 │       ├── user.py     用户 / 关注
 │       ├── pixiv_novel.py  小说 / 追更（/api/novel/* 属于接口层，仍在主项目；名字里的 pixiv_ 是为了和 novel/ 阅读器区分）
 │       └── misc.py     健康检查 / 通用翻页 / 图片代理
-├── tests/              单元测试（367 项：298 主项目 + 69 iwara）
+├── tests/              单元测试（369 项：300 主项目 + 69 iwara）
 ├── openssl-libs/       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -669,13 +669,13 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 - `GET /api/config` 多返回两个字段：`warnings`（上面那些提示）与 `writable`（真写一个探针文件判断数据目录能不能写，`{"ok": bool, "dir": "...", "reason": "..."}`），页面在保存前就能提示；
 - 跨文件系统的 `os.replace`（安卓 `/sdcard` 的 FUSE 就会这样，报 `EXDEV`）不再白等重试，直接退回「原地覆盖写」。
 
-还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，281 项应全绿（iwara 的 69 项会跳过，见下）。
+还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，283 项应全绿（iwara 的 69 项会跳过，见下）。
 > **安卓 / Termux**：请把项目放在 Termux 家目录里（例如 `~/pixiv-bridge`），不要把数据目录指到 `/sdcard` 下的路径。Termux 上依赖会自动换成纯 Python 的 `requirements-termux.txt`（见 INSTALL.md，pydantic 1.x 与 2.x 都支持），与这条路径限制无关。
 
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 或 python -m pytest tests -q，367 项应全绿
+python -m unittest discover -s tests       # 或 python -m pytest tests -q，369 项应全绿
 python scripts/check_boundary.py           # 拆分边界自检
 ```
 

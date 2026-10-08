@@ -5,6 +5,7 @@ import asyncio
 import base64
 import errno
 import hashlib
+import io
 import itertools
 import os
 import platform
@@ -2811,12 +2812,28 @@ class PipBootstrapTestCase(unittest.TestCase):
         self.assertIn("README", str(ctx.exception))
         self.assertIn("pip download", str(ctx.exception))
 
-    def test_entry_points_report_failure_without_traceback(self):
+    def test_entry_points_share_the_same_bootstrap(self):
+        """两个入口的自举都走 ``deps.bootstrap()``，不再各抄一遍 try/except。"""
         for name in ("run.py", "pixiv_bridge/__main__.py"):
             source = (PROJECT_ROOT / name).read_text(encoding="utf-8")
             with self.subTest(name=name):
-                self.assertIn("except RuntimeError", source)
-                self.assertIn("sys.exit(1)", source)
+                self.assertIn("bootstrap()", source)
+
+    def test_bootstrap_reports_failure_without_traceback(self):
+        """``bootstrap()`` 抓到 RuntimeError 时只打一行 ``[deps]``，然后 exit(1)。"""
+        def boom():
+            raise RuntimeError("依赖自动安装失败")
+
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            with self.assertRaises(SystemExit) as ctx:
+                deps_module.bootstrap(boom)
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("[deps] 依赖自动安装失败", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_bootstrap_passes_the_install_result_through(self):
+        self.assertEqual(deps_module.bootstrap(lambda: ["fastapi"]), ["fastapi"])
 
 
 class BodyValidationTestCase(unittest.TestCase):

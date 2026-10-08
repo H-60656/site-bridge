@@ -9,12 +9,13 @@
 """
 
 import sys
+from functools import partial
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pixiv_bridge.cli import main as _bridge_main  # noqa: E402
-from pixiv_bridge.deps import ensure_packages  # noqa: E402
+from pixiv_bridge.deps import bootstrap, ensure_packages  # noqa: E402
 
 from iwara.app import create_app  # noqa: E402
 
@@ -23,15 +24,14 @@ from iwara.app import create_app  # noqa: E402
 IWARA_EXTRA_MODULES = ("curl_cffi",)
 IWARA_REQUIREMENTS = Path(__file__).resolve().parent / "requirements.txt"
 
+# 自举复用主项目那一段（同样的 [deps] 报错与退出码），只是安装函数换成
+# 子项目自己的清单。跟主项目入口一样放在模块级，进主程序前先补齐依赖。
+bootstrap(partial(ensure_packages, IWARA_EXTRA_MODULES, IWARA_REQUIREMENTS))
+
 
 def main(argv=None):
     _bridge_main(argv, app_factory=create_app)
 
 
 if __name__ == "__main__":
-    try:
-        ensure_packages(IWARA_EXTRA_MODULES, IWARA_REQUIREMENTS)
-    except RuntimeError as exc:
-        print(f"[deps] {exc}", file=sys.stderr)
-        sys.exit(1)
     main()

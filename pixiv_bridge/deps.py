@@ -234,3 +234,19 @@ def ensure_dependencies(project_root=None):
             + MANUAL_HINT.format(python=sys.executable, req=requirements)
         )
     return missing
+
+
+def bootstrap(install=ensure_dependencies):
+    """入口自举：先补依赖，装不上就打一行 ``[deps]`` 再退出，不留堆栈。
+
+    ``run.py`` 与 ``pixiv_bridge/__main__.py`` 共用这一段，差别只在传进来的
+    安装函数（主项目传 ``ensure_dependencies``，iwara 传 ``ensure_packages``
+    的偏函数）。两个入口在模块级调用它，等于「进主程序之前先把依赖补齐」。
+
+    返回 ``install()`` 的结果（本次装上来的模块名列表）。
+    """
+    try:
+        return install()
+    except RuntimeError as exc:
+        print(f"[deps] {exc}", file=sys.stderr)
+        sys.exit(1)

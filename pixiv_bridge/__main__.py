@@ -1,17 +1,13 @@
 """``python -m pixiv_bridge`` 的入口：先补齐依赖，再交给命令行主函数。
+
+与仓库根的 ``run.py`` 等价，自举同样走 ``deps.bootstrap()``。
 """
 
-import sys
+from .deps import bootstrap
 
-from .deps import ensure_dependencies
+bootstrap()
 
-try:
-    ensure_dependencies()
-except RuntimeError as exc:
-    print(f"[deps] {exc}", file=sys.stderr)
-    sys.exit(1)
-
-from .cli import main
+from .cli import main  # noqa: E402  （依赖补齐后才能安全 import）
 
 if __name__ == "__main__":
     main()
