@@ -2840,7 +2840,8 @@ class BodyValidationTestCase(unittest.TestCase):
             ("/api/user/follow/add", {"user_id": 2}, None),
             ("/api/novel/bookmark/add", {"novel_id": 3}, None),
             ("/api/novel/bookmark/delete", {"novel_id": 3}, None),
-            # watchlist 的 series_id 是查询参数（见 pixiv_bridge/routes/novel.py:84）
+            # watchlist 的 series_id 是查询参数
+            # （见 pixiv_bridge/routes/pixiv_novel.py 的 watchlist_novel_add）
             ("/api/watchlist/novel/add", None, {"series_id": "1"}),
             ("/api/watchlist/manga/add", None, {"series_id": 1}),
         )
@@ -2869,7 +2870,7 @@ class BodyValidationTestCase(unittest.TestCase):
 
     def test_body_defaults(self):
         from pixiv_bridge.routes.illust import BookmarkAddBody, CommentAddBody
-        from pixiv_bridge.routes.novel import NovelBookmarkAddBody
+        from pixiv_bridge.routes.pixiv_novel import NovelBookmarkAddBody
         from pixiv_bridge.routes.user import FollowAddBody
 
         body = BookmarkAddBody(illust_id=1)

@@ -17,7 +17,7 @@ from .routes import (
     illust,
     misc,
     nav,
-    novel,
+    pixiv_novel,
     search,
     user,
 )
@@ -130,7 +130,7 @@ def create_app(
     app.include_router(search.router)
     app.include_router(feed.router)
     app.include_router(user.router)
-    app.include_router(novel.router)
+    app.include_router(pixiv_novel.router)
     app.include_router(misc.router)
     # 导航页占 `/`，挂在扩展路由**之前**：Starlette 先匹配先赢，所以即使某个
     # 扩展也声明了 `/`，这一页也不会被顶掉（阅读器因此改挂 `/novel`）。

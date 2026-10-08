@@ -301,7 +301,7 @@ pixiv-bridge/
 │       ├── search.py   搜索
 │       ├── feed.py     排行 / 推荐 / 关注流 / 热门标签
 │       ├── user.py     用户 / 关注
-│       ├── novel.py    小说 / 追更（/api/novel/* 属于接口层，仍在主项目）
+│       ├── pixiv_novel.py  小说 / 追更（/api/novel/* 属于接口层，仍在主项目；名字里的 pixiv_ 是为了和 novel/ 阅读器区分）
 │       └── misc.py     健康检查 / 通用翻页 / 图片代理
 ├── tests/              单元测试（367 项：298 主项目 + 69 iwara）
 ├── openssl-libs/       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）

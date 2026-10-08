@@ -1,3 +1,10 @@
+"""Pixiv 小说接口（``/api/novel/*``、``/api/watchlist/*``）。
+
+注意与附属项目 ``novel/``（小说**阅读器**）区分：本模块属于接口层，挂在
+纯接口应用上；``novel/`` 那一层是阅读历史、下载、收藏台账与页面，靠扩展机制
+挂载。文件名带 ``pixiv_`` 前缀就是为了避免和 ``novel/`` 撞名。
+"""
+
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
