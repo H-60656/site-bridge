@@ -4,7 +4,7 @@
 Pixiv 官方 App API（`app-api.pixiv.net`）调用方式（请求签名、OAuth 认证、全部端点），用 Python 重新实现的一个
 **自托管 HTTP 接口服务**。启动后，任何语言的代码通过普通 HTTP 请求即可调用 Pixiv 数据能力，无需处理签名、token 刷新、防盗链等细节。
 
-> 项目分两块：**`pixiv_bridge`**（接口本体，只要接口就够用）与 **`novel`**（小说阅读子项目，依赖前者，多带一个网页阅读器与阅读/下载/收藏台账）。两个入口：`run.py` 纯接口、`novel/run.py` 接口 + 阅读器，详见「快速开始」。
+> 项目分三块：**`pixiv_bridge`**（接口本体，只要接口就够用）、**`novel`**（小说阅读子项目，依赖前者，多带一个网页阅读器与阅读/下载/收藏台账）与 **`iwara`**（iwara.tv 子项目，把 iwara 的视频接口并到同一套服务上）。**两个接口项目各有一个入口**：`run.py` 启动 `pixiv_bridge`、`iwara/run.py` 启动 `pixiv_bridge` + iwara；`novel` 没有自己的入口，它在 `pixiv_bridge` 里以**扩展**方式启用——把扩展目录名写进配置即可，详见「附属项目（扩展）」与「快速开始」。
 
 ## 特性
 
@@ -15,9 +15,10 @@ Pixiv 官方 App API（`app-api.pixiv.net`）调用方式（请求签名、OAuth
 - **统一分页**：所有列表接口返回 `next_url`，任意接口可传 `next_url` 继续翻页
 - **内置限流**：令牌桶限流，避免触发 Pixiv 风控（默认 100 请求/分钟，可配置）
 - **启动前自动检查环境**：检查 Python 版本 / 依赖 / 网络连通性 / 端口，依赖缺失时自动安装
-- **可选的小说阅读器**（子项目 `novel/`，用 `python novel/run.py` 启动）：浏览器打开 `http://127.0.0.1:8765/` 即可搜作品/搜作者、看榜单/推荐/关注/追更/收藏、进作者主页关注或取关、连续阅读、正文插图内联显示（多来源兜底取图）、导出 EPUB（一本书一个文件，含插图与目录；零依赖单文件页面，已做移动端适配，手机浏览器可用）。接口本体不需要它，用 `run.py` 启动时这个地址是 404
+- **可选的小说阅读器**（子项目 `novel/`，在配置里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 启用）：浏览器打开 `http://127.0.0.1:8765/novel` 即可搜作品/搜作者、看榜单/推荐/关注/追更/收藏、进作者主页关注或取关、连续阅读、正文插图内联显示（多来源兜底取图）、导出 EPUB（一本书一个文件，含插图与目录；零依赖单文件页面，已做移动端适配，手机浏览器可用）。接口本体不需要它，不启用扩展时这个地址是 404
 - **阅读与下载都有账**：阅读历史（`data/history.jsonl`）、下载历史（`data/downloads.jsonl`，**按章节记**）、收藏台账（`data/bookmarks.jsonl`）都落在项目里；书架分「云端记录 / 下载记录 / 本地文件」三类，同名系列的章节可在书架里**一键合并导出**成一个 EPUB
 - **数据都在 `data/`**：token、阅读历史、下载记录、收藏台账、页面配置统一放在项目下的 `data/` 目录（老版本的 `tokens.json` / `history.jsonl` 首次启动自动搬过去），换机只需拷这一个目录
+- **可选的 iwara.tv 站点**（子项目 `iwara/`，用 `python iwara/run.py` 启动）：把 iwara 的视频浏览 / 搜索 / 详情 / 直链解析 / 缩略图并到同一套服务上（`/api/iwara/*`）。直链是带签名的 MP4，服务端还能代转字节并透传 `Range`，浏览器里能直接播。用 `run.py` 启动时这些地址是 404
 - **OpenAPI 文档**：启动后访问 `http://127.0.0.1:8765/docs` 在线调试
 
 ## 原理
@@ -29,6 +30,8 @@ Pixiv 官方 App 通过 `app-api.pixiv.net` 提供数据，请求需要：
 3. **移动端请求头**：`User-Agent`、`App-OS`、`App-Version` 等伪装为官方 Android 客户端
 
 这些细节与端点清单均来自 PixEz 源码（`lib/network/api_client.dart`、`oauth_client.dart`），本项目在 Python 中重新实现，方便被任意代码调用。
+
+> **连不上时怎么办**：下面的「直连模式」「ECH 模式」「代理通道」三节讲的是 Pixiv 这一站的具体开关。若想了解**为什么这么设计**、以及面对一个新站点时怎么分层定位（DNS / TCP / TLS / 应用层各自的现象与手段），见 **[DIRECT.md](DIRECT.md)**（直连思路）；iwara 子项目也用的是同一套方法。
 
 ### 直连模式（SNI 绕过，复刻 PixEz）
 
@@ -120,21 +123,25 @@ PIXIV_PROXY=http://127.0.0.1:7890      # Clash/v2ray 常见的混合端口
 cd pixiv-bridge
 python3 -m venv .venv                                   # 可选，但推荐（Windows: python -m venv .venv）
 
-# 只要接口（不带阅读器页面）
+# 只要接口
 .venv/bin/python run.py                                 # Windows: .venv\Scripts\python run.py
 
-# 接口 + 小说阅读器（多了 `/` 页面与阅读历史 / 下载 / 收藏 / 书架那几个接口）
-.venv/bin/python novel/run.py
+# 接口 + 小说阅读器：在 .env 里加一行 PIXIV_BRIDGE_EXTENSIONS=novel 后，用同一条命令启动
+# （多了 `/novel` 阅读器页面与阅读历史 / 下载 / 收藏 / 书架那几个接口）
+
+# 接口 + iwara.tv（多了 `/api/iwara/*` 那几个接口）
+.venv/bin/python iwara/run.py
 ```
 
-项目分成两块，**子项目依赖主项目**、单向依赖不反过来：
+项目分成三块，**子项目依赖主项目**、单向依赖不反过来。**两个接口项目各有一个入口脚本**；小说阅读器没有专属入口，它作为扩展挂在 `pixiv_bridge` 上：
 
-| 入口 | 提供什么 |
+| 启动方式 | 提供什么 |
 | --- | --- |
-| `run.py` | 接口主项目（`pixiv_bridge`）：认证、插画、搜索、动态、用户、`/api/novel/*`、图片代理、健康检查。不带阅读器页面 |
-| `novel/run.py` | 接口之上再挂小说阅读子项目（`novel`）：阅读器页面 `/` 与 `/api/history`、`/api/downloads`、`/api/bookmarks`、`/api/config`、`/api/library` |
+| `run.py` | 接口主项目（`pixiv_bridge`）：认证、插画、搜索、动态、用户、`/api/novel/*`、图片代理、健康检查，以及 `/` 上的**导航页** |
+| `run.py` + `PIXIV_BRIDGE_EXTENSIONS=novel` | 上面那些，再挂上小说阅读子项目（`novel`）：阅读器页面 `/novel` 与 `/api/history`、`/api/downloads`、`/api/bookmarks`、`/api/config`、`/api/library`（导航页上也会多出一段指向阅读器） |
+| `iwara/run.py` | 接口之上再挂 iwara 子项目（`iwara`）：`/api/iwara/videos`、`/api/iwara/search`、`/api/iwara/video/{id}`、`/api/iwara/resolve/{id}`、`/api/iwara/stream`、`/api/iwara/image`、`/api/iwara/thumbnail/{id}`、`/api/iwara/me`、`/api/iwara/auth` |
 
-两个入口共用同一套命令行（`--host` / `--port` / `--reload` / `--check` / `--env`）与环境检查。只要接口的话，拷 `pixiv_bridge/` 一个包即可；要阅读器就连 `novel/` 一起拷（`novel` 通过 `import pixiv_bridge.*` 用主项目，主项目不认识 `novel`）。
+两个入口脚本共用同一套命令行（`--host` / `--port` / `--reload` / `--check` / `--env`）与环境检查。只要接口的话，拷 `pixiv_bridge/` 一个包即可；要阅读器就连 `novel/` 一起拷（并在配置里启用扩展），要 iwara 就连 `iwara/` 一起拷（子项目都通过 `import pixiv_bridge.*` 用主项目，主项目不认识它们）。
 
 首次运行输出示例：
 
@@ -163,7 +170,7 @@ INFO:     Uvicorn running on http://127.0.0.1:8765
 | `port`（监听端口） | **中止启动** | 提示换端口（`--port` 或 `PIXIV_BRIDGE_PORT`） |
 | `network` / `ech` / `proxy`（Pixiv 域名连通性） | 仅警告，不中止 | 三选一：设置 `PIXIV_PROXY` 时真发一次经代理的请求（`proxy` 项）；开启 `PIXIV_BRIDGE_ECH=1` 时真发一次 ECH 请求（`ech` 项）；否则用内置 IP 池 + 无 SNI TLS 探测（`network` 项）。不可达时按当前模式给出改 ECH / 改无 SNI / 改代理的提示，ECH 被 RST 时会直接点明“当前网络在阻断 ECH 扩展” |
 
-跳过端口检查（仅校验登录）：`python run.py --check`（阅读器入口是 `python novel/run.py --check`）。
+跳过端口检查（仅校验登录）：`python run.py --check`（iwara 入口是 `python iwara/run.py --check`）。
 
 ### 获取 refresh_token（三种方式任选）
 
@@ -215,11 +222,14 @@ PIXIV_REFRESH_TOKEN=你的refresh_token
 .venv/bin/python run.py                    # 默认 127.0.0.1:8765
 .venv/bin/python run.py --host 0.0.0.0 --port 9000
 
-# 接口 + 小说阅读器（同一个 --host / --port 用法）
-.venv/bin/python novel/run.py
+# 接口 + 小说阅读器：先给 .env 加一行 PIXIV_BRIDGE_EXTENSIONS=novel，再用上面同一条命令
+# （阅读器在 /novel；同一个 --host / --port 用法）
+
+# 接口 + iwara.tv（同一个 --host / --port 用法）
+.venv/bin/python iwara/run.py
 ```
 
-> Windows 的 `start.bat` / Termux 的 `start.sh` 对应的是第一行那个**纯接口**入口。
+> Windows 的 `start.bat` / Termux 的 `start.sh` 跑的都是第一行那个入口；默认不挂任何扩展。
 
 验证：
 
@@ -228,29 +238,40 @@ curl http://127.0.0.1:8765/api/health
 curl http://127.0.0.1:8765/api/auth/status
 ```
 
-接口就到此可用了。上面这个入口**不带网页**：打开 <http://127.0.0.1:8765/> 会是 404（正常）。要小说阅读器页面，改用另一个入口 `python novel/run.py` 启动，再打开同一个地址（详见「Web 页面」）。
+接口就到此可用了。打开 <http://127.0.0.1:8765/> 是**导航页**：不挂扩展时它会列出接口项目自带的 `/docs`、`/redoc`、`/openapi.json`、`/api/health`；挂了扩展则会多出「扩展：X」一段（扩展用可选的 `EXTENSION_NAV` 声明自己的页面，详见「附属项目（扩展）」）。要小说阅读器页面，在配置里启用 `novel` 扩展再用同一条命令启动，然后打开 <http://127.0.0.1:8765/novel>。
 
 ## 项目结构
 
 ```
 pixiv-bridge/
-├── run.py / pixiv_bridge/__main__.py   纯接口入口（先自动装依赖，再启动）
-├── start.bat / start.sh                一键启动脚本（跑的是上面的纯接口入口）
+├── run.py / pixiv_bridge/__main__.py   接口入口（先自动装依赖，再启动；按配置挂扩展）
+├── start.bat / start.sh                一键启动脚本（跑的就是 run.py）
 ├── get_token.py                        交互式获取 refresh_token（浏览器授权 / 账号密码）
 ├── requirements.txt                    依赖清单（Termux 自动改用 requirements-termux.txt）
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
-├── novel/                              小说阅读子项目（依赖 pixiv_bridge，入口 novel/run.py）
+├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
+├── novel/                              小说阅读子项目（依赖 pixiv_bridge，作为扩展启用）
 │   ├── __init__.py  说明本子项目依赖主项目；对外入口是 app.create_app
-│   ├── run.py          完整服务入口（接口 + 阅读器；主项目的命令行之上挂自己的路由）
+│   ├── extension.py    扩展入口（固定文件名）：导出本子项目的路由与状态工厂
 │   ├── app.py          组装：台账/配置/书架挂到 app.state，再挂本子项目路由
 │   ├── history.py      阅读历史（JsonlStore 子类）
 │   ├── downloads.py    下载历史（按「书号#章号」记账，可按系列汇总进度）
 │   ├── bookmarks.py    收藏台账（删除写墓碑行，收藏状态可回溯）
-│   ├── web/index.html  内置 Web 页面：个人向小说阅读器（搜作品/搜作者 / 榜单 / 推荐 / 关注 / 追更 / 收藏 / 书架三段 / 阅读器含插图 / EPUB 导出）
+│   ├── web/index.html  内置 Web 页面：个人向小说阅读器（搜作品/搜作者 / 榜单 / 推荐 / 关注 / 追更 / 收藏 / 书架三段 / 阅读器含插图 / EPUB 导出），挂在 `/novel` 上
 │   └── routes/         本子项目的路由（history / downloads / bookmarks / config / web）
+├── iwara/                              iwara.tv 子项目（依赖 pixiv_bridge，入口 iwara/run.py）
+│   ├── __init__.py  说明本子项目依赖主项目；对外入口是 app.create_app
+│   ├── run.py          完整服务入口（接口 + iwara；多装一个 curl_cffi 依赖）
+│   ├── client.py       iwara 客户端：种子 IP 池 + 浏览器指纹 TLS + 直链解析 + Range 探测
+│   ├── tokens.py        登录态落盘（data/iwara_tokens.json，与 pixiv 的 tokens.json 分开）
+│   ├── get_token.py     可选：交互式登录一次（邮箱 + 密码），解锁订阅内容
+│   ├── app.py          组装：把 IwaraClient 挂到 app.state，再挂本子项目路由
+│   ├── requirements.txt 本子项目额外依赖（curl_cffi，刻意不放进根清单）
+│   └── routes/         本子项目的路由（videos）
 ├── data/                               你的全部个人数据（换机只拷这一个目录；可用 PIXIV_DATA_DIR 换位置）
 │   ├── tokens.json                     登录凭据（首次启动自动从项目根搬进来）
+│   ├── iwara_tokens.json               iwara 登录态（只有跑过 iwara/get_token.py 才有）
 │   ├── settings.json                   页面配置（本地书架目录、合并/跳过开关、扫描层数）
 │   ├── history.jsonl                   阅读历史（一行一条 JSON）
 │   ├── downloads.jsonl                 下载历史（一行一条 JSON，按章节记）
@@ -282,10 +303,13 @@ pixiv-bridge/
 │       ├── user.py     用户 / 关注
 │       ├── novel.py    小说 / 追更（/api/novel/* 属于接口层，仍在主项目）
 │       └── misc.py     健康检查 / 通用翻页 / 图片代理
-├── tests/              单元测试（218 项）
+├── tests/              单元测试（367 项：298 主项目 + 69 iwara）
+├── openssl-libs/       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
+│   ├── win32-amd64/    Windows 版（4.0.2）
+│   └── android-arm64/  安卓 / Termux 版（4.0.3）
 ├── examples/           Python / curl 调用示例
 └── scripts/            自检脚本
-    └── check_boundary.py  拆分边界自检（主项目不得 import novel + 两个入口的路由差集）
+    └── check_boundary.py  整理自检（依赖方向 + 出入口布局 + 各子项目的路由差集）
 ```
 
 ## 配置（环境变量 / .env）
@@ -425,7 +449,7 @@ PIXIV_BRIDGE_EXTENSIONS=novel        # 相对路径按项目根算
 
 所有接口返回 Pixiv 原始 JSON（透传），错误时返回 `{"error": {"message": "...", "reason": "..."}}`。
 
-> 下面「认证」到「其他（接口主项目）」这些，`run.py` 与 `novel/run.py` 两个入口都有；最后一节「台账与书架」只有 `novel/run.py` 才有。
+> 下面「认证」到「其他（接口主项目）」这些，两个入口都有；「台账与书架」只有启用 `novel` 扩展后才有，「iwara.tv」只有 `iwara/run.py` 才有。
 
 ### 认证
 
@@ -530,6 +554,33 @@ PIXIV_BRIDGE_EXTENSIONS=novel        # 相对路径按项目根算
 | GET | `/api/library/preview?path=` | 读本地 `.txt` 的文本（最多 2 MB，超长 `truncated: true`；只允许配置目录里的 `.txt`） |
 | GET | `/api/library/file?path=` | 下载/打开本地 `.txt` / `.epub`（`Content-Disposition` 带原文件名） |
 
+### iwara.tv（**仅 `iwara/run.py` 提供**）
+
+iwara 是另一个站点，与 Pixiv 无关，由子项目 `iwara/` 挂载；用 `run.py`（不论是否启用 `novel` 扩展）启动时这些地址都返回 **404**。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/iwara/videos?page=&limit=&sort=&rating=&tags=&user=` | 视频列表。`sort`: `date`/`trending`/`popularity`/`likes`/`views`；`rating`: `all`/`general`/`ecchi`（R18 不需要登录，显式传 `ecchi` 即可取到）；返回上游的 `{count,limit,page,results}`，并给每条补上 `thumbnailUrl` / `posterUrl` |
+| GET | `/api/iwara/search?query=&type=&page=&limit=` | 搜索，`type` 默认 `videos` |
+| GET | `/api/iwara/video/{video_id}` | 视频详情（同样补 `thumbnailUrl` / `posterUrl`） |
+| GET | `/api/iwara/resolve/{video_id}?probe=true` | 解析可播放的直链：返回各清晰度 `sources`，`probe=true` 时真发一次 Range 请求，把结果放在 `chosen`（`{name,mime,url,host,content_range,verified}`）。`salt_used` 说明用了哪版签名盐 |
+| GET | `/api/iwara/stream?url=` | 代转视频字节并透传 `Range`（原样转发客户端的 `Range` / `If-Range`，返回上游的 206 与 `Content-Range`）。只允许 iwara CDN 主机 |
+| GET | `/api/iwara/thumbnail/{video_id}?index=&original=` | 按视频 id 直接取缩略图，省得前端自己拼 `file.id` |
+| GET | `/api/iwara/image?url=` | 代转任意 iwara 图片地址（只允许 iwara CDN 主机） |
+| GET | `/api/iwara/me` | 当前登录用户；未登录返回 401 |
+| GET | `/api/iwara/auth` | 只看登录态：`{configured, authenticated, anonymous, error, token_file}`。**不会**去打 `/user`（匿名时那返回 401，看着像报错），所以它永远 200 |
+
+> **登录是可选的**。iwara 的公开内容（含 R18）匿名就能看，登录只为「订阅作者的内容」和「自己账号下的私密视频」。想登录就跑一次 `python iwara/get_token.py`（邮箱 + 密码，没有浏览器授权那条路），token 存到项目里的 `data/iwara_tokens.json`，也可以用环境变量 `IWARA_REFRESH_TOKEN` 临时覆盖。**token 失效不会拖垮整站**：续期失败只记在 `auth_error` 里并退回匿名，`/api/iwara/videos` 之类的接口照常可用。
+
+关于 iwara 的三点实现说明（都来自实测，不是猜的）：
+
+1. **直链不是「文件地址」，要换一次。** `/video/{id}` 给的 `fileUrl` 指向 `/file/<uuid>?expires=…&hash=…`，直接 GET 只会拿到空 JSON；必须以 `X-Version` 头再请求一次，值是该 `fileUrl` 的 `sha1("{uuid}_{expires}_{盐}")`，返回的才是真正的清晰度列表，且每个清晰度在不同 CDN 主机上。
+2. **系统 DNS 解析不了 iwara，DoH 也不行。** 本机拿到的污染结果落在 Facebook / Twitter 等网段；而**能连上的 DoH（`doh.pub` / 阿里 / 360）对 `*.iwara.tv` 同样回污染答案**，`cloudflare-dns.com` / `dns.google` / `dns.quad9.net` 在这类网络里根本连不上。所以本子项目不依赖解析：内置一张实测可用的**种子 IP 表**（`SEED_HOSTS` / `SEED_IPS`），DoH 结果只作补充候选且排在种子之后。另一个实测结论让这套做法成立：视频 CDN 的边缘**按内容路由、各花名子域互通** —— 同一份内容钉到池中任一可用 IP 都能取到（个别转码源例外，所以要全池轮询）。
+   还有两个坑：libcurl 的 `CURLOPT_RESOLVE` **不是候选列表** —— 同一 host:port 传多条时只认最后一条，因此必须自己探测可达性后固定到**单个** IP；以及 CDN 边缘对不服务的内容回 `404 page not found`，这属于「换个 IP 就有」，会触发换 IP 重试（API 的 404 是真实业务状态，不重试）。
+3. **必须用浏览器 TLS 指纹。** iwara 在 Cloudflare 后面，纯 Python 的 TLS 指纹会被判定为机器人（403 + `cf-mitigated: challenge` + `Just a moment...`）。因此额外依赖 `curl_cffi`（`impersonate="chrome"`），它只装在 `iwara/requirements.txt` 里，不影响只跑 Pixiv 接口的用户。另外并非所有 CDN 花名主机都可达，解析直链时会在全部 `sources` 之间逐个探测，取第一个真正能播的。
+
+> 这三点属于**链路层**问题，不是 iwara API 本身的特性。它们和 Pixiv 那边对付 DNS 污染 / SNI 阻断 / ECH 阻断用的是同一套思路（分层定位 → 逐层选手段），完整方法论见 **[DIRECT.md](DIRECT.md)**。
+
 ## 调用示例
 
 ### curl
@@ -618,24 +669,26 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 - `GET /api/config` 多返回两个字段：`warnings`（上面那些提示）与 `writable`（真写一个探针文件判断数据目录能不能写，`{"ok": bool, "dir": "...", "reason": "..."}`），页面在保存前就能提示；
 - 跨文件系统的 `os.replace`（安卓 `/sdcard` 的 FUSE 就会这样，报 `EXDEV`）不再白等重试，直接退回「原地覆盖写」。
 
-还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，218 项应全绿。
-
+还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，281 项应全绿（iwara 的 69 项会跳过，见下）。
 > **安卓 / Termux**：请把项目放在 Termux 家目录里（例如 `~/pixiv-bridge`），不要把数据目录指到 `/sdcard` 下的路径。Termux 上依赖会自动换成纯 Python 的 `requirements-termux.txt`（见 INSTALL.md，pydantic 1.x 与 2.x 都支持），与这条路径限制无关。
 
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 或 python -m pytest tests -q，218 项应全绿
+python -m unittest discover -s tests       # 或 python -m pytest tests -q，367 项应全绿
 python scripts/check_boundary.py           # 拆分边界自检
 ```
 
-`scripts/check_boundary.py` 用 AST 扫两件事，再实际建一次应用对比路由：
+`scripts/check_boundary.py` 做三件事：用 AST 扫依赖方向与出入口布局，再实际建一次应用对比路由。
 
-1. `pixiv_bridge/` 里没有任何模块 `import novel` —— 依赖是单向的，主项目不认识子项目；
-2. `novel/` 只用主项目 `pixiv_bridge`，不依赖本仓库其它本地包；
-3. `novel` 的应用恰好比纯接口多出那几条子项目路由（`/`、`/api/history`、`/api/downloads*`、`/api/bookmarks*`、`/api/config`、`/api/library*`）。
+1. `pixiv_bridge/` 里没有任何模块 `import novel` / `import iwara` —— 依赖是单向的，主项目不认识子项目；
+2. 各子项目只用主项目 `pixiv_bridge`，不依赖本仓库其它本地包；
+3. 出入口布局成立：`run.py` 与 `iwara/run.py` 两个接口入口都在，`novel/run.py` 这个专属入口**不存在**（阅读项目改由扩展机制启用），且 `novel/extension.py` 这个扩展入口存在；
+4. 各子项目的应用恰好比纯接口多出那几条子项目路由（`novel`：`/novel`、`/api/history`、`/api/downloads*`、`/api/bookmarks*`、`/api/config`、`/api/library*`；`iwara`：`/api/iwara/*`）。`novel` 那一侧是通过**扩展机制**建的：`create_app(settings, extensions=load_extension_specs(["novel"], root))`。路由差集里没有 `/`，因为导航页两版都有。
 
-改了 imports 或挪了路由后跑一下它，比等到运行时才 404 省事。测试给 `novel` 那一层的用例统一走 helper `app_with_novel(settings)`（`tests/test_bridge.py`），因为三台账 / 配置 / 书架 / 阅读器页面现在都由子项目挂载，用主项目的 `create_app` 打这些路径会 404。
+改了 imports、挪了路由或动了入口脚本后跑一下它，比等到运行时才 404 省事。测试给 `novel` 那一层的用例统一走 helper（`tests/test_bridge.py`），因为三台账 / 配置 / 书架 / 阅读器页面现在都由子项目挂载，用主项目的 `create_app` 打这些路径会 404。
+
+`iwara` 的用例在 `tests/test_iwara.py`（69 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 69 项会**整片跳过**（显示 `OK (skipped=69)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
 
 ## 打包与移植（换机 / 离线部署）
 
@@ -646,9 +699,11 @@ python scripts/check_boundary.py           # 拆分边界自检
 | 内容 | 建议 | 原因 |
 | --- | --- | --- |
 | `pixiv_bridge/`、`run.py`、`requirements.txt`、`README.md` | **必须拷** | 接口本体（只要接口、不要阅读器时，拷这些就够） |
-| `novel/`、`novel/web/index.html` | **要阅读器就必须拷** | 小说阅读子项目；漏拷时 `/` 直接 404、书架那几个接口不可用 |
-| `start.bat`、`start.sh`、`get_token.py`、`INSTALL.md`、`requirements-termux.txt` | **建议拷** | 一键启动脚本、登录助手、傻瓜版说明、Termux 专用依赖清单 |
+| `novel/`（含 `novel/extension.py`）、`novel/web/index.html` | **要阅读器就必须拷** | 小说阅读子项目；漏拷时 `/novel` 直接 404、书架那几个接口不可用。拷过去后在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 启用 |
+| `iwara/`、`iwara/requirements.txt` | **要 iwara 就必须拷** | iwara 子项目；漏拷时 `/api/iwara/*` 全部 404。首次启动会自动补装 `curl_cffi` |
+| `start.bat`、`start.sh`、`get_token.py`、`INSTALL.md`、`DIRECT.md`、`requirements-termux.txt` | **建议拷** | 一键启动脚本、登录助手、傻瓜版说明、直连思路文档、Termux 专用依赖清单 |
 | `.env.example` | **必须拷** | 配置模板 |
+| `openssl-libs/` | **要 ECH 就必须拷** | 项目自带的 OpenSSL 4.x 动态库（`win32-amd64` + `android-arm64`，按 `平台-架构` 分子目录，约 16 MB）；拷过去即可用 ECH，无需在目标机器安装 OpenSSL。不用 ECH 时可以不拷 |
 | `.env`、`data/`（含 `data/tokens.json`） | **不要拷** | 里面是 refresh token / access token 与你的阅读、下载、收藏记录，属私密数据且与账号绑定；目标机器上重新填 `.env` 即可 |
 | 项目根的 `tokens.json`、`history.jsonl` | **不要拷** | 老版本的存放位置；确实想把进度带过去时，改拷 `data/` 目录（或单独拷 `data/history.jsonl`，一行一条 JSON，删掉即清空） |
 | `.venv/`、`venv/` | **不要拷** | 虚拟环境里写死了源机器的绝对路径，拷过去必坏；目标机器上重新 `python -m venv .venv`（或干脆不用 venv） |

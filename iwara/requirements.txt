@@ -1,0 +1,11 @@
+# iwara 子项目的额外依赖（只有跑 iwara/run.py 时才需要）。
+#
+# 刻意不放进根目录的 requirements.txt：curl_cffi 是带编译产物的包，
+# 而它只是 iwara 站点绕过 Cloudflare 的手段；只跑 pixiv 接口的用户
+# 不该被要求装它（Termux 上尤其可能装不动）。
+#
+# 为什么必须要它：iwara 的 API 在 Cloudflare 后面，普通 Python 的 TLS
+# 指纹会被判定为机器人（403 + cf-mitigated: challenge）。curl_cffi 用
+# 浏览器指纹发请求才能拿到 200，纯 requests / httpx 做不到。
+curl_cffi>=0.7
+cffi>=1.16

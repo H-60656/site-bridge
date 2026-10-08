@@ -4368,5 +4368,490 @@ class BookmarksRouteTestCase(UserDataRouteBase):
                     self.assertEqual(listed["entries"][0]["id"], 3001)
 
 
+class ExtensionSpecsTestCase(unittest.TestCase):
+    """扩展配置项解析：`PIXIV_BRIDGE_EXTENSIONS` 的原始字符串怎么切。"""
+
+    def test_single_spec(self):
+        self.assertEqual(parse_extension_specs("novel"), ["novel"])
+
+    def test_comma_semicolon_and_whitespace_all_separate(self):
+        for raw in ("novel,reader", "novel;reader", "novel reader", "novel , ; reader"):
+            with self.subTest(raw=raw):
+                self.assertEqual(parse_extension_specs(raw), ["novel", "reader"])
+
+    def test_empty_entries_are_dropped(self):
+        self.assertEqual(parse_extension_specs(",,novel,,"), ["novel"])
+        self.assertEqual(parse_extension_specs("   "), [])
+
+    def test_empty_and_none_are_empty(self):
+        self.assertEqual(parse_extension_specs(""), [])
+        self.assertEqual(parse_extension_specs(None), [])
+
+    def test_settings_default_is_empty(self):
+        # 默认构造与 Settings.load 在没配 PIXIV_BRIDGE_EXTENSIONS 时都得是空元组，
+        # 否则「默认只跑纯接口」这条约定会被破坏。
+        self.assertEqual(Settings().extensions, ())
+        self.assertIsInstance(Settings().extensions, tuple)
+
+    def test_settings_load_reads_the_env_var(self):
+        with patch.dict(
+            os.environ, {"PIXIV_BRIDGE_EXTENSIONS": "novel, extra"}, clear=False
+        ):
+            settings = Settings.load(str(PROJECT_ROOT))
+        self.assertEqual(settings.extensions, ("novel", "extra"))
+
+    def test_blank_env_var_gives_empty_tuple(self):
+        with patch.dict(os.environ, {"PIXIV_BRIDGE_EXTENSIONS": ""}, clear=False):
+            settings = Settings.load(str(PROJECT_ROOT))
+        self.assertEqual(settings.extensions, ())
+
+
+class ExtensionLoadingTestCase(unittest.TestCase):
+    """扩展加载：固定入口文件名 extension.py，缺文件/缺路由要给可读报错。"""
+
+    def setUp(self):
+        self.dirs = []
+
+    def tearDown(self):
+        for path in reversed(self.dirs):
+            drop_temp_dir(path)
+
+    def make_package(self, body, name="ext"):
+        """在 _tmp_tests/ 下建一个带 extension.py 的临时包，返回目录。"""
+        directory = make_temp_dir(name)
+        self.dirs.append(directory)
+        (directory / "extension.py").write_text(body, encoding="utf-8")
+        return directory
+
+    def test_loads_the_repo_novel_extension(self):
+        extensions = load_extension_specs(["novel"], PROJECT_ROOT)
+        self.assertEqual(len(extensions), 1)
+        ext = extensions[0]
+        self.assertEqual(ext.name, "novel")
+        self.assertEqual(ext.entry, PROJECT_ROOT / "novel" / EXTENSION_FILENAME)
+        self.assertTrue(ext.routers)
+        self.assertIsNotNone(ext.state_factory)
+        # novel 没有自己的资源要释放，所以没有 shutdown。
+        self.assertIsNone(ext.shutdown)
+
+    def test_relative_spec_resolves_against_project_root(self):
+        extensions = load_extension_specs(["novel"], PROJECT_ROOT)
+        self.assertEqual(extensions[0].directory, PROJECT_ROOT / "novel")
+
+    def test_absolute_spec_is_used_as_is(self):
+        directory = self.make_package(
+            "from fastapi import APIRouter\n"
+            "router = APIRouter()\n"
+            "EXTENSION_ROUTERS = (router,)\n"
+        )
+        extensions = load_extension_specs([str(directory)], PROJECT_ROOT)
+        self.assertEqual(extensions[0].directory, directory)
+
+    def test_missing_extension_file_is_a_readable_error(self):
+        with self.assertRaises(ExtensionError) as ctx:
+            load_extension_specs(["no-such-extension-dir"], PROJECT_ROOT)
+        message = str(ctx.exception)
+        self.assertIn(EXTENSION_FILENAME, message)
+        self.assertIn("找不到入口文件", message)
+
+    def test_missing_routers_attribute_is_a_readable_error(self):
+        directory = self.make_package("X = 1\n")
+        relative = directory.relative_to(PROJECT_ROOT)
+        with self.assertRaises(ExtensionError) as ctx:
+            load_extension_specs([str(relative)], PROJECT_ROOT)
+        self.assertIn(EXTENSION_ROUTERS_ATTR, str(ctx.exception))
+
+    def test_none_routers_is_rejected(self):
+        directory = self.make_package(f"{EXTENSION_ROUTERS_ATTR} = None\n")
+        relative = directory.relative_to(PROJECT_ROOT)
+        with self.assertRaises(ExtensionError):
+            load_extension_specs([str(relative)], PROJECT_ROOT)
+
+    def test_a_single_router_is_wrapped_into_a_tuple(self):
+        directory = self.make_package(
+            "from fastapi import APIRouter\n"
+            "router = APIRouter()\n"
+            "EXTENSION_ROUTERS = router\n"
+        )
+        relative = directory.relative_to(PROJECT_ROOT)
+        extensions = load_extension_specs([str(relative)], PROJECT_ROOT)
+        self.assertEqual(len(extensions[0].routers), 1)
+
+    def test_extension_import_error_is_wrapped_and_no_half_module_left(self):
+        directory = self.make_package("raise RuntimeError('扩展内部炸了')\n")
+        relative = directory.relative_to(PROJECT_ROOT)
+        before = set(sys.modules)
+        with self.assertRaises(ExtensionError) as ctx:
+            load_extension_specs([str(relative)], PROJECT_ROOT)
+        message = str(ctx.exception)
+        self.assertIn("RuntimeError", message)
+        self.assertIn("扩展内部炸了", message)
+        # 加载失败不能把半个模块留在 sys.modules 里（同一个进程里前面
+        # 已经加载成功的扩展会留在里面，所以只比对这次新增的部分）。
+        self.assertEqual(set(sys.modules) - before, set())
+
+    def test_empty_and_none_specs_load_nothing(self):
+        self.assertEqual(load_extension_specs([], PROJECT_ROOT), [])
+        self.assertEqual(load_extension_specs(None, PROJECT_ROOT), [])
+
+    def test_duplicate_specs_load_once(self):
+        extensions = load_extension_specs(["novel", "novel"], PROJECT_ROOT)
+        self.assertEqual(len(extensions), 1)
+
+    def test_load_extensions_reads_settings(self):
+        settings = Settings(project_root=PROJECT_ROOT, extensions=("novel",))
+        extensions = load_extensions(settings)
+        self.assertEqual([ext.name for ext in extensions], ["novel"])
+
+    def test_load_extensions_without_settings_field_is_empty(self):
+        class Bare:
+            project_root = PROJECT_ROOT
+
+        self.assertEqual(load_extensions(Bare()), [])
+
+
+class ExtensionMountTestCase(unittest.TestCase):
+    """扩展挂载进应用：路由、app.state、shutdown、纯接口不受影响。"""
+
+    def setUp(self):
+        self.dirs = []
+
+    def tearDown(self):
+        for path in reversed(self.dirs):
+            drop_temp_dir(path)
+
+    def make_extension_dir(self, body, name="ext_mount"):
+        directory = make_temp_dir(name)
+        self.dirs.append(directory)
+        (directory / "extension.py").write_text(body, encoding="utf-8")
+        return directory
+
+    @staticmethod
+    def route_paths(app):
+        out = set()
+        for route in app.routes:
+            holder = getattr(route, "original_router", None)
+            items = holder.routes if holder is not None else [route]
+            for item in items:
+                path = getattr(item, "path", None)
+                if path is not None:
+                    out.add(path)
+        return out
+
+    def test_novel_extension_adds_exactly_the_reader_routes(self):
+        settings = make_settings()
+        pure = self.route_paths(create_app(settings))
+        full = self.route_paths(
+            create_app(settings, extensions=load_extension_specs(["novel"], PROJECT_ROOT))
+        )
+        self.assertNotIn("/api/history", pure)
+        extra = full - pure
+        self.assertIn("/api/history", extra)
+        # 阅读器页面在 /novel；`/` 两版都有（导航页），所以不在差集里。
+        self.assertIn("/novel", extra)
+        self.assertNotIn("/", extra)
+        self.assertEqual(len(extra), 10)
+
+    def test_pure_api_keeps_working_with_the_extension_mounted(self):
+        settings = make_settings()
+        app = create_app(
+            settings, extensions=load_extension_specs(["novel"], PROJECT_ROOT)
+        )
+        with TestClient(app) as client:
+            self.assertEqual(client.get("/api/health").status_code, 200)
+            self.assertEqual(client.get("/api/history").status_code, 200)
+
+    def test_extension_state_factory_runs_inside_lifespan(self):
+        directory = self.make_extension_dir(
+            "from fastapi import APIRouter\n"
+            "router = APIRouter()\n"
+            "@router.get('/api/ext-probe')\n"
+            "async def probe():\n"
+            "    return {'ok': True}\n"
+            "EXTENSION_ROUTERS = (router,)\n"
+            "def extension_state_factory(settings):\n"
+            "    return {'ext_probe': 'FROM-EXTENSION'}\n"
+        )
+        relative = directory.relative_to(PROJECT_ROOT)
+        extensions = load_extension_specs([str(relative)], PROJECT_ROOT)
+        app = create_app(make_settings(), extensions=extensions)
+        with TestClient(app) as client:
+            self.assertEqual(app.state.ext_probe, "FROM-EXTENSION")
+            self.assertEqual(client.get("/api/ext-probe").status_code, 200)
+
+    def test_app_state_exposes_loaded_extensions(self):
+        extensions = load_extension_specs(["novel"], PROJECT_ROOT)
+        app = create_app(make_settings(), extensions=extensions)
+        with TestClient(app):
+            self.assertEqual(app.state.extensions, tuple(extensions))
+
+    def test_extension_shutdown_is_awaited(self):
+        directory = self.make_extension_dir(
+            "from fastapi import APIRouter\n"
+            "router = APIRouter()\n"
+            "EXTENSION_ROUTERS = (router,)\n"
+            "async def extension_shutdown(app):\n"
+            "    app.state.shutdown_ran = True\n"
+        )
+        relative = directory.relative_to(PROJECT_ROOT)
+        extensions = load_extension_specs([str(relative)], PROJECT_ROOT)
+        app = create_app(make_settings(), extensions=extensions)
+        with TestClient(app):
+            pass
+        self.assertTrue(getattr(app.state, "shutdown_ran", False))
+
+    def test_explicit_state_factory_and_extension_are_both_mounted(self):
+        directory = self.make_extension_dir(
+            "from fastapi import APIRouter\n"
+            "router = APIRouter()\n"
+            "EXTENSION_ROUTERS = (router,)\n"
+            "def extension_state_factory(settings):\n"
+            "    return {'from_extension': 1}\n"
+        )
+        relative = directory.relative_to(PROJECT_ROOT)
+        extensions = load_extension_specs([str(relative)], PROJECT_ROOT)
+        app = create_app(
+            make_settings(),
+            state_factory=lambda settings: {"from_explicit": 2},
+            extensions=extensions,
+        )
+        with TestClient(app):
+            self.assertEqual(app.state.from_extension, 1)
+            self.assertEqual(app.state.from_explicit, 2)
+
+    def test_create_app_does_not_read_configuration_by_itself(self):
+        # create_app 是纯组装：不给 extensions 就不挂任何扩展，
+        # 即使环境变量里写着 novel —— 否则边界检查与应用行为会随 .env 漂移。
+        settings = make_settings()
+        settings.extensions = ("novel",)
+        pure = self.route_paths(create_app(settings))
+        self.assertNotIn("/api/history", pure)
+
+
+class ExtensionLayoutTestCase(unittest.TestCase):
+    """出入口整理：接口项目各留一个入口，阅读项目改由扩展机制启用。"""
+
+    def test_two_api_entry_points_still_exist(self):
+        for name in ("run.py", "iwara/run.py"):
+            with self.subTest(name=name):
+                self.assertTrue((PROJECT_ROOT / name).is_file(), name)
+
+    def test_novel_has_no_dedicated_entry_point(self):
+        self.assertFalse((PROJECT_ROOT / "novel" / "run.py").exists())
+
+    def test_novel_exposes_the_fixed_extension_entry(self):
+        entry = PROJECT_ROOT / "novel" / EXTENSION_FILENAME
+        self.assertTrue(entry.is_file(), str(entry))
+        source = entry.read_text(encoding="utf-8")
+        self.assertIn("EXTENSION_ROUTERS", source)
+        self.assertIn("extension_state_factory", source)
+
+    def test_novel_app_still_offers_the_explicit_assembly_path(self):
+        # 测试与脚本依赖 novel.app.create_app 这条老路，不能被整理掉。
+        self.assertTrue(callable(create_novel_app))
+        settings = make_settings()
+        app = create_novel_app(settings)
+        self.assertIn("/api/history", ExtensionMountTestCase.route_paths(app))
+
+    def test_gitignore_does_not_drop_the_extension_entry(self):
+        source = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+        for line in source.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                self.assertNotIn(
+                    "extension.py",
+                    stripped,
+                    "扩展入口文件不能被 .gitignore 忽略",
+                )
+
+
+class NavigationPageTestCase(unittest.TestCase):
+    """导航页：接口项目的 `/`，把自带入口与各扩展声明的页面列出来。"""
+
+    def _html(self, settings=None, extensions=()):
+        app = create_app(
+            settings or make_settings(),
+            transport=httpx.MockTransport(_mock_handler),
+            extensions=extensions,
+        )
+        with TestClient(app) as client:
+            resp = client.get("/")
+        return resp
+
+    def _load_temp_extension(self, body, name="ext_nav"):
+        """在 _tmp_tests/ 下造一个临时扩展并加载它（用完自动清掉）。"""
+        directory = make_temp_dir(name)
+        self.addCleanup(drop_temp_dir, directory)
+        (directory / "extension.py").write_text(body, encoding="utf-8")
+        return load_extension_specs(
+            [str(directory.relative_to(PROJECT_ROOT))], PROJECT_ROOT
+        )
+
+    # ---- 纯函数层 ----
+
+    def test_normalize_nav_items_accepts_dicts_and_strings(self):
+        items = nav_module.normalize_nav_items(
+            [
+                {"title": "阅读器", "path": "/novel", "description": "读小说"},
+                {"path": "/docs"},
+                "/api/health",
+            ]
+        )
+        self.assertEqual([item.path for item in items], ["/novel", "/docs", "/api/health"])
+        self.assertEqual(items[0].title, "阅读器")
+        self.assertEqual(items[0].description, "读小说")
+        # 缺 title 时用路径兜底
+        self.assertEqual(items[1].title, "/docs")
+
+    def test_normalize_nav_items_drops_junk(self):
+        # 缺 path、非 dict、None 都丢掉；None 整体也能接受
+        self.assertEqual(nav_module.normalize_nav_items(None), ())
+        self.assertEqual(nav_module.normalize_nav_items([None, 1, {}, {"title": "x"}]), ())
+        self.assertEqual(
+            [i.path for i in nav_module.normalize_nav_items([{"path": "  /a  "}])],
+            ["/a"],
+        )
+
+    def test_normalize_nav_items_passes_navitem_through(self):
+        item = nav_module.NavItem("t", "/p", "d")
+        self.assertEqual(nav_module.normalize_nav_items([item]), (item,))
+
+    def test_parse_nav_links_forms(self):
+        links = nav_module.parse_nav_links(
+            "iwara 视频=http://127.0.0.1:8766/; /docs"
+        )
+        self.assertEqual(
+            [(item.title, item.path) for item in links],
+            [("iwara 视频", "http://127.0.0.1:8766/"), ("/docs", "/docs")],
+        )
+        self.assertEqual(nav_module.parse_nav_links(""), ())
+        self.assertEqual(nav_module.parse_nav_links(None), ())
+
+    def test_parse_nav_links_skips_empty_entries(self):
+        # 只有地址的空项、只有 `=` 的空项都丢掉，正常项保留
+        links = nav_module.parse_nav_links("a=/a, ,b=/b,=,")
+        self.assertEqual([(i.title, i.path) for i in links], [("a", "/a"), ("b", "/b")])
+        self.assertEqual(nav_module.parse_nav_links("=,"), ())
+
+    def test_unsafe_href_is_not_linked(self):
+        html = nav_module.render_html(
+            title="T",
+            sections=(nav_module.NavSection("S", (nav_module.NavItem("bad", "javascript:alert(1)"),)),),
+        )
+        self.assertNotIn("<a", html)
+        self.assertIn("javascript:alert(1)", html)  # 仍以文本显示，但不生成链接
+
+    def test_render_html_escapes_text(self):
+        html = nav_module.render_html(
+            title="<script>",
+            sections=(
+                nav_module.NavSection(
+                    "S", (nav_module.NavItem("<b>t</b>", '/x"y'),)
+                ),
+            ),
+        )
+        self.assertNotIn("<script>", html)
+        self.assertIn("&lt;script&gt;", html)
+        self.assertNotIn('href="/x"y"', html)
+
+    # ---- 配置层 ----
+
+    def test_nav_links_settings_default_empty(self):
+        self.assertEqual(make_settings().nav_links, "")
+
+    def test_settings_loads_nav_links_from_env(self):
+        with patch.dict(
+            os.environ, {"PIXIV_BRIDGE_NAV_LINKS": "iwara=http://127.0.0.1:8766/"}, clear=False
+        ):
+            settings = Settings.load(str(PROJECT_ROOT))
+        self.assertEqual(settings.nav_links, "iwara=http://127.0.0.1:8766/")
+
+    # ---- HTTP 层 ----
+
+    def test_root_is_the_navigation_page(self):
+        resp = self._html()
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/html", resp.headers.get("content-type", ""))
+        for path in ("/docs", "/openapi.json", "/api/health"):
+            self.assertIn(path, resp.text)
+        self.assertIn("没有挂载扩展", resp.text)
+
+    def test_navigation_page_lists_extension_with_nav(self):
+        extensions = load_extension_specs(["novel"], PROJECT_ROOT)
+        resp = self._html(extensions=extensions)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("扩展：novel", resp.text)
+        self.assertIn("小说阅读器", resp.text)
+        self.assertIn('href="/novel"', resp.text)
+        self.assertIn("已挂载 1 个扩展：novel", resp.text)
+
+    def test_navigation_page_lists_extension_without_nav(self):
+        raw = (
+            "from fastapi import APIRouter\n"
+            "router = APIRouter()\n"
+            "EXTENSION_ROUTERS = (router,)\n"
+        )
+        extensions = self._load_temp_extension(raw)
+        self.assertEqual(extensions[0].nav, ())
+        resp = self._html(extensions=extensions)
+        # 没声明也照样列出名字（名字就是配置里写的 spec），并说明它没声明
+        heading = f"<h2>扩展：{extensions[0].name}</h2>"
+        self.assertIn(heading, resp.text)
+        self.assertIn("没有声明 EXTENSION_NAV", resp.text)
+        # 这一段里只有说明文字，没有链接（自带入口那一段在上面，不受影响）
+        self.assertNotIn("<a", resp.text.split(heading)[1])
+
+    def test_navigation_page_renders_config_links(self):
+        settings = make_settings()
+        settings.nav_links = "iwara 视频=http://127.0.0.1:8766/"
+        resp = self._html(settings=settings)
+        self.assertIn("其它入口", resp.text)
+        self.assertIn('href="http://127.0.0.1:8766/"', resp.text)
+
+    def test_navigation_page_keeps_root_when_extension_declares_it(self):
+        # 导航页挂在扩展路由之前：扩展就算也声明 `/`，导航页仍然是它。
+        raw = (
+            "from fastapi import APIRouter\n"
+            "router = APIRouter()\n"
+            "@router.get('/')\n"
+            "async def hijack():\n"
+            "    return {'hijacked': True}\n"
+            "EXTENSION_ROUTERS = (router,)\n"
+        )
+        directory = make_temp_dir("ext_hijack")
+        self.addCleanup(drop_temp_dir, directory)
+        (directory / "extension.py").write_text(raw, encoding="utf-8")
+        extensions = load_extension_specs(
+            [str(directory.relative_to(PROJECT_ROOT))], PROJECT_ROOT
+        )
+        resp = self._html(extensions=extensions)
+        self.assertIn("text/html", resp.headers.get("content-type", ""))
+        self.assertNotIn("hijacked", resp.text)
+
+    def test_novel_extension_declares_its_navigation_page(self):
+        extensions = load_extension_specs(["novel"], PROJECT_ROOT)
+        nav = extensions[0].nav
+        self.assertEqual(len(nav), 1)
+        self.assertEqual(nav[0].path, "/novel")
+        self.assertTrue(nav[0].title)
+
+    def test_reader_page_lives_at_novel_not_root(self):
+        extensions = load_extension_specs(["novel"], PROJECT_ROOT)
+        app = create_app(
+            make_settings(),
+            transport=httpx.MockTransport(_mock_handler),
+            extensions=extensions,
+        )
+        with TestClient(app) as client:
+            reader = client.get("/novel")
+            self.assertEqual(reader.status_code, 200)
+            self.assertIn("text/html", reader.headers.get("content-type", ""))
+            self.assertIn('id="view-reader"', reader.text)
+            # `/` 仍是导航页（HTML 里是导航页的标志，不是阅读器页面）
+            root = client.get("/")
+            self.assertEqual(root.status_code, 200)
+            self.assertIn("接口项目自带", root.text)
+
+
 if __name__ == "__main__":
     unittest.main()

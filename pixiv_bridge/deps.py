@@ -181,6 +181,35 @@ def _install_requirements(requirements, project_root=None):
     raise last_error
 
 
+def ensure_packages(names, requirements, project_root=None):
+    """通用入口：确保 ``names`` 里的顶层模块都能 import，缺了就照 ``requirements`` 装。
+
+    ``ensure_dependencies()`` 是它针对主项目的封装。子项目（如 ``iwara``）
+    需要额外依赖时调用本函数，这样主项目的 ``REQUIRED`` 不必替子项目背锅 ——
+    不然只跑 pixiv 接口的用户会被要求装子项目才用得上的东西。
+
+    返回缺失并已安装的模块名列表（都齐了就是空列表）。
+    """
+    missing = [name for name in names if not _importable(name)]
+    if not missing:
+        return []
+    requirements = Path(requirements)
+    try:
+        _install_requirements(requirements, project_root)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"子项目依赖自动安装失败，本地离线包与所有镜像源均不可用。"
+            + MANUAL_HINT.format(python=sys.executable, req=requirements)
+        ) from exc
+    still_missing = [name for name in names if not _importable(name)]
+    if still_missing:
+        raise RuntimeError(
+            f"依赖安装后仍缺失: {', '.join(still_missing)}。"
+            + MANUAL_HINT.format(python=sys.executable, req=requirements)
+        )
+    return missing
+
+
 def ensure_dependencies(project_root=None):
     missing = missing_dependencies()
     if not missing:
