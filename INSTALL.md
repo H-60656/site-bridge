@@ -183,9 +183,10 @@ cd ~/pixiv-bridge && python get_token.py
 
 ```sh
 python run.py --check        # 查的是同一套环境，跟挂没挂扩展无关
+python iwara/run.py --check  # 同一套 + 3 项 iwara 专属（依赖 / api.iwara.tv / 登录态）
 ```
 
-（各入口的 `--check` 查的是同一套环境：Python / 依赖 / 项目文件 / 端口 / 网络 / ECH。iwara 入口会额外确认 `curl_cffi` 在不在。）
+（各入口的 `--check` 查的是同一套环境：Python / 依赖 / 项目文件 / 端口 / 网络 / ECH，其中 `port` 在 `--check` 下只警告不中止——毕竟这条路不监听端口。iwara 入口再追加 3 项：`iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录`（没配 token 就报匿名模式，配了就真刷一次并读用户名）。这 3 项都只警告、不中止，因为 iwara 挂了不影响入口继续提供 pixiv 接口。）
 
 > **为什么有这些通道、各自对付什么**，以及换到别的站点时怎么从头定位，见 **[DIRECT.md](DIRECT.md)**（直连思路）。这里只讲「按现象选哪一条」。
 

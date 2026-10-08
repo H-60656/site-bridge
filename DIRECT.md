@@ -240,4 +240,4 @@ else:                   # 普通路径
 | `PIXIV_PROXY` | 代理通道，**优先级高于以上所有直连手段** |
 | `IWARA_REFRESH_TOKEN` | iwara 可选登录态（也可跑 `python iwara/get_token.py` 存到 `data/iwara_tokens.json`） |
 
-> 起手先跑 `python run.py --check`（或 `python iwara/run.py --check`）：自检会逐项报告 python / deps / 项目文件 / 端口 / 网络 / ECH 的状态，把「四道关」的结论直接摊开。
+> 起手先跑 `python run.py --check`：自检会逐项报告 python / deps / 项目文件 / 端口 / 网络 / ECH 的状态，把「四道关」的结论直接摊开（`--check` 不监听端口，所以 `port` 只警告不中止）。加了站点之后自检也要跟着长：iwara 入口跑 `python iwara/run.py --check`，会在这张表后面追加 `iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录` 三项——**新站点照这个套路做**：把「本层的判据」写成一条 `CheckResult`，经 `extra_checks(settings)` 传进 `pixiv_bridge.cli.main`，就与通用检查同表同打印点。

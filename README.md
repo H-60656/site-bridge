@@ -141,7 +141,7 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 | `run.py` + `PIXIV_BRIDGE_EXTENSIONS=novel` | 上面那些，再挂上小说阅读子项目（`novel`）：阅读器页面 `/novel` 与 `/api/history`、`/api/downloads`、`/api/bookmarks`、`/api/config`、`/api/library`（导航页上也会多出一段指向阅读器） |
 | `iwara/run.py` | 接口之上再挂 iwara 子项目（`iwara`）：视频页面 `/iwara`，以及 `/api/iwara/videos`、`/api/iwara/search`、`/api/iwara/video/{id}`、`/api/iwara/related/{id}`、`/api/iwara/resolve/{id}`、`/api/iwara/stream`、`/api/iwara/image`、`/api/iwara/thumbnail/{id}`、`/api/iwara/me`、`/api/iwara/auth` |
 
-两个入口脚本共用同一套命令行（`--host` / `--port` / `--reload` / `--check` / `--env`）与环境检查。只要接口的话，拷 `pixiv_bridge/` 一个包即可；要阅读器就连 `novel/` 一起拷（并在配置里启用扩展），要 iwara 就连 `iwara/` 一起拷（子项目都通过 `import pixiv_bridge.*` 用主项目，主项目不认识它们）。
+两个入口脚本共用同一套命令行（`--host` / `--port` / `--reload` / `--check` / `--env`）与环境检查——`iwara/run.py` 会在这套检查后面追加 3 项 iwara 专属自检（见「环境检查说明」）。只要接口的话，拷 `pixiv_bridge/` 一个包即可；要阅读器就连 `novel/` 一起拷（并在配置里启用扩展），要 iwara 就连 `iwara/` 一起拷（子项目都通过 `import pixiv_bridge.*` 用主项目，主项目不认识它们）。
 
 首次运行输出示例：
 
@@ -160,17 +160,25 @@ INFO:     Uvicorn running on http://127.0.0.1:8765
 
 ### 环境检查说明
 
-每次启动前自动执行 5 项检查：
+每次启动前自动执行 5 项检查（`iwara/run.py` 入口还会多打 3 项 iwara 专属检查，见下）：
 
 | 检查项 | 失败影响 | 说明 |
 | --- | --- | --- |
 | `python`（版本 ≥ 3.10） | **中止启动** | 代码使用了 `list[str] \| None` 语法 |
 | `deps`（fastapi/uvicorn/httpx） | **自动安装后复查**，仍失败则中止 | 用 `pip install -r requirements.txt` 自动下载；有本地 `wheels/` 时优先离线安装 |
 | `files`（`run.py` / `requirements.txt`） | 仅警告，不中止 | 拷贝项目时漏文件的自检（阅读器页面属于 `novel/`，不在接口项目的清单里） |
-| `port`（监听端口） | **中止启动** | 提示换端口（`--port` 或 `PIXIV_BRIDGE_PORT`） |
+| `port`（监听端口） | **中止启动**（`--check` 下只警告） | 提示换端口（`--port` 或 `PIXIV_BRIDGE_PORT`）。`--check` 只校验、不监听端口，所以端口被占时照常给出结论，真正启动时才中止 |
 | `network` / `ech` / `proxy`（Pixiv 域名连通性） | 仅警告，不中止 | 三选一：设置 `PIXIV_PROXY` 时真发一次经代理的请求（`proxy` 项）；开启 `PIXIV_BRIDGE_ECH=1` 时真发一次 ECH 请求（`ech` 项）；否则用内置 IP 池 + 无 SNI TLS 探测（`network` 项）。不可达时按当前模式给出改 ECH / 改无 SNI / 改代理的提示，ECH 被 RST 时会直接点明“当前网络在阻断 ECH 扩展” |
 
-跳过端口检查（仅校验登录）：`python run.py --check`（iwara 入口是 `python iwara/run.py --check`）。
+校验登录态并退出（不启动服务，但**同样做上面全部 5 项**，其中 `port` 只警告）：`python run.py --check`。`iwara` 入口是 `python iwara/run.py --check`，它在同一张表里追加 3 项：
+
+| iwara 检查项 | 失败影响 | 说明 |
+| --- | --- | --- |
+| `iwara 依赖` | 仅警告，不中止 | 真 `import curl_cffi`（不看包在不在，看能不能用——ABI 不匹配也照样失败），附版本号 |
+| `iwara 网络` | 仅警告，不中止 | 真发一次 `GET /videos?limit=1`，确认 `api.iwara.tv` 可达。只探 TCP 不够——真正的坎是 Cloudflare 挑战，必须真发一次请求 |
+| `iwara 登录` | 仅警告，不中止 | 没配 token 就报「匿名模式」（公开视频含 R18 照常看），配了就真刷一次 access token 并读用户名；失败提示重新 `python iwara/get_token.py` |
+
+这三项**故意不在致命清单里**：iwara 依赖缺失或 API 不可达时入口仍能启动（图片/其它接口照用），所以只提示不中止。
 
 ### 获取 refresh_token（三种方式任选）
 
@@ -266,6 +274,7 @@ pixiv-bridge/
 │   ├── client.py       iwara 客户端：种子 IP 池 + 浏览器指纹 TLS + 直链解析 + Range 探测
 │   ├── tokens.py        登录态落盘（data/iwara_tokens.json，与 pixiv 的 tokens.json 分开）
 │   ├── get_token.py     可选：交互式登录一次（邮箱 + 密码），解锁订阅内容
+│   ├── envcheck.py      iwara 专属自检（依赖 / api.iwara.tv / 登录态），经 extra_checks 追加到入口检查表
 │   ├── app.py          组装：把 IwaraClient 挂到 app.state，再挂本子项目路由
 │   ├── web/index.html  内置 Web 页面：视频浏览 / 搜索 / 播放（详情页 + 相关视频 + 清晰度切换），挂在 `/iwara` 上
 │   ├── requirements.txt 本子项目额外依赖（curl_cffi，刻意不放进根清单）
@@ -304,7 +313,7 @@ pixiv-bridge/
 │       ├── user.py     用户 / 关注
 │       ├── pixiv_novel.py  小说 / 追更（/api/novel/* 属于接口层，仍在主项目；名字里的 pixiv_ 是为了和 novel/ 阅读器区分）
 │       └── misc.py     健康检查 / 通用翻页 / 图片代理
-├── tests/              单元测试（375 项：300 主项目 + 75 iwara）
+├── tests/              单元测试（390 项：305 主项目 + 85 iwara）
 ├── openssl-libs/       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -672,13 +681,13 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 - `GET /api/config` 多返回两个字段：`warnings`（上面那些提示）与 `writable`（真写一个探针文件判断数据目录能不能写，`{"ok": bool, "dir": "...", "reason": "..."}`），页面在保存前就能提示；
 - 跨文件系统的 `os.replace`（安卓 `/sdcard` 的 FUSE 就会这样，报 `EXDEV`）不再白等重试，直接退回「原地覆盖写」。
 
-还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，283 项应全绿（iwara 的 69 项会跳过，见下）。
+还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，主项目的用例应全绿（iwara 的 85 项会跳过，见下）。
 > **安卓 / Termux**：请把项目放在 Termux 家目录里（例如 `~/pixiv-bridge`），不要把数据目录指到 `/sdcard` 下的路径。Termux 上依赖会自动换成纯 Python 的 `requirements-termux.txt`（见 INSTALL.md，pydantic 1.x 与 2.x 都支持），与这条路径限制无关。
 
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 或 python -m pytest tests -q，375 项应全绿
+python -m unittest discover -s tests       # 或 python -m pytest tests -q，390 项应全绿
 python scripts/check_boundary.py           # 拆分边界自检
 ```
 
@@ -691,7 +700,7 @@ python scripts/check_boundary.py           # 拆分边界自检
 
 改了 imports、挪了路由或动了入口脚本后跑一下它，比等到运行时才 404 省事。测试给 `novel` 那一层的用例统一走 helper（`tests/test_bridge.py`），因为三台账 / 配置 / 书架 / 阅读器页面现在都由子项目挂载，用主项目的 `create_app` 打这些路径会 404。
 
-`iwara` 的用例在 `tests/test_iwara.py`（75 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 75 项会**整片跳过**（显示 `OK (skipped=75)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
+`iwara` 的用例在 `tests/test_iwara.py`（85 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求（`--check` 那三项也是把 `IwaraClient` 整个换掉再断言）。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 85 项会**整片跳过**（显示 `OK (skipped=85)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
 
 ## 打包与移植（换机 / 离线部署）
 
@@ -816,8 +825,9 @@ cd pixiv-bridge
 cp .env.example .env      # Windows: copy .env.example .env
 # 编辑 .env：填入 PIXIV_REFRESH_TOKEN（以及需要的 PIXIV_BRIDGE_ECH 等）
 # 要小说阅读器的话，再加一行 PIXIV_BRIDGE_EXTENSIONS=novel
-python run.py --check     # 期望：python / deps / files / ech(或 network) 全 OK + 登录成功
+python run.py --check     # 期望：python / deps / files / ech(或 network) 全 OK + 登录成功（port 只警告）
 python run.py             # 启动（配了扩展就一起挂上；浏览器打开 http://127.0.0.1:8765/ 是导航页）
+# 想连 iwara 一起用就换入口：python iwara/run.py --check / python iwara/run.py
 ```
 
 ## 部署
