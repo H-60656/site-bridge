@@ -6,7 +6,7 @@
 - 安卓 / Termux（以及其它 Linux）走 [第 2 节](#2-安卓--termux以及-其它-linux)
 - 只想给别的程序调用接口：装好、登录好之后，接口地址是 `http://127.0.0.1:8765/api/...`
 
-> **入口只有两个，别搞混**：一键脚本（`start.bat` / `start.sh`）和 `python run.py` 跑的是**同一个接口项目**，浏览器打开 `http://127.0.0.1:8765/` 会看到**导航页**（不挂扩展时列出接口文档等自带入口）；要下面第 5 步那个小说阅读器页面，请在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel` 后**还是用原来那个启动方式**（阅读器没有自己的入口脚本了，见「附属项目（扩展）」），阅读器在 `/novel`。另有第二个入口 `python iwara\run.py`，在接口之上多挂 iwara.tv 视频接口，见第 5 节。
+> **入口只有两个，别搞混**：一键脚本（`start.bat` / `start.sh`）和 `python run.py` 跑的是**同一个接口项目**，浏览器打开 `http://127.0.0.1:8765/` 会看到**导航页**（不挂扩展时列出接口文档等自带入口）；要下面第 5 步那个小说阅读器页面，请在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel` 后**还是用原来那个启动方式**（阅读器没有自己的入口脚本了，见「附属项目（扩展）」），阅读器在 `/novel`。另有第二个入口 `python iwara\run.py`，在接口之上多挂 iwara.tv 视频接口（视频页面 `iwara_web` 同样是扩展、默认不挂，见第 5 节）。
 
 ---
 
@@ -57,7 +57,7 @@
 > PIXIV_BRIDGE_EXTENSIONS=novel
 > ```
 >
-> `--port` 等参数用法完全不变。两个入口的接口部分完全一样，差别只在多挂了什么：默认（不写扩展）时 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、`/api/health` 等自带入口，此时不会有阅读器链接），加了 `PIXIV_BRIDGE_EXTENSIONS=novel` 就多出 `/novel` 阅读器页面（导航页上也会多出指向它的链接）和阅读历史 / 下载 / 收藏 / 书架那几个接口，`iwara\run.py` 则多挂 `/api/iwara/*`。
+> `--port` 等参数用法完全不变。两个入口的接口部分完全一样，差别只在多挂了什么：默认（不写扩展）时 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、`/api/health` 等自带入口，此时不会有阅读器链接），加了 `PIXIV_BRIDGE_EXTENSIONS=novel` 就多出 `/novel` 阅读器页面（导航页上也会多出指向它的链接）和阅读历史 / 下载 / 收藏 / 书架那几个接口，`iwara\run.py` 则多挂 `/api/iwara/*`；要 iwara 的视频页面，就在 `.env` 里再加一项 `iwara_web`（`PIXIV_BRIDGE_EXTENSIONS=iwara_web`，多项用逗号分隔；它调 `/api/iwara/*`，所以要配合 `iwara\run.py` 用）。
 
 - 第一次运行会：自动生成 `.env` 配置文件 → 自动下载依赖（**1~3 分钟，属正常**）→ 打印 5 行检查结果 → 开始监听。
 - 看到类似下面的内容就成功了：
@@ -252,8 +252,8 @@ PIXIV_PROXY=http://127.0.0.1:7890
 
 | 平台 | 启动 |
 | --- | --- |
-| Windows | 只需接口：`start.bat`；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `start.bat`；要用 iwara 视频：`python iwara\run.py` |
-| Termux / Linux | 只需接口：`cd pixiv-bridge && sh start.sh`；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `sh start.sh`；要用 iwara 视频：`python3 iwara/run.py` |
+| Windows | 只需接口：`start.bat`；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `start.bat`；要用 iwara 视频：`python iwara\run.py`（要 iwara 视频页面再加 `iwara_web`） |
+| Termux / Linux | 只需接口：`cd pixiv-bridge && sh start.sh`；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `sh start.sh`；要用 iwara 视频：`python3 iwara/run.py`（要 iwara 视频页面再加 `iwara_web`） |
 
 > 差别只在多挂了什么：默认（`run.py`，含 `start.bat` / `start.sh`）是纯接口，浏览器打开 `/` 是**导航页**（列出接口文档、健康检查等自带入口）；在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 就在同一个入口上多挂了小说阅读器页面（`http://127.0.0.1:8765/novel`，导航页上也会多一段链接）与阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara/run.py` 多挂的是 `/api/iwara/*`（视频浏览、解析直链、代转播放），它的 `/` 是同一个导航页、额外多一段 iwara 自己的入口。命令行参数（`--host` / `--port` / `--reload` / `--check`）都一样。
 
@@ -269,7 +269,7 @@ PIXIV_PROXY=http://127.0.0.1:7890
 - 网页（小说阅读器，**需在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel`**，在 `/novel`）：<http://127.0.0.1:8765/novel>；没启用扩展时这里是 404，属正常
 - 自带的交互式接口文档（各入口都有）：<http://127.0.0.1:8765/docs>
 - 健康检查：<http://127.0.0.1:8765/api/health>
-- iwara 视频页面（**需 `iwara/run.py` 入口**）：<http://127.0.0.1:8765/iwara>；用另一个入口时是 404，属正常
+- iwara 视频页面（**需 `iwara/run.py` 入口 + `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`**）：<http://127.0.0.1:8765/iwara>；用另一个入口、或没挂 `iwara_web` 时是 404，属正常
 - iwara 视频接口（**需 `iwara/run.py` 入口**）：<http://127.0.0.1:8765/api/iwara/videos>；用另一个入口时是 404，属正常
 - 给别的程序调用，例如：
 
@@ -280,6 +280,15 @@ PIXIV_PROXY=http://127.0.0.1:7890
 - 完整接口清单见 `README.md`。
 
 **搬机器 / 分享给别人**：整个项目文件夹拷过去即可，但**不要拷** `.env`、`data\` 目录（里面有你的账号凭证 `data\tokens.json`，以及阅读历史、下载记录、收藏台账和页面配置）、`.venv`、`__pycache__`。反过来，如果只是自己换台电脑、想把进度带走，**只拷 `data\` 目录**就够了。详见 `README.md` 的「打包与移植」。
+
+**只分享一部分**：项目现在是四块（两个接口项目 + 两个扩展包），可以按用途单独打包。跑一条命令就能生成六个现成的分享包（纯接口 / 纯 iwara 接口 / 两个扩展包 / 两个配好的组合包）：
+
+```bash
+python scripts/make_share_packages.py          # 六个包全做，产物在 dist/
+python scripts/make_share_packages.py --list   # 看看有哪几个
+```
+
+每个包内都有自己的一份 `README.md`，写清这是接口包还是扩展包、怎么启动。**扩展包（`novel` / `iwara_web`）不能单独启动**：把包里的同名目录拷进接口项目根，再在 `.env` 里用 `PIXIV_BRIDGE_EXTENSIONS` 启用即可。详见 `README.md` 的「一键生成分享包」。
 
 ---
 
@@ -299,7 +308,8 @@ PIXIV_PROXY=http://127.0.0.1:7890
 | 登录时报验证码/错误 | 改用 `get_token.py` 的「2) 浏览器授权」 |
 | 网页（小说阅读器）打不开 / `404` | 阅读器现在在 `/novel`，不在 `/`（`/` 是导航页，一定打得开）。没启用扩展时 `/novel` 返回 404 属正常，要阅读器就在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel`，然后**用原来的方式重启**（`start.bat` / `sh start.sh` / `python run.py`） |
 | 启动时打印 `[扩展] …找不到入口文件…` 后退出 | `.env` 里 `PIXIV_BRIDGE_EXTENSIONS` 写的目录名不对（相对路径按项目根算）。要小说阅读器就写 `novel`，并确认 `novel/extension.py` 确实拷过来了 |
-| `/iwara` 或 `/api/iwara/...` 全部 404 | 用错入口了：iwara 视频页面与接口只在 `python iwara\run.py` 下挂载，另一个入口没有 |
+| `/iwara` 打不开 / 404 | 视频页面现在归 **`iwara_web` 扩展包**：要 `python iwara\run.py` 入口 + `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`，并且 `iwara_web/` 目录要拷过来 |
+| `/api/iwara/...` 全部 404 | 用错入口了：iwara 接口只在 `python iwara\run.py` 下挂载，另一个入口没有 |
 | iwara 入口报缺 `curl_cffi` | 依赖没装上。手动补一次：`pip install -r iwara/requirements.txt`（Termux 上若编不过，用 `pkg install python-cryptography` 之类先从 `pkg` 装好底层库再重试） |
 | iwara 接口返回 `cloudflare_challenge` | 站点把本机 IP 或 TLS 指纹拦了：换个网络/出口 IP 重试，或确认装的是真正的 `curl_cffi`（不要用别的 HTTP 库顶替） |
 | iwara 视频能解析出直链但播不动 | 该视频某个 CDN 花名主机（或种子 IP）在本机不通。`/api/iwara/resolve` 默认会逐个源探测并返回能用的那个（`chosen`）；`chosen` 为 `null` 时看 `probe_error` 里已尝试过哪些主机 |
