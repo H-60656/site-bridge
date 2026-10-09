@@ -403,7 +403,62 @@ def parse_page_links(body: str) -> list:
     )
 
 
+# 上游对「取不到的画廊」**不返回 404**，而是 200 + 一段几十字节的纯文本存根。
+# 实测三种（括号里是字节数）：
+#   ``Key missing, or incorrect key provided.``                          (39)
+#   ``No gallery specified.``                                           (21)
+#   ``Gallery not found. If you just added this gallery, you may have …`` (172)
+# 光看状态码会把它们当成功页面，于是解析出一具空壳（title 空、page_links 空、
+# showing.total 为 None）。用「有没有 #gn / #gdc / #gdd 这些详情页骨架」来判：
+# 实测 31 张真实详情页（含 ?p= 后续屏）全部命中、3 个存根全部落空。
+_DETAIL_MARK_RE = re.compile(r'id="(?:gn|gdc|gdd|gdn)"')
+
+_GALLERY_STUB_PATTERNS = (
+    ("key", re.compile(r"Key missing, or incorrect key provided", re.I)),
+    ("no_gallery", re.compile(r"No gallery specified", re.I)),
+    ("removed", re.compile(r"Gallery not found", re.I)),
+)
+
+
+def parse_gallery_error(body: str) -> tuple[str, str] | None:
+    """这段响应是不是「取不到画廊」的存根？是就返回 ``(code, 原始文本)``。
+
+    返回 ``None`` 表示这是一张正常的详情页（有 ``#gn`` / ``#gdc`` / ``#gdd``
+    之类的骨架）。判据优先看骨架，其次才认那几句存根文字——这样万一上游改了
+    文案，正常页面仍不会被误判成错误。
+    """
+    body = body or ""
+    if _DETAIL_MARK_RE.search(body):
+        return None
+    for code, pattern in _GALLERY_STUB_PATTERNS:
+        if pattern.search(body):
+            return code, text(body)
+    return None
+
+
+def parse_s_page_error(body: str) -> tuple[str, str] | None:
+    """``/s/`` 大图页的同一套存根（200 + ``Invalid page.``）。
+
+    返回 ``None`` 表示页里有 ``<img id="img" …>``，是正常的。定义在此处只为紧
+    挨着 ``parse_gallery_error``，用到的 ``_IMG_SRC_RE`` 在下面大图页一节里。
+    """
+    body = body or ""
+    if _IMG_SRC_RE.search(body) or _IMG_SRC_RE2.search(body):
+        return None
+    for code, pattern in _S_STUB_PATTERNS:
+        if pattern.search(body):
+            return code, text(body)
+    return None
+
+
 # ---------------------------------------------------------------- 大图页
+
+# ``/s/`` 大图页也有同一套路：组合不对时 200 + ``Invalid page.``（13 字节）。
+# 正常页一定有 ``<img id="img" …>``，所以判据就是那张图在不在。
+_S_STUB_PATTERNS = (
+    ("invalid", re.compile(r"Invalid page", re.I)),
+    ("key", re.compile(r"Key missing, or incorrect key provided", re.I)),
+)
 
 _IMG_SRC_RE = re.compile(r'<img\b[^>]*id="img"[^>]*src="([^"]+)"', re.S)
 _IMG_SRC_RE2 = re.compile(r'<img\b[^>]*src="([^"]+)"[^>]*id="img"', re.S)

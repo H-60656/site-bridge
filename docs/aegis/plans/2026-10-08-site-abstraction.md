@@ -648,3 +648,60 @@ CF 的**控制面与 Pages 托管面在本机可达**（`_scratch/_probe_cf_rela
 - **硬编码的路由清单不止一处。** 改完 `scripts/sites.py` 与 `len(paths)` 断言后全量测试仍失败：`tests/test_ehviewer.py:1718 test_the_sites_registry_knows_about_ehviewer` 里还有一个 9 元素 frozenset 是独立写死的，报 `Items in the first set but not the second: '/api/eh/page' '/api/eh/popular'`。教训：加端点时不能只 grep 路由名字符串，**断言用的是集合字面量、grep 关键字未必命中**，跑一遍全量测试才是可靠手段。
 - **假客户端会掩盖真缺陷。** 若 `_FakeEhClient` 自己实现一套分页算术，新增的 `/images` 断言测的就只是假货；改成调用真实 `pagination()` 后，路由测试才真正覆盖生产逻辑。
 
+## 20. 提交后冒烟揪出的真缺陷：「不存在」可以是 HTTP 200（2026-10-09）
+
+第 19 节以 `ea60f0f` 提交，**全部 858 项离线测试通过**。随后照例做一次**真实链路**冒烟（非单测），立刻发现所有离线测试都覆盖不到的问题。
+
+### 20.1 症状
+
+对一批真实画廊逐个取详情时，有几个返回「成功但空」：`title=''`、`page_links=0`、`showing={'from': None, 'to': None, 'total': None}`，`gid` 还被兜底逻辑填回去了。既不是 404，也不抛错。
+
+### 20.2 根因
+
+上游对「取不到的画廊」**不返回 404**，而是 **HTTP 200 + 一句纯文本**。直取正文实测（`c.request('GET', f'https://e-hentai.org/g/{gid}/{tok}/')`，未经解析）：
+
+| 输入 | 状态码 | 字节数 | 正文 |
+| --- | --- | --- | --- |
+| `4242119/0de46151`、`1/aaaaaaaaaa` | 200 | 39 | `Key missing, or incorrect key provided.` |
+| `0/0000000000` | 200 | 21 | `No gallery specified.` |
+| `999999999/bbbbbbbbbb` | 200 | 172 | `Gallery not found. If you just added this gallery, you may have to wait a short while before it becomes available. It might also have been reverted to its previous version.` |
+
+`_get_html` 只在 `status_code == 404` 时抛 `EhNotFoundError`，200 于是被放行，`parse_detail()` 在一段纯文本上什么也解析不出来 —— **空壳**。
+
+`/s/` 大图页有同一套：`GET /s/aaaaaaaaaa/1-1` → **200 + 13 字节** `Invalid page.`。
+
+### 20.3 判据与验证
+
+不能用文案当判据（会变），要用**页面骨架**：
+
+- 详情页正常则必有 `#gn` / `#gdc` / `#gdd` / `#gdn` → `_DETAIL_MARK_RE = re.compile(r'id="(?:gn|gdc|gdd|gdn)"')`；
+- 大图页正常则必有 `<img id="img" …>` → 复用既有的 `_IMG_SRC_RE` / `_IMG_SRC_RE2`。
+
+判定顺序：**先看骨架，有骨架直接放行**（哪怕文案恰好出现在正常页里）；没有骨架才去匹配那几句存根文字；两者都不中则放行（保持原有空壳行为，不乱报 404）。
+
+实测分离度（探针 `_scratch/_probe_eh_stub.py`，`EXIT=0`）：
+
+- 真实详情页 **31 张全部命中骨架、零误判** —— 含首页 25 个结果、同一画廊的 `?p=1`/`?p=2`/`?p=16`/`?p=17`/`?p=999` 各屏（`?p=16` 起是与首屏同字节数的 14814 B 尾屏）；3 个存根全部落空。
+- 真实 `/s/` 页有 `<img id="img">`，`Invalid page.` 没有。
+
+### 20.4 改动
+
+- `ehviewer/parse.py`：新增 `_DETAIL_MARK_RE`、`_GALLERY_STUB_PATTERNS`（`key` / `no_gallery` / `removed`）、`parse_gallery_error(body) -> tuple[str, str] | None`；新增 `_S_STUB_PATTERNS`（`invalid` / `key`）与 `parse_s_page_error(body)`。两者都返回 `(code, 上游原文)` 或 `None`。
+- `ehviewer/client.py`：`gallery()` 在 `_get_html` 之后、`parse_detail()` 之前拦一道，命中则抛 `EhNotFoundError`（404 / `reason: "not_found"`），消息含 code 与上游原文；`image_page()` 同样在 `parse_s_page()` 之前拦一道。
+- `tests/test_ehviewer.py`：新增 4 个存根夹具（`STUB_KEY` / `STUB_NO_GALLERY` / `STUB_REMOVED` / `STUB_INVALID_PAGE`，原文照抄）+ 11 个用例（三种存根各识别一次、保留上游原文、真实详情页放行、**骨架优先于文案**、无关 HTML 不误判、`/s/` 三种情形、客户端层 200 存根转 404 且消息带原文）。
+- 文档：`README.md`（测试计数 858 → 869、新增实现说明第 6 条）、`DIRECT.md` §3.2「陷阱二」补第三类「200 配纯文本」（第 90-95 行那节）。
+
+### 20.5 验证结果
+
+- `tests.test_ehviewer`：**Ran 157 tests … OK**（146 → 157）。
+- 全量：**Ran 869 tests … OK (skipped=1)**，21.7 s（`test_bridge` 334 + `test_iwara` 199 + `test_asmr_one` 134 + **`test_ehviewer` 157** + `test_packaging` 45）。
+- `check_boundary.py` → 路由数不变（`ehviewer 15 条，自有 9 条`），「边界检查通过」；`make_share_packages.py --check` → 8 个包全就绪。
+- **真实链路回归**（探针 `_scratch/_probe_eh_stubfix.py`，`EXIT=0`）：三个画廊存根全部变成 `EhNotFoundError(404)` 且消息含原文与 code；真实画廊 `4241779/29578e0069` 仍 `OK total=322 links=20 pages=17`；`/s/aaaaaaaaaa/1-1` → 404，真实 `/s/bb925ff2a5/4241779-1` → 正常拿到直链。
+
+### 20.6 教训
+
+- **离线测试全绿不等于对。** 这一条缺陷的性质是「上游的行为与代码的假设不一致」，夹具全是我按假设写的，所以 869 项里没有任何一项可能发现它；只有打真实请求才会暴露。**每次加完取数逻辑，都要真跑一次链路。**
+- **状态码是上游的实现细节，不是契约。** 报「不存在」时它可能用 404，也可能用 200 加一句话。凡是把状态码当唯一判据的地方（`_get_html` 的 `if resp.status_code == 404`）都值得回头问一句。
+- **判据要选不变的东西。** 文案会改，骨架不会；所以先认骨架、文案只作兜底，这样上游换句话说同一件事时不会把正常页判死。
+
+

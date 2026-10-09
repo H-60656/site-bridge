@@ -448,6 +448,13 @@ class EhClient:
         if page > 1:
             url += f"?p={page - 1}"
         body = await self._get_html(url)
+        # 上游对「取不到的画廊」不返回 404，而是 200 + 一句存根（见 parse.py）。
+        # 不在这里拦住的话，下面会解析出一具空壳：title 空、page_links 空、
+        # showing.total 为 None —— 调用方只会看到「这个画廊没有图」。
+        stub = _parse.parse_gallery_error(body)
+        if stub is not None:
+            code, raw = stub
+            raise EhNotFoundError(f"{url} 取不到画廊（{code}）：{raw}")
         data = _parse.parse_detail(body)
         if not data.get("gid"):
             data["gid"] = int(gid)
@@ -467,6 +474,12 @@ class EhClient:
         if not is_image_page(url):
             raise EhError(f"不是 E-Hentai 的大图页：{url}", status=400)
         body = await self._get_html(url)
+        # 同一类存根：``/s/`` 组合不对时也是 200 + ``Invalid page.``（13 字节），
+        # 解析出来 image_url 为空。这里明确报 404，别让上层以为「这页没图」。
+        stub = _parse.parse_s_page_error(body)
+        if stub is not None:
+            code, raw = stub
+            raise EhNotFoundError(f"{url} 不是有效的大图页（{code}）：{raw}")
         page = _parse.parse_s_page(body)
         page["url"] = url
         if not page.get("image_url"):

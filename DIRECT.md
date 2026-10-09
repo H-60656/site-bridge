@@ -94,6 +94,8 @@ iwara 更进一步，用一张**实测可用的边缘 IP 表**（`iwara/client.p
 
 这两件事必须分开配置，不能统一重试。
 
+**陷阱二之补：还有第三种「找不到」—— HTTP 200 配一句纯文本。** 状态码本身也可能是谎话。E-Hentai 对取不到的画廊和无效大图页都回 **200**，正文只有一句话：`Key missing, or incorrect key provided.`（39 字节）/ `No gallery specified.`（21 字节）/ `Gallery not found. …`（172 字节）/ `Invalid page.`（13 字节）。只看状态码就会把它当成功页面，解析出一具**空壳**（标题空、图片链空、`showing.total` 为 `null`）——调用方看到的是「这个画廊没有图」，比 404 难查得多。判据不能靠文案（文案会变），要靠**页面骨架**：正常详情页一定有 `#gn` / `#gdc` / `#gdd`，正常大图页一定有 `<img id="img" …>`；有骨架就是正常页，没有才去看那几句话。见 `ehviewer/parse.py` 的 `parse_gallery_error` / `parse_s_page_error`，两者都在 `ehviewer/client.py:gallery` / `image_page` 里转成 404。**这条对任何上游都值得先问一句：它报「不存在」时，到底换没换状态码。**
+
 **边缘按内容路由、花名子域互通。** iwara 的每个视频源都挂在一个花名子域上（`firefly` / `zani` / `swan` / `bailu` / `yukong` / `welt` / `pela` …），但实测发现**同一份内容钉到池中任一可用 IP 都能取到**（少数转码源例外）。这带来两个好处：不必为每个花名维护解析，而且**某个花名整体不可达时可以整体绕过**。这也是「未登记的主机直接用整池去试」（`iwara/client.py:334-337`）的依据。
 
 ### 3.3 TLS 层：分「封锁」和「反爬」两种

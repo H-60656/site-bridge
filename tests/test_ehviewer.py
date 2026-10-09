@@ -198,6 +198,19 @@ IMAGE_URL = (
 IMAGE_PAGE_URL = "https://e-hentai.org/s/b73be0a953/4240495-3"
 GALLERY_TOKEN = "8bcad20a1a"
 
+# 上游对「取不到的画廊」**不返回 404**，而是 200 + 下面这几句纯文本（原文照抄，
+# 括号里是实测字节数）。光看状态码会解析出一具空壳。
+STUB_KEY = "Key missing, or incorrect key provided."
+STUB_NO_GALLERY = "No gallery specified."
+STUB_REMOVED = (
+    "Gallery not found. If you just added this gallery, you may have to wait a "
+    "short while before it becomes available. It might also have been reverted "
+    "to its previous version."
+)
+
+# ``/s/`` 大图页的同一类存根（13 字节）。
+STUB_INVALID_PAGE = "Invalid page."
+
 
 class _FakeResp:
     """``request()`` 用得到的那几个属性。"""
@@ -419,6 +432,46 @@ class EhParseTestCase(unittest.TestCase):
         self.assertEqual(data["cover"], "")
         self.assertEqual(data["url"], "")
         self.assertEqual(data["tags"], [])
+
+    # ---------- 「取不到」的存根（200 + 纯文本，不是 404） ----------
+
+    def test_gallery_error_recognises_the_three_stubs(self):
+        # 上游对取不到的画廊返回 200 + 一句纯文本；三种文案各有各的 code，
+        # 好让上层能区分「key 错了」和「画廊被删了」。
+        self.assertEqual(eh_parse.parse_gallery_error(STUB_KEY)[0], "key")
+        self.assertEqual(eh_parse.parse_gallery_error(STUB_NO_GALLERY)[0], "no_gallery")
+        self.assertEqual(eh_parse.parse_gallery_error(STUB_REMOVED)[0], "removed")
+
+    def test_gallery_error_returns_the_upstream_sentence(self):
+        code, raw = eh_parse.parse_gallery_error(STUB_KEY)
+
+        self.assertEqual(code, "key")
+        self.assertEqual(raw, "Key missing, or incorrect key provided.")
+
+    def test_gallery_error_passes_a_real_detail_page(self):
+        # 真实详情页有 #gn / #gdc / #gdd 骨架，绝不能判成存根。
+        self.assertIsNone(eh_parse.parse_gallery_error(DETAIL_BODY))
+
+    def test_gallery_error_prefers_the_skeleton_over_the_wording(self):
+        # 就算上游把存根那句话塞进正常页里，有骨架就当正常页——文案会变，
+        # 骨架不会。
+        mixed = DETAIL_BODY + "<p>No gallery specified</p>"
+
+        self.assertIsNone(eh_parse.parse_gallery_error(mixed))
+
+    def test_gallery_error_is_none_for_junk_without_the_wording(self):
+        # 空响应、无关 HTML 都不算存根（此时该走原来的空壳路径，别乱报 404）。
+        for body in ("", "<html><body>nothing</body></html>", None):
+            self.assertIsNone(eh_parse.parse_gallery_error(body))
+
+    def test_s_page_error_recognises_the_invalid_page_stub(self):
+        self.assertEqual(eh_parse.parse_s_page_error(STUB_INVALID_PAGE)[0], "invalid")
+
+    def test_s_page_error_passes_a_real_image_page(self):
+        self.assertIsNone(eh_parse.parse_s_page_error(S_PAGE_BODY))
+
+    def test_s_page_error_is_none_for_a_page_without_the_wording(self):
+        self.assertIsNone(eh_parse.parse_s_page_error("<div id='i3'></div>"))
 
     # ---------- 大图页 ----------
 
@@ -884,6 +937,26 @@ class EhClientRequestTestCase(unittest.TestCase):
         self.assertEqual(data["gid"], 99)
         self.assertEqual(data["token"], "aabbccdd")
 
+    def test_gallery_turns_a_200_stub_into_a_404(self):
+        # 不拦的话这里会返回一具空壳（title 空、page_links 空、total 为 None），
+        # 调用方只会看到「这个画廊没有图」——比 404 更难查。
+        for stub in (STUB_KEY, STUB_NO_GALLERY, STUB_REMOVED):
+            client = self._html_client(_FakeResp(200, text=stub))
+
+            with self.assertRaises(EhNotFoundError) as ctx:
+                asyncio.run(client.gallery(4240495, GALLERY_TOKEN))
+
+            self.assertEqual(ctx.exception.status, 404)
+
+    def test_gallery_stub_error_keeps_the_upstream_sentence(self):
+        client = self._html_client(_FakeResp(200, text=STUB_REMOVED))
+
+        with self.assertRaises(EhNotFoundError) as ctx:
+            asyncio.run(client.gallery(1, "aaaaaaaaaa"))
+
+        self.assertIn("Gallery not found", str(ctx.exception))
+        self.assertIn("removed", str(ctx.exception))
+
     def test_image_page_refuses_a_non_image_url(self):
         client = self._html_client(_FakeResp(200, text=S_PAGE_BODY))
 
@@ -909,6 +982,16 @@ class EhClientRequestTestCase(unittest.TestCase):
             asyncio.run(client.image_page(IMAGE_PAGE_URL))
 
         self.assertEqual(ctx.exception.status, 502)
+
+    def test_image_page_turns_a_200_stub_into_a_404(self):
+        # ``Invalid page.``（13 字节）也是 200，和画廊存根同一类问题。
+        client = self._html_client(_FakeResp(200, text=STUB_INVALID_PAGE))
+
+        with self.assertRaises(EhNotFoundError) as ctx:
+            asyncio.run(client.image_page(IMAGE_PAGE_URL))
+
+        self.assertEqual(ctx.exception.status, 404)
+        self.assertIn("Invalid page", str(ctx.exception))
 
 
 @unittest.skipUnless(HAVE_EH, SKIP_REASON)
