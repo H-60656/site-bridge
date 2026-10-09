@@ -3,7 +3,7 @@
 - 日期：2026-10-08
 - 触发需求（用户原话，m00001）："项目中存在错误布局，两个接口项目应该是同级的，错误修正后更新分享包；现在想抽象两个接口项目，方便后续实现其他接口项目"
 - 用户已确认的方案（m00066）：`depth=A`（彻底分层）+ `iwara_stack=只提供 iwara 接口`
-- 状态：**已完成**（2026-10-08 收尾，35 / 35，见第 7 节尾注与第 8 节实测）。第 12 节是同日追加的「根目录启动＝项目导航」；第 13 节是后续用本抽象落地的第三个站点 `asmr_one/`；第 14 节是第四个站点 `pornhub/`（抓取器）—— 两次加站点都验证了「实现侧零硬编码、只有壳文件与文档要手改」这条抽象承诺。
+- 状态：**已完成**（2026-10-08 收尾，35 / 35，见第 7 节尾注与第 8 节实测）。第 12 节是同日追加的「根目录启动＝项目导航」；第 13 节是后续用本抽象落地的第三个站点 `asmr_one/`；第 14 节是第四个站点 `pornhub/`（抓取器）—— 两次加站点都验证了「实现侧零硬编码、只有壳文件与文档要手改」这条抽象承诺；第 15 节是 pornhub 线上探活揪出的传输层致命缺陷及其修复（提交 `28a3c76`），含一条工程教训与一条已知未验证边界。
 
 ## 1. Goal
 
@@ -368,3 +368,49 @@ if __name__ == "__main__":
 - **打包自检**：`python scripts/make_share_packages.py --check` → **八个包**：`pixiv-api` 59、`iwara-api` 45、`asmr-api` 43、**`pornhub-api` 43**、`novel-extension` 17、`iwara_web-extension` 8、`pixiv-novel` 72、`iwara-iwara_web` 49 → `分享包处理完成`。`pornhub-api.zip` 不含其它站点目录与 `openssl-libs/`。
 - **文档**：`README.md` / `INSTALL.md` / `DIRECT.md` / `.env.example` 四份同步为四站点（含新增 `PORNHUB_BRIDGE_ECH` / `PORNHUB_BRIDGE_ECH_CONFIG` / `PORNHUB_BRIDGE_ECH_IPS`）。
 - **仍未验证**：pornhub 的真实抓取只做过 `client.py` 的解析路径核对与自检（`/api/pornhub/health` 等 5 个接口的响应形状基于 `window.initialState` 结构推断，未连真站跑通）——站点改版会让 `initialState` 字段名变掉、接口回 502，这是已知脆弱性。
+
+## 15. 后续追加：pornhub 线上探活揪出的传输层缺陷（修复提交 `28a3c76`）
+
+第 14.3 节把 pornhub 记为「只有离线单测」，本次补做**线上活体验证**（`pornhub/envcheck.py` 的 `extra_checks()` 直接对着真站跑），当场揪出四个站点里唯一一个「测试全绿但站点实际完全不可用」的缺陷。
+
+### 15.1 缺陷与根因
+
+线上探活输出：
+
+```
+pornhub 依赖 | True  | curl_cffi 0.15.0 已就绪
+pornhub 网络 | False | www.pornhub.com 不可达：www.pornhub.com 全部 IP 失败：'AsyncSession' object has no attribute 'curl'
+pornhub ECH  | False | pornhub.com 握手失败：pornhub.com 全部 IP 失败：'AsyncSession' object has no attribute 'curl'
+```
+
+根因：`pornhub/client.py` 的 `request()` 里写的是 `session.curl.setopt(CurlOpt.RESOLVE, [f"{host}:443:{ip}"])`，但 curl_cffi 0.15.0 的 **`AsyncSession` 只有 `.acurl`（`AsyncCurl`），没有 `.curl`** —— `.curl` 仅存在于同步 `Session`（实测 `hasattr(AsyncSession, "curl") is False`、`hasattr(AsyncSession, "acurl") is True`）。每次尝试都在这一行抛 `AttributeError`，被 `except Exception` 吞掉后换 IP 重试，`ip_attempts` 轮全败 → 抛 `PornhubChallengeError(... 'AsyncSession' object has no attribute 'curl')`。**所有出站请求 100% 必败，站点从未真正可用过。**
+
+修复（提交 `28a3c76`，`pornhub/client.py` +142/−47）：照 `iwara/client.py` 与 `asmr_one/client.py` 早就用对的模式重写——钉 IP 不再逐请求 `setopt`，而是**建会话时把 `CurlOpt.RESOLVE`（单个 IP）/ `CurlOpt.CONNECTTIMEOUT` / `CurlOpt.ECH` 一起放进会话级 `curl_options`**。这一步可行的前提已核实到 curl_cffi 源码：`AsyncSession.__init__` 保存 `self.curl_options`，`_request_once()` 每次请求都把它传给 `set_curl_options()`，所以会话级只需设一次。配套加了 `_tcp_reachable` TCP 预探测、`_dead_ips` + `mark_ip_dead`、`_session(host, ip=None)`、`_session_ips` 跟踪，失败即拉黑该 IP 并重建会话换 IP。
+
+另外确认 `SEED_IPS` 那 14 个 CF anycast 是从 `asmr_one/` 抄来的、**并不承载 Pornhub 边缘**（逐个探测是 6 秒超时或 `SSLError: Recv failure`，带 ECH 只是 `SSLV3_ALERT_HANDSHAKE_FAILURE`），注释已改写成实测结论，它只作为 DoH 无答案时的兜底。
+
+### 15.2 教训：离线桩照抄源码的错误 API，会让测试全绿却掩盖真缺陷
+
+这才是这次缺陷能藏住的原因：`tests/test_pornhub.py` 的传输层桩自己造了 `self.curl = _FakeCurl()`，而 `_FakeCurl.setopt()` 只记录 `CurlOpt.RESOLVE` —— **桩模仿的正是源码里那个错误的 API 写法**。于是 131 项测试全绿，却与真实 curl_cffi 完全脱节。
+
+修复时同步做了三件事，避免同类问题复发：
+1. **删掉 `_FakeCurl` 整个类**，桩不再假装 `AsyncSession` 有 `.curl`；
+2. 会话类断言改看 `AsyncSession` 构造入参的 `curl_options`（`CurlOpt.RESOLVE` 是单条 `"{host}:443:{ip}"`、`CONNECTTIMEOUT`、`CurlOpt.ECH`）；
+3. 新增 `test_session_rebuilds_when_the_ip_changes`：换 IP 必须重建会话，而不是复用旧会话偷偷改配置。
+
+**通用规则**：桩允不允许某个属性/方法，必须与实际依赖版本的行为对齐；当桩是自己「补」出来的 API（真实对象上并不存在）时，测试就在自证一个谎言。凡涉及第三方库调用约定的代码，离线测试通过不能替代一次真实调用（本次的机制实证是在本机可达的 `dns.alidns.com` 上做的：`AsyncSession(curl_options={CurlOpt.RESOLVE: ["dns.alidns.com:443:223.5.5.5"], CurlOpt.CONNECTTIMEOUT: 8})` 请求返回 200，同一会话 `hasattr(session, "curl") is False`）。
+
+修复后复验：`python -m unittest tests.test_pornhub` → **Ran 132 tests OK**（第 14.3 节的 131 项 + 新增的 `test_session_rebuilds_when_the_ip_changes`）；全量 `python -m unittest discover -s tests -t .` → **Ran 844 tests OK (skipped=1)**；`python scripts/check_boundary.py` → 边界通过（pornhub 11 / 自带 5，与第 14.3 节一致）。
+
+### 15.3 已知未验证边界：本机对外 TLS 被整体阻断
+
+修复后再跑线上探活，`AttributeError` 已消失，暴露出真实错误是 TLS 握手层：
+
+```
+www.pornhub.com 全部 IP 失败：Failed to perform, curl: (35) TLS connect error:
+error:10000410:SSL routines:OPENSSL_internal:SSLV3_ALERT_HANDSHAKE_FAILURE
+```
+
+进一步用裸 `ssl` 逐个换 SNI 对照（`www.pornhub.com` / `pornhub.com` / `asmr.one` / `example.com`），**全部 `ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接`**；连对照请求 `httpx.get("https://api.asmr.one/api/works?page=1")` 也是 `ConnectError [WinError 10054]`。
+
+**结论：与本项目代码无关，是本机网络环境（需代理）导致。** 因此 pornhub 的端到端验证在本机**只能到「不再抛 AttributeError、DoH 解析与 TCP 预探测链路正常选中 IP」这一层**；真实抓取（`/api/pornhub/health` 之外四个接口拿到真数据）在有代理的环境里仍需补做。此边界不改变第 14.3 节的「已知脆弱性」判断。

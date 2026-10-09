@@ -370,7 +370,7 @@ pixiv-bridge/
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
-├── tests/                              单元测试（843 项：框架与站点 334 + iwara 199 + asmr_one 134 + pornhub 131 + 打包 45）
+├── tests/                              单元测试（844 项：框架与站点 334 + iwara 199 + asmr_one 134 + pornhub 132 + 打包 45）
 ├── openssl-libs/                       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -841,7 +841,7 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 843 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + pornhub 131 + 打包 45）
+python -m unittest discover -s tests       # 844 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + pornhub 132 + 打包 45）
 python scripts/check_boundary.py           # 拆分边界自检
 python scripts/make_share_packages.py --check   # 分享包内容自检（不写 zip）
 ```
