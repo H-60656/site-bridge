@@ -164,6 +164,10 @@ class _FakeIwaraClient:
         self.closed = False
         self.probe_error = None
         self.related_error = None
+        # 未兜异常那类缺陷的回归口子：直接抛异常对象，状态码由它自己带。
+        self.list_error = None
+        self.search_error = None
+        self.video_error = None
         # 登录态相关（/api/iwara/auth 会读这几个字段）。
         self.refresh_token = None
         self.access_token = None
@@ -172,14 +176,20 @@ class _FakeIwaraClient:
 
     async def list_videos(self, **kwargs):
         self.calls.append(("list_videos", kwargs))
+        if self.list_error:
+            raise self.list_error
         return {"count": 1, "limit": kwargs.get("limit", 20), "page": 0, "results": [VIDEO]}
 
     async def search(self, query, **kwargs):
         self.calls.append(("search", query, kwargs))
+        if self.search_error:
+            raise self.search_error
         return {"count": 1, "limit": 20, "page": 0, "results": [VIDEO]}
 
     async def video(self, video_id):
         self.calls.append(("video", video_id))
+        if self.video_error:
+            raise self.video_error
         return dict(VIDEO, id=video_id)
 
     async def related(self, video_id):
@@ -1033,6 +1043,34 @@ class IwaraRouteTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json()["detail"], "上游炸了")
 
+    def test_videos_surfaces_upstream_failure_without_500(self):
+        # 上游对「不存在的 tag」之类回 500；这条路由曾经没兜异常，
+        # 对外退化成裸 500 Internal Server Error，上游原文与状态码全丢。
+        client = self._client()
+        self.fake.list_error = IwaraError("上游炸了", status=502)
+        response = client.get("/api/iwara/videos")
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"], "上游炸了")
+
+    def test_search_surfaces_upstream_failure_without_500(self):
+        client = self._client()
+        self.fake.search_error = IwaraError("搜索炸了", status=502)
+        response = client.get("/api/iwara/search?query=dance")
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"], "搜索炸了")
+
+    def test_video_detail_keeps_the_upstream_status_code(self):
+        # 上游对不存在的视频回 404 —— 曾经对外是 500，状态码被打平。
+        client = self._client()
+        self.fake.video_error = IwaraError(
+            "GET /video/00000000000000 -> 404: errors.notFound",
+            status=404,
+            reason="not_found",
+        )
+        response = client.get("/api/iwara/video/00000000000000")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("errors.notFound", response.json()["detail"])
+
     def test_video_page_is_not_part_of_the_api_project(self):
         # 视频页面已经拆到独立的扩展包 iwara_web：接口项目本身不提供它。
         # （页面能不能打开由 IwaraWebExtensionTestCase 验证。）
@@ -1377,6 +1415,21 @@ class IwaraEnvCheckTestCase(unittest.TestCase):
         self.assertFalse(net.ok)
         self.assertIn("api.iwara.tv 不可达", net.detail)
         self.assertIn("都连不上", net.detail)
+
+    def test_network_detail_reports_the_page_not_the_bogus_total(self):
+        # 上游 /videos 顶层的 count 恒等于 page*limit+n+1，不是总数
+        # （实测 20 组组合全部成立），所以自检只能说「本页」。
+        from iwara.envcheck import extra_checks
+
+        page = {"count": 2, "limit": 1, "page": 0, "results": [{"id": "x"}]}
+        patcher, _ = self._fake_client(videos=page)
+        with patcher:
+            results = extra_checks(self._settings())
+
+        net = [r for r in results if r.name == "iwara 网络"][0]
+        self.assertTrue(net.ok)
+        self.assertIn("本页 1 个视频", net.detail)
+        self.assertNotIn("共 2", net.detail)
 
     def test_broken_token_is_a_warning_with_the_relogin_hint(self):
         from iwara.client import IwaraAuthError

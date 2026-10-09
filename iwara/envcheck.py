@@ -82,8 +82,12 @@ async def _network_check() -> CheckResult:
     finally:
         await client.aclose()
 
-    count = page.get("count") if isinstance(page, dict) else None
-    detail = "api.iwara.tv 可达" + (f"（共 {count} 个视频）" if count is not None else "")
+    results = page.get("results") if isinstance(page, dict) else None
+    count = len(results) if isinstance(results, list) else None
+    # 不要把顶层 count 当总数报出去：上游 /videos 的 count 恒等于
+    # page*limit+n+1（实测 20 组组合全部成立），根本不是总数。
+    # 真正给总数的是 /search 那个端点。这里只报本页条数。
+    detail = "api.iwara.tv 可达" + (f"（本页 {count} 个视频）" if count is not None else "")
     return CheckResult(NET_NAME, True, detail)
 
 

@@ -40,7 +40,10 @@ async def list_works(request: Request, page: int = Query(1, ge=1)):
     ``dl_count``/``price``/``random``/``id``，``sort`` ∈ ``asc``/``desc``），
     非法值才会 400 —— 本站没把排序透出来，只给分页。
     """
-    result = await get_client(request).list_works(page=page)
+    try:
+        result = await get_client(request).list_works(page=page)
+    except AsmrError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
     return _decorate_page(result)
 
 
@@ -55,13 +58,20 @@ async def search(
     都是不生效的（后者甚至会被当成「搜 works 这个词」，恒定返回同一批
     117 条）。本端点对外仍是 ``?query=&page=``。
     """
-    result = await get_client(request).search(query, page=page)
+    try:
+        result = await get_client(request).search(query, page=page)
+    except AsmrError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
     return _decorate_page(result)
 
 
 @router.get("/work/{work_id}")
 async def work_detail(request: Request, work_id: str):
-    return decorate_work(await get_client(request).work(work_id))
+    try:
+        detail = await get_client(request).work(work_id)
+    except AsmrError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+    return decorate_work(detail)
 
 
 @router.get("/tracks/{work_id}")

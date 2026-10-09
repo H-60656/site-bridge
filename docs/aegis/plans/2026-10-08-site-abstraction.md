@@ -977,3 +977,75 @@ ee["a"].get("/api/search/" + encodeURIComponent(e),
 - 真实链路 `python asmr_one/run.py --check` → `asmr 搜索 OK 关键词确实在过滤（「癒し」9743 条，「zzzzqqxxnotexist」0 条）`。全量 `-m unittest discover -s tests -t .` → **Ran 900 tests … OK (skipped=1)**（`asmr_one` 141、`ehviewer` 181、`bridge` 334、`iwara` 199、`packaging` 45），`scripts/check_boundary.py` 通过（本次不动路由）。
 - 手册三件套同步改口径：`README.md` 的 asmr 自检「3 项（关掉后 2 项）」→「4 项（关掉后 3 项）」并新增 `asmr 搜索` 表行、两处测试计数 893 → **900**；`INSTALL.md` 两处；`DIRECT.md:261` 的 asmr 段落（同段顺带把 ehviewer 的三项补全为六项）。
 
+## 25. 第 20 / 23 / 24 节同一查询条件回灌出的第 6 种形态：错误状态码被「未兜异常」打平（2026-10-09）
+
+§23.6 留下那条教训 —— **「修缺陷要按『类别』修，不按『现场』修」** —— 在 §24 已经兑现过一次（在 asmr 上找到第 5 种形态）。§24.7 又补了一句「教训只有被当作查询条件用一次，才算真的学会」。这一节是**再灌一次**：把「上游 404 / 500 到了本端会不会变形」当查询条件，回去查 `iwara` 与 `asmr_one`，于是揪出与 ehviewer / asmr 都无关的第 6 种形态。
+
+### 25.1 症状（实测，非推测）
+
+用 `TestClient(SITE.build_app(...), raise_server_exceptions=False)` 打真实路由（探针 `_scratch/_probe_iwara_routes.py`、`_scratch/_probe_asmr_routes.py`）：
+
+| 请求 | 上游真实响应 | 修复前对外 | 修复后对外 |
+| --- | --- | --- | --- |
+| `GET /api/iwara/video/00000000000000` | **404** `{"message":"errors.notFound"}` | **500 `Internal Server Error`**（`text/plain`） | 404 + `{"detail":"GET /video/… -> 404: …errors.notFound"}` |
+| `GET /api/iwara/videos?tags=zzzzqqxxnotexist` | 500 `{"message":"errors.serverError"}` | **500 纯文本 `Internal Server Error`** | 500 + `{"detail":"GET /videos -> 500: …errors.serverError"}` |
+| `GET /api/asmr/work/999999999` | **404** `{"error":"未找到该音声"}` | **500 `Internal Server Error`** | 404 + `{"detail":"GET /api/work/999999999 -> 404: …未找到该音声"}` |
+| `GET /api/iwara/related/00000000000000`（对照，本来就兜了） | 500 | 500 + `{"detail": …}` | 不变 |
+
+两个要点：① **状态码被改写**（404 → 500），这比丢形状严重得多 —— 调用方按状态码做的任何分支都会走错；② **上游原文整段丢失**，只剩 FastAPI 的 `Internal Server Error`。
+
+### 25.2 根因（两层，缺一不可）
+
+1. **路由层没兜**。`iwara/routes/videos.py` 的 `/videos`(:35)、`/search`(:52)、`/video/{video_id}`(:64) 没有 `try/except`；`asmr_one/routes/works.py` 的 `/works`(:35)、`/search`(:47)、`/work/{work_id}`(:62) 同样没有。**同一个文件里其它路由全都兜了**（`/related`(:81-84)、`/resolve`(:104-107)、`/tracks`(:77-78)、`/cover`(:106-107)`…`）—— 这是最误导人的地方：读代码的人看到「这个文件的方式是 `except XxxError → HTTPException`」，很自然会以为漏掉的那几条只是「不会失败」。
+2. **站点没声明 `error_types`**。`pixiv_bridge/errors.py:58-63` 的 `install_error_handlers(app, error_types=())` 只给**传入的类型**与 `httpx.HTTPError` 注册处理器；`pixiv/app.py:48` 是四个站点里唯一传了的（`PIXIV_ERROR_TYPES = (PixivApiError, PixivRateLimitError, AuthError)`）。`iwara/app.py:106`、`asmr_one/app.py:76`、`ehviewer/app.py:92` 的 `create_bridge_app(...)` 都没传 —— **所以即使路由不兜，也没有第二道网**。
+
+两层叠加的结果：站点异常一路逃逸到 FastAPI 默认处理器，被改写成 500。
+
+### 25.3 设计取舍（用户 m04958 定）
+
+发现后我给了三个选项，**用户选了「只修状态码」**：
+
+1. **只修状态码（选定）** —— 六条路由补 `try/except`，把 `exc.status` 与 `exc.message` 原样映射成 `HTTPException`。形状仍是 FastAPI 的 `{"detail": …}`，**与同文件既有路由逐字一致**，不动 `pixiv_bridge/errors.py` 的统一形状，不破任何已写死的测试契约。
+2. 同时统一形状（三站声明 `error_types`，改走 `{"error": {"message", "reason"}}`）—— 会波及 `tests/test_iwara.py`、`tests/test_asmr_one.py`、`tests/test_ehviewer.py` 里十几处 `["detail"]` 断言，属对外契约变更，放弃。
+3. 先只记录 —— 留着不修，放弃（状态码错误是实打实的可用性缺陷）。
+
+值得记一笔：**「iwara 不走统一形状」不是漏改，是当时的决定** —— 计划文档 `:186` 明确写着 iwara 那时就传 `error_types=()`。所以选项 1 是**延续既有决定**，而不是打补丁。
+
+### 25.4 改动
+
+- `iwara/routes/videos.py`：`/videos`、`/search`、`/video/{video_id}` 各包 `try/except IwaraError as exc: raise HTTPException(status_code=exc.status, detail=exc.message) from exc`，与同文件既有写法逐字一致。
+- `asmr_one/routes/works.py`：`/works`、`/search`、`/work/{work_id}` 同形，异常类型为 `AsmrError`。
+- **没有**改 `app.py` 的 `error_types`（选项 1 明确不动统一形状）。
+
+### 25.5 同一轮揪出的第二个缺陷：自检把「伪总数」当总数报
+
+`iwara/envcheck.py` 的 `_network_check()` 原本这么写：
+
+```python
+count = page.get("count") if isinstance(page, dict) else None
+detail = "api.iwara.tv 可达" + (f"（共 {count} 个视频）" if count is not None else "")
+```
+
+但上游 `/videos` 顶层的 `count` **恒等于 `page*limit+n+1`**（实测 20 组 `page × limit` 组合全部成立，深至 `page=2000` 亦然），**根本不是总数**。本次自检用 `limit=1, sort=trending`，于是报出 **「共 2 个视频」** —— 一个看起来精确、实际毫无意义的数字。真正给总数的是 `/search` 那个端点（跨页恒定）。
+
+- 改为 `results = page.get("results")` / `count = len(results)` / 报 **「本页 N 个视频」**，并把「为什么不能报 count」写进注释。
+- **横向对照证明这是 iwara 独有**：`asmr_one/envcheck.py:101-106` 早就分得清「本页条数」（`len(works)`）与「真总数」（`pagination.totalCount`）；`ehviewer/envcheck.py:182` / `:307` 只报条数或干脆不报。**四个站点里只有 iwara 把伪 count 当总数。**
+- 回归用例 `tests/test_iwara.py::test_network_detail_reports_the_page_not_the_bogus_total`：桩 `{"count": 2, "limit": 1, "page": 0, "results": [{"id": "x"}]}`，断言 detail 含「本页 1 个视频」且 **`assertNotIn("共 2", …)`** —— 用「旧口径的字符串」当反向判据，是这类修复最省力的回归口子。
+
+### 25.6 验证
+
+- `tests/test_iwara.py` 新增 4 例（三条路由各一 + envcheck 一条），`tests/test_asmr_one.py` 新增 3 例（复用既有 `self.fake.error` 通用口子，无需加字段）。全量 `-m unittest discover -s tests -t .` → **Ran 907 tests in 21.776s … OK (skipped=1)**（900 → 907：`iwara` 199 → 203、`asmr_one` 141 → 144）。
+- 真实链路两个探针**全部改观**：iwara `/video/00000000000000` 由 500 → **404**；asmr `/work/999999999` 由 500 → **404**。探针自带的 `[非统一形状 !!]` 标记是它查 `'"error"' in r.text` 得出的 —— 选项 1 下必然如此（刻意保留 `{"detail": …}`），**不是缺陷**。
+- `scripts/check_boundary.py` → 框架外壳 6 / pixiv 60（自有 54）/ iwara 16（10）/ asmr_one 13（7）/ ehviewer 15（自有 9）/ novel ↗pixiv 多 10 / iwara_web ↗iwara 多 1 /「边界检查通过」（本次不动路由，数字不变）。
+- `scripts/make_share_packages.py --check` → 8 个包「内容就绪」（pixiv-api 59 / iwara-api 45 / asmr-api 43 / ehviewer-api 43 / novel-extension 17 / iwara_web-extension 8 / pixiv-novel 72 / iwara-iwara_web 49）。
+- 手册：两处测试计数 900 → **907**（`iwara 199 → 203`、`asmr_one 141 → 144`）。
+
+### 25.7 教训
+
+- **「这个异常有人兜」也是需要验证的假设。** 前面几节查的都是「上游怎么回错」，这一节查的是「错了之后本端会不会变形」—— **判据不在上游，在本端**。查法极简：拿一个必定失败的路径打一次路由，看状态码和响应体。**任何一条自带 `try/except` 的文件，都值得问一句「是不是每条都有」。**
+- **同站内不一致比全站一致更危险。** 如果 `videos.py` 一条都没兜，读代码的人会警觉；正因为 `/related` `/resolve` `/stream` 都兜得很漂亮，那三条裸路由反而像是「本来就返回不了错误」。**样式统一会掩盖遗漏。**
+- **状态码是契约的一部分，丢它比丢形状严重。** 丢形状只影响人类的读法，丢状态码会让程序走错分支（404 变 500 就是「不存在」被说成「服务器炸了」）。
+- **报给用户的数字，先问它是不是总数。** 伪 count 这类缺陷不会让任何测试变红 —— `iwara` 的自检一直「全绿」，包括它报出「共 2 个视频」的那一刻。**一个看起来精确的数字，比一句「可达」更容易骗过自检。**
+- **横向对照再一次是唯一有效手法。** 这次不是对照上游（换关键词），而是**对照同仓另外三个站点**：同样是「报条数」，asmr 分得清本页与总数、ehviewer 只报条数 —— 只有 iwara 混了。**同仓内同类代码的横向对照，和跨请求的横向对照一样便宜且有效。**
+
+

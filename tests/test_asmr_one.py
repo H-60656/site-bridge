@@ -1315,6 +1315,26 @@ class AsmrRouteTestCase(unittest.TestCase):
         self.assertIn("cover_url", body["works"][0])
         self.assertEqual(self.fake.calls[0], ("search", "催眠", 2))
 
+    def test_works_surfaces_upstream_failure_without_500(self):
+        # 这条路由曾经没兜异常，对外退化成裸 500 Internal Server Error，
+        # 上游原文与状态码全丢。
+        client = self._client()
+        self.fake.error = AsmrError("上游炸了", status=502)
+
+        response = client.get("/api/asmr/works")
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"], "上游炸了")
+
+    def test_search_surfaces_upstream_failure_without_500(self):
+        client = self._client()
+        self.fake.error = AsmrError("搜索炸了", status=502)
+
+        response = client.get("/api/asmr/search?query=催眠")
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"], "搜索炸了")
+
     # ---------- 详情与音轨 ----------
 
     def test_work_detail_is_decorated(self):
@@ -1325,6 +1345,16 @@ class AsmrRouteTestCase(unittest.TestCase):
         self.assertEqual(body["id"], 1669340)
         self.assertEqual(body["cover_url"], "/api/asmr/cover/1669340?type=main")
         self.assertEqual(self.fake.calls[0], ("work", "1669340"))
+
+    def test_work_detail_keeps_the_upstream_status_code(self):
+        # 上游对不存在的作品回 404 —— 曾经对外是 500，状态码被打平。
+        client = self._client()
+        self.fake.error = AsmrError("未找到该音声", status=404, reason="not_found")
+
+        response = client.get("/api/asmr/work/999999999")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "未找到该音声")
 
     def test_tracks_is_flattened_by_default(self):
         client = self._client()

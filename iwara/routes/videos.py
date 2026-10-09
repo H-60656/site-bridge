@@ -43,9 +43,12 @@ async def list_videos(
     user: str | None = None,
 ):
     """浏览 / 排行。``sort``: date|trending|popularity|likes|views；``rating``: all|general|ecchi。"""
-    result = await get_client(request).list_videos(
-        page=page, limit=limit, sort=sort, rating=rating, tags=tags, user_id=user
-    )
+    try:
+        result = await get_client(request).list_videos(
+            page=page, limit=limit, sort=sort, rating=rating, tags=tags, user_id=user
+        )
+    except IwaraError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
     return _decorate_page(result)
 
 
@@ -57,13 +60,20 @@ async def search(
     page: int = 0,
     limit: int = Query(20, ge=1, le=50),
 ):
-    result = await get_client(request).search(query, type=type, page=page, limit=limit)
+    try:
+        result = await get_client(request).search(query, type=type, page=page, limit=limit)
+    except IwaraError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
     return _decorate_page(result)
 
 
 @router.get("/video/{video_id}")
 async def video_detail(request: Request, video_id: str):
-    return decorate_video(await get_client(request).video(video_id))
+    try:
+        detail = await get_client(request).video(video_id)
+    except IwaraError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+    return decorate_video(detail)
 
 
 @router.get("/related/{video_id}")

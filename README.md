@@ -387,7 +387,7 @@ pixiv-bridge/
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
-├── tests/                              单元测试（900 项：框架与站点 334 + iwara 199 + asmr_one 141 + ehviewer 181 + 打包 45）
+├── tests/                              单元测试（907 项：框架与站点 334 + iwara 203 + asmr_one 144 + ehviewer 181 + 打包 45）
 ├── openssl-libs/                       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -884,13 +884,13 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 - `GET /api/config` 多返回两个字段：`warnings`（上面那些提示）与 `writable`（真写一个探针文件判断数据目录能不能写，`{"ok": bool, "dir": "...", "reason": "..."}`），页面在保存前就能提示；
 - 跨文件系统的 `os.replace`（安卓 `/sdcard` 的 FUSE 就会这样，报 `EXDEV`）不再白等重试，直接退回「原地覆盖写」。
 
-还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，框架与站点的用例应全绿（iwara 的 199 项会跳过，见下）。
+还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，框架与站点的用例应全绿（iwara 的 203 项会跳过，见下）。
 > **安卓 / Termux**：请把项目放在 Termux 家目录里（例如 `~/pixiv-bridge`），不要把数据目录指到 `/sdcard` 下的路径。Termux 上依赖会自动换成纯 Python 的 `requirements-termux.txt`（见 INSTALL.md，pydantic 1.x 与 2.x 都支持），与这条路径限制无关。
 
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 900 项应全绿（框架与站点 334 + iwara 199 + asmr_one 141 + ehviewer 181 + 打包 45）
+python -m unittest discover -s tests       # 907 项应全绿（框架与站点 334 + iwara 203 + asmr_one 144 + ehviewer 181 + 打包 45）
 python scripts/check_boundary.py           # 拆分边界自检
 python scripts/make_share_packages.py --check   # 分享包内容自检（不写 zip）
 ```
@@ -904,7 +904,7 @@ python scripts/make_share_packages.py --check   # 分享包内容自检（不写
 
 改了 imports、挪了路由或动了入口脚本后跑一下它，比等到运行时才 404 省事。测试给 `novel` 那一层的用例统一走 helper（`tests/test_bridge.py`），因为三台账 / 配置 / 书架 / 阅读器页面现在都由扩展挂载，用框架外壳或 `pixiv.app.create_app` 打这些路径会 404。
 
-`iwara` 的用例在 `tests/test_iwara.py`（199 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求（`--check` 那几项也是把 `IwaraClient` 整个换掉再断言）。换 token 那一层也不例外：把真正发请求的 `_call_with_ip_retry` 换成「按队列吐假响应」，就能让 `refresh_access()` 的请求形状（POST `/user/token`、空 body、refresh token 放 `authorization` 头）和 `request()` 收到 403 后的那次强制重放真实跑一遍，不需要账号。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 199 项会**整片跳过**（显示 `OK (skipped=199)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
+`iwara` 的用例在 `tests/test_iwara.py`（203 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求（`--check` 那几项也是把 `IwaraClient` 整个换掉再断言）。换 token 那一层也不例外：把真正发请求的 `_call_with_ip_retry` 换成「按队列吐假响应」，就能让 `refresh_access()` 的请求形状（POST `/user/token`、空 body、refresh token 放 `authorization` 头）和 `request()` 收到 403 后的那次强制重放真实跑一遍，不需要账号。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 203 项会**整片跳过**（显示 `OK (skipped=203)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
 
 分享包脚本的用例在 `tests/test_packaging.py`（45 项），同样全部离线、且**不写真实 `dist/`**（用 `patch.object(packaging, "DIST_DIR", 临时目录)` 顶掉）。它盯四类回归：包清单本身（**包数跟着 `scripts/sites.py` 的登记表走**、key 与 zip 名唯一、**每个包里声明的每条目录/文件都真的在盘上**——目录被改名时测试先炸，而不是等打出来的包缺东西）、`validate_specs()` 的结构约束（接口包必须带框架与**恰好一个**站点、扩展包不带站点、组合包的扩展宿主必须也在包里、包清单恰好覆盖所有站点与扩展）、铺包逻辑（扩展包只带自己、自动跳过 `__pycache__` / `.pyc` / `data/`、缺内容时报 `SystemExit` 并指名道姓）、以及 zip 回读（条目都在同名根文件夹下、根有 `README.md`、包内 `<站点>/run.py` 存在、`inspect_zip` 能认出字节码与私密数据）。脚本不在任何包里（`scripts/` 没有 `__init__.py`），所以测试用 `importlib` 按路径加载；注意脚本头有 `from __future__ import annotations`，加载时必须**先**把模块登记进 `sys.modules` 再 `exec_module`，否则 dataclasses 解析字符串注解时会去 `sys.modules` 里找一个还不存在的模块，报 `AttributeError: 'NoneType' object has no attribute '__dict__'`。
 
