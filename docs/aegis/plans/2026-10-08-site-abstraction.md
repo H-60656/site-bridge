@@ -821,3 +821,80 @@ CF 的**控制面与 Pages 托管面在本机可达**（`_scratch/_probe_cf_rela
 - **文档里的计数也是被守对象。** 本轮开工前发现 `README.md` 两处仍写「3 项」（上一轮升到 4 项时漏改），与同一文件里已写对的「4 项」自相矛盾。**改完自检项数，要 grep 一遍数字**（`grep -n '3 项\|4 项\|项 ehviewer'`），因为同一事实散落在入口表、目录树、命令示例三处。
 
 
+## 23. 第 20 节的同一缺陷在官方 JSON API 上有第 4 种形态（2026-10-09）
+
+本节由一次「增强方向勘察」意外变成缺陷修复。当时的候选增强方向之一是「`/api/eh/metadata` 的 gdata」，理由是它走的协议与前三条 HTML 解析路径完全不同；读了 `client.py` 就发现它不是「可以加固」，而是**照抄了第 20 节踩过的那个坑**。
+
+### 23.1 症状与根因
+
+`ehviewer/client.py` 的 `gdata()` 只看 HTTP 状态码：
+
+```python
+resp = await self.request("POST", API_URL, data=payload, headers=...)
+if resp.status_code >= 400:
+    raise EhError(f"gdata -> HTTP {resp.status_code}: {resp.text[:200]}", status=resp.status_code)
+return resp.json()
+```
+
+而上游 `api.php` 对失效 token / 不存在的 gid **同样回 200**，把错误放在**每一条目自己的 `error` 字段**里。实测（`EhClient(http3=True, timeout=30.0)` 直打，未过本站）：
+
+| 请求 | 状态码 | body |
+| --- | --- | --- |
+| `metadata(4242231, "e5e9265089")` | 200 | 正常条目，`error` 为 `None`，字段 `category/expunged/filecount/filesize/gid/posted/rating/tags/thumb/title/title_jpn/token/torrentcount/torrents/uploader` |
+| `metadata(1, "deadbeefdead")` | 200 | `{"gmetadata":[{"gid":1,"error":"Key missing, or incorrect key provided."}]}` |
+| `metadata(4242231, "zzzz")`（token 过短） | 200 | 同上 |
+| `metadata(999999999999, "e5e9265089")` | 200 | `{"gmetadata":[{"gid":2147483647,"error":"Gallery not found. …"}]}` —— **gid 被上游夹到 `2147483647`** |
+| `gdata([(4242231,"e5e9265089"), (1,"deadbeefdead")])` | 200 | 好条目与坏条目**混在同一个 list**，逐条独立 |
+
+顶层只有一个键 `gmetadata`，长度等于请求条数。于是 `/api/eh/metadata?gid=1&token=deadbeefdead` 返回的是 **HTTP 200 + 一具错误占位**，调用方拿到手的是「成功」。
+
+**这是第 20 节「『不存在』可以是 HTTP 200」缺陷的第 4 条路径。** 第 20 节当时修的是 HTML 路径的三套解析（`parse_gallery_error` / `parse_s_page_error` / `_DETAIL_MARK_RE`），换协议时这个坑被完整复制了一遍 —— 因为它是按「HTML 页面长什么样」修的，而不是按「报不存在时换没换状态码」修的。
+
+### 23.2 设计：判据与拦截分层
+
+关键分歧在「批量」和「单条」的语义不同，不能一刀切：
+
+- **判据放 `ehviewer/parse.py`**（纯函数、可离线测）：`_GDATA_STUB_PATTERNS = (("key", …Key missing, or incorrect key provided…), ("removed", …Gallery not found…))` 与 `parse_gdata_error(entry) -> tuple[str, str] | None`。
+- **批量 `gdata()` 保持忠实**：好坏条目混排本就是合法输入，`gdata()` 该做的只是「把上游的话原样带回来」，让调用方自己逐条看 `error`。改动仅限于把这一契约写进 docstring。**在这里抛错反而会废掉批量接口**（一条坏 gid 让整批失败）。
+- **单条 `metadata()` 必须兑现「要么给我、要么报错」**：`entries = body.get("gmetadata")` 非 list 或为空 → `EhError`；否则 `parse_gdata_error(entries[0])` 命中就抛 `EhNotFoundError`（404 / `reason: "not_found"`），消息带 code 与上游原文。
+- **兜底方向别搞反**：`parse_gdata_error` 对**认不得的 `error` 文案也返回 `("error", raw)`**，即按错误处理。因为「上游换了句话」不等于「这条成功了」—— 这与第 20 节「文案会变，判据要选不变的东西」是同一原则的两种用法：HTML 那里靠**骨架**（正向判据）站稳，JSON 这里没有稳定正向判据可用，就只能让**错误字段的存在本身**当信号。
+- `entry.get("error")` 为 `None` / 非字符串 / 空串 / 纯空白 → 一律 `None`（正常条目），避免把上游的 `null` 当异常。
+
+### 23.3 改动
+
+- `ehviewer/parse.py`：import `Mapping`；新增 `_GDATA_STUB_PATTERNS` 与 `parse_gdata_error(entry)`（含注释说明四条路径与实测原文）。
+- `ehviewer/client.py`：`gdata()` 只改 docstring（明说逐条独立、坏条目不整批失败、要单条语义请走 `metadata()`）；`metadata()` 重写为「取 `gmetadata` → 判这一条 → 原样返回整个 body」。
+- `tests/test_ehviewer.py`：新增夹具 `STUB_GDATA_KEY` / `STUB_GDATA_REMOVED`；`EhParseTestCase` +5 例、`EhClientProxyTestCase` +6 例、`EhRouteTestCase` +1 例（详见 23.4）。
+- 文档：`README.md`（`:782` 端点表补单条语义、`:793` 实现说明第 4 条改写 + 新增第 7 条讲第 4 种形态、两处测试计数）、`DIRECT.md`（§3.2「陷阱二之补二」+ §7 对照表第 ④ 行）。
+
+### 23.4 断言表
+
+| 用例 | 输入 | 期望 |
+| --- | --- | --- |
+| `test_gdata_error_recognises_the_two_api_errors` | 两种 `error` 原文 | code 分别为 `key` / `removed` |
+| `test_gdata_error_passes_a_real_entry` | 真实条目（无 `error`） | `None` |
+| `test_gdata_error_treats_a_missing_or_blank_error_as_ok` | 缺字段 / `None` / `""` / `"   "` | 全 `None` |
+| `test_gdata_error_flags_an_unknown_wording_instead_of_trusting_it` | `error="Something new."` | code `"error"`，raw 含原文 |
+| `test_gdata_error_is_none_for_junk` | `None` / `"junk"` / `[]` / `7` | 全 `None` |
+| `test_metadata_turns_a_200_error_entry_into_a_404` | payload 含 `error`（key） | `EhNotFoundError`，status 404 |
+| `test_metadata_turns_a_200_gallery_not_found_into_a_404` | gid 2147483647 + 172 字节文案 | 404，消息含 `Gallery not found` |
+| `test_metadata_passes_a_real_entry_through` | 好条目 | 原样返回（`assertEqual(body, payload)`） |
+| `test_metadata_reports_a_body_without_gmetadata` | payload `{}` | 含「gmetadata」 |
+| `test_gdata_itself_still_returns_the_mixed_batch_verbatim` | 好 + 坏同批 | `gdata()` 原样返回、不抛错 |
+| `test_metadata_maps_a_200_error_entry_to_404` | 路由 `GET /api/eh/metadata?gid=1&token=deadbeefdead` | 404 且 detail 含 `Key missing` |
+
+### 23.5 验证结果
+
+- `tests.test_ehviewer`：**Ran 181 tests … OK**（170 → 181）。
+- 全量：**Ran 893 tests … OK (skipped=1)**，25.2 s（334 + 199 + 134 + **181** + 45）。
+- `check_boundary.py` → 路由数不变（`ehviewer 15 条，自有 9 条`），「边界检查通过」。
+- **真实链路复核**（探针 `_scratch/_probe_eh_gdata_fix.py`，`EXIT=0`）：真实画廊 `gid=4242240 token=d94cb66188` → 正常条目 `title='soitu Luna Snow ❄️ Marvel RIvals [AI Generated]' filecount=133 error=None`；同 gid 换成 `deadbeefdead` → `EhNotFoundError status=404 reason=not_found`，消息 `gdata 取不到画廊（key）：Key missing, or incorrect key provided.`；`gid=999999999999`（合法 token）→ 404 / `（removed）`；批量混排 → 2 条原样返回，好条目 `error=None`、坏条目 `error='Key missing, or incorrect key provided.'`。
+
+### 23.6 教训
+
+- **修缺陷时要按「类别」修，不是按「现场」修。** 第 20 节的教训写成了「HTML 详情页的骨架」这一具体形态，于是换到 JSON API 时，同一类错误（200 里藏错误）被完整复制。**描述根因的句子应该是「它报不存在时换没换状态码」，而不是「详情页怎么解析」。**
+- **批量和单条的契约本就不同，不能共用一套错误处理。** 批量接口的「部分失败」是正常结果，单条接口的「失败」必须抛错。把两者都做成「忠实返回」或都做成「有错就抛」，会各废掉一个接口。
+- **没有稳定的正向判据时，就让「异常信号的存在」当判据。** HTML 能靠骨架（不变）站稳，JSON API 这里没有对应物；那就把 `error` 字段**出现即错误**当规则，并让**认不得的文案也走错误分支** —— 兜底必须朝「可疑」方向倒，不能朝「放过」方向倒。
+
+
+

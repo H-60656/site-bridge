@@ -575,6 +575,10 @@ class EhClient:
 
         ``data`` 必须是 bytes，``content-type`` 得是 ``application/json``，
         否则 CF 会挡。
+
+        批量结果**逐条独立**：取不到的条目不会让整批失败，而是在那条里放一个
+        ``error`` 字段（HTTP 仍然是 200）。所以这里原样返回上游 body，由单条
+        调用方 ``metadata()`` 去判 —— 需要「要么给我、要么报错」语义的用它。
         """
         gidlist = []
         for entry in items or ():
@@ -607,8 +611,23 @@ class EhClient:
             raise EhError(f"gdata 返回的不是 JSON：{resp.text[:200]}") from exc
 
     async def metadata(self, gid: Any, token: str) -> dict:
-        """单个画廊的 gdata 结果（``{"gmetadata": [...]}``）。"""
-        return await self.gdata([(gid, token)])
+        """单个画廊的 gdata 结果（``{"gmetadata": [...]}``）。
+
+        **这里必须自己看 ``error`` 字段**：上游对取不到的画廊回的是
+        ``HTTP 200`` + ``{"gmetadata": [{"gid": …, "error": "…"}]}``，光看状态码
+        会把它当成功返回一具空壳。实测两种（token 错 / gid 不存在，后者还会被
+        上游把 gid 夹到 ``2147483647``）。这是 HTML 那几套存根判据之外的
+        **第四条路径**，见 ``parse.parse_gdata_error``。
+        """
+        body = await self.gdata([(gid, token)])
+        entries = body.get("gmetadata") if isinstance(body, dict) else None
+        if not isinstance(entries, list) or not entries:
+            raise EhError(f"gdata 没返回 gmetadata：{str(body)[:200]}")
+        stub = _parse.parse_gdata_error(entries[0])
+        if stub is not None:
+            code, raw = stub
+            raise EhNotFoundError(f"gdata 取不到画廊（{code}）：{raw}")
+        return body
 
     # ---------- 诊断 ----------
 

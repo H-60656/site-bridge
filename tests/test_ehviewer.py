@@ -218,6 +218,15 @@ STUB_REMOVED = (
 # ``/s/`` 大图页的同一类存根（13 字节）。
 STUB_INVALID_PAGE = "Invalid page."
 
+# 第四条路径：官方 ``api.php`` 的 gdata 把错误塞在条目里的 ``error`` 字段，
+# HTTP 状态码仍然是 **200**（下面两句原文照抄）。只看状态码会返回一具空壳。
+STUB_GDATA_KEY = "Key missing, or incorrect key provided."
+STUB_GDATA_REMOVED = (
+    "Gallery not found. If you just added this gallery, you may have to wait a "
+    "short while before it becomes available. It might also have been reverted "
+    "to its previous version."
+)
+
 
 class _FakeResp:
     """``request()`` 用得到的那几个属性。"""
@@ -479,6 +488,39 @@ class EhParseTestCase(unittest.TestCase):
 
     def test_s_page_error_is_none_for_a_page_without_the_wording(self):
         self.assertIsNone(eh_parse.parse_s_page_error("<div id='i3'></div>"))
+
+    # ---------- 官方 API 的条目级错误 ----------
+
+    def test_gdata_error_recognises_the_two_api_errors(self):
+        entry = {"gid": 1, "error": STUB_GDATA_KEY}
+        self.assertEqual(eh_parse.parse_gdata_error(entry)[0], "key")
+
+        entry = {"gid": 2147483647, "error": STUB_GDATA_REMOVED}
+        self.assertEqual(eh_parse.parse_gdata_error(entry)[0], "removed")
+
+    def test_gdata_error_passes_a_real_entry(self):
+        # 正常条目没有 ``error`` 字段（上游干脆不给这个键）。
+        good = {"gid": 4242231, "token": "e5e9265089", "title": "ComfyUI"}
+        self.assertIsNone(eh_parse.parse_gdata_error(good))
+
+    def test_gdata_error_treats_a_missing_or_blank_error_as_ok(self):
+        for entry in (
+            {"gid": 1},
+            {"gid": 1, "error": None},
+            {"gid": 1, "error": ""},
+            {"gid": 1, "error": "   "},
+        ):
+            self.assertIsNone(eh_parse.parse_gdata_error(entry), entry)
+
+    def test_gdata_error_flags_an_unknown_wording_instead_of_trusting_it(self):
+        # 上游哪天换文案也不能当成功：只要有非空的 error 就是取不到。
+        code, raw = eh_parse.parse_gdata_error({"gid": 1, "error": "Something new."})
+        self.assertEqual(code, "error")
+        self.assertIn("Something new", raw)
+
+    def test_gdata_error_is_none_for_junk(self):
+        for entry in (None, "junk", [], 7):
+            self.assertIsNone(eh_parse.parse_gdata_error(entry), entry)
 
     # ---------- 大图页 ----------
 
@@ -1152,6 +1194,70 @@ class EhClientProxyTestCase(unittest.TestCase):
 
         self.assertIn("JSON", str(ctx.exception))
 
+    def test_metadata_turns_a_200_error_entry_into_a_404(self):
+        # 第四条路径：上游对 token 错 / gid 不存在回的是 **200**，错误只写在
+        # 条目的 error 字段里。光看状态码会当成功返回一具空壳。
+        client = self._client()
+        client.request = AsyncMock(
+            return_value=_FakeResp(
+                200, payload={"gmetadata": [{"gid": 1, "error": STUB_GDATA_KEY}]}
+            )
+        )
+
+        with self.assertRaises(EhNotFoundError) as ctx:
+            asyncio.run(client.metadata(1, "deadbeefdead"))
+
+        self.assertEqual(ctx.exception.status, 404)
+        self.assertIn("Key missing", str(ctx.exception))
+
+    def test_metadata_turns_a_200_gallery_not_found_into_a_404(self):
+        client = self._client()
+        client.request = AsyncMock(
+            return_value=_FakeResp(
+                200,
+                payload={"gmetadata": [{"gid": 2147483647, "error": STUB_GDATA_REMOVED}]},
+            )
+        )
+
+        with self.assertRaises(EhNotFoundError) as ctx:
+            asyncio.run(client.metadata(999999999999, "e5e9265089"))
+
+        self.assertIn("Gallery not found", str(ctx.exception))
+
+    def test_metadata_passes_a_real_entry_through(self):
+        client = self._client()
+        payload = {"gmetadata": [{"gid": 4242231, "token": "e5e9265089", "title": "ComfyUI"}]}
+        client.request = AsyncMock(return_value=_FakeResp(200, payload=payload))
+
+        body = asyncio.run(client.metadata(4242231, "e5e9265089"))
+
+        self.assertEqual(body, payload)
+
+    def test_metadata_reports_a_body_without_gmetadata(self):
+        client = self._client()
+        client.request = AsyncMock(return_value=_FakeResp(200, payload={}))
+
+        with self.assertRaises(EhError) as ctx:
+            asyncio.run(client.metadata(1, "aa"))
+
+        self.assertIn("gmetadata", str(ctx.exception))
+
+    def test_gdata_itself_still_returns_the_mixed_batch_verbatim(self):
+        # 批量是逐条独立的：好条目与坏条目混在同一个 list 里，不该整批抛错
+        # （要「要么给我要么报错」语义的走 metadata()）。
+        client = self._client()
+        payload = {
+            "gmetadata": [
+                {"gid": 4242231, "token": "e5e9265089", "title": "ComfyUI"},
+                {"gid": 1, "error": STUB_GDATA_KEY},
+            ]
+        }
+        client.request = AsyncMock(return_value=_FakeResp(200, payload=payload))
+
+        body = asyncio.run(client.gdata([(4242231, "e5e9265089"), (1, "deadbeefdead")]))
+
+        self.assertEqual(body, payload)
+
     def test_auth_status_reports_the_pinned_edge(self):
         client = self._client(edges=("1.1.1.1", "2.2.2.2"))
 
@@ -1523,6 +1629,18 @@ class EhRouteTestCase(unittest.TestCase):
 
         self.assertEqual(body["gmetadata"][0]["gid"], 4240495)
         self.assertEqual(self.fake.calls[0], ("metadata", 4240495, "8bcad20a1a"))
+
+    def test_metadata_maps_a_200_error_entry_to_404(self):
+        # 客户端把「200 + error」翻成 EhNotFoundError 之后，路由要原样送 404。
+        client = self._client()
+        self.fake.error = EhNotFoundError(
+            f"gdata 取不到画廊（key）：{STUB_GDATA_KEY}"
+        )
+
+        response = client.get("/api/eh/metadata?gid=1&token=deadbeefdead")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("Key missing", response.json()["detail"])
 
     # ---------- 代转 ----------
 

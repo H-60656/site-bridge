@@ -96,6 +96,8 @@ iwara 更进一步，用一张**实测可用的边缘 IP 表**（`iwara/client.p
 
 **陷阱二之补：还有第三种「找不到」—— HTTP 200 配一句纯文本。** 状态码本身也可能是谎话。E-Hentai 对取不到的画廊和无效大图页都回 **200**，正文只有一句话：`Key missing, or incorrect key provided.`（39 字节）/ `No gallery specified.`（21 字节）/ `Gallery not found. …`（172 字节）/ `Invalid page.`（13 字节）。只看状态码就会把它当成功页面，解析出一具**空壳**（标题空、图片链空、`showing.total` 为 `null`）——调用方看到的是「这个画廊没有图」，比 404 难查得多。判据不能靠文案（文案会变），要靠**页面骨架**：正常详情页一定有 `#gn` / `#gdc` / `#gdd`，正常大图页一定有 `<img id="img" …>`；有骨架就是正常页，没有才去看那几句话。见 `ehviewer/parse.py` 的 `parse_gallery_error` / `parse_s_page_error`，两者都在 `ehviewer/client.py:gallery` / `image_page` 里转成 404。**这条对任何上游都值得先问一句：它报「不存在」时，到底换没换状态码。**
 
+**陷阱二之补二：官方 JSON API 上还有第四种形态 —— 200 + 条目级 `error` 字段。** 换个协议不等于换了语义。E-Hentai 的 `api.php`（`gdata`）对失效 token / 不存在的 gid 同样回 **200**，只是把错误藏在**每一条目自己的 `error`** 里：`{"gmetadata":[{"gid":1,"error":"Key missing, or incorrect key provided."}]}`；gid 不存在时上游还会先把 gid 夹到 `2147483647`（`Gallery not found. …` 那段 172 字节文案）。HTML 那套「看骨架」在这里完全用不上——没有页面可看。批量接口里好坏条目**混在同一个 list** 逐条独立，所以这一层的判据要按调用方的语义分叉：批量（`gdata()`）忠实返回整批，让调用方自己逐条看 `error`；单条（`/api/eh/metadata`）必须兑现「要么给我、要么报错」，用 `ehviewer/parse.py` 的 `parse_gdata_error()` 判这一条并转成 404。注意兜底方向别搞反：认得的文案分类（`key` / `removed`），**认不得的 `error` 也一律按错误处理**（分类记 `error`），因为「上游换了句话」不等于「这条成功了」。
+
 **边缘按内容路由、花名子域互通。** iwara 的每个视频源都挂在一个花名子域上（`firefly` / `zani` / `swan` / `bailu` / `yukong` / `welt` / `pela` …），但实测发现**同一份内容钉到池中任一可用 IP 都能取到**（少数转码源例外）。这带来两个好处：不必为每个花名维护解析，而且**某个花名整体不可达时可以整体绕过**。这也是「未登记的主机直接用整池去试」（`iwara/client.py:334-337`）的依据。
 
 ### 3.3 TLS 层：分「封锁」和「反爬」两种
@@ -209,7 +211,7 @@ else:                   # 普通路径
 | ① DNS | 默认解析可用；直连模式下走内置 IP 池 | **解析完全不可信**，DoH 也返回污染答案 → 种子 IP 表 | 同样不可信 → 种子 IP 表 + DoH 只作补充候选（排种子之后） | 不可信，且自己解析出的 IP 恰好是被封的那些 → 内置 16 个别的 Cloudflare anycast IP 种子池 |
 | ② IP | 官方源站 IP 池，逐 IP 回退 | 种子池 + 可达性探测 + 单 IP 固定 + 404 换 IP | 种子池 + 可达性探测 + 单 IP 固定 + 换 IP 重试（媒体主机换 IP 有效） | 种子池 + 裸 TCP 探可达（`probe_edge` 只建连不发 TLS，所以不被 SNI 判据拦）+ **轮转游标**换边缘重试 |
 | ③ TLS | 无 SNI 握手 **或** ECH（OpenSSL 4.0+） | `curl_cffi` `impersonate="chrome"`，可选再叠 ECH（`IWARA_BRIDGE_ECH=1`） | `curl_cffi` `impersonate="chrome"` + **ECH 默认开**（`ASMR_BRIDGE_ECH` 不写就是开） | **强制 HTTP/3**（`EH_BRIDGE_HTTP3` 默认开）：HTTPS/1.1 与 HTTP/2 会因 SNI 不符被拒，只有 QUIC（UDP:443）不受这个判据限制 |
-| ④ 应用 | `X-Client-Time` / `X-Client-Hash` 签名 + OAuth 令牌 | 浏览器头 + `X-Version` 签名（双盐）+ 可选登录 | 只要浏览器头：无签名、无令牌（站点只暴露匿名端点） | 只要浏览器头：无签名、无令牌（同样只暴露匿名端点）；元数据走官方 `api.php` 的 `gdata` |
+| ④ 应用 | `X-Client-Time` / `X-Client-Hash` 签名 + OAuth 令牌 | 浏览器头 + `X-Version` 签名（双盐）+ 可选登录 | 只要浏览器头：无签名、无令牌（站点只暴露匿名端点） | 只要浏览器头：无签名、无令牌（同样只暴露匿名端点）；元数据走官方 `api.php` 的 `gdata`，那里的「取不到」是 200 + 条目级 `error`，单条接口转 404 |
 | 传输层实现 | 自写 `sni_client.py` / `ech_client.py`（复用同一套报文构造） | `curl_cffi.AsyncSession`（因为必须拿浏览器指纹） | `curl_cffi.AsyncSession`（同上） | `curl_cffi.AsyncSession` + 会话级 `CurlOpt.RESOLVE` 把域名钉到选中的边缘 IP（一条 RESOLVE 只认一个 IP，所以一 host 一 IP 一个会话） |
 | ECH 走法 | ctypes 调 OpenSSL 4.0+ 的 `SSL_set1_ech_config_list`（要自带 `openssl-libs/`） | `curl_cffi` 的 `CurlOpt.ECH`（libcurl 的 `CURLOPT_ECH`），**不需要动态库** | 同 iwara（`CurlOpt.ECH`，不需要动态库），且**默认就开** | 不走 ECH —— 这条链路的解法是 HTTP/3，用 `CurlOpt.HTTP_VERSION = CurlHttpVersion.V3` 打开 |
 | 额外依赖 | 无（ctypes 驱动自带 libssl） | `curl_cffi`（编译包，单独 requirements） | `curl_cffi`（编译包，单独的 `asmr_one/requirements.txt`） | `curl_cffi`（编译包，单独的 `ehviewer/requirements.txt`；换边缘 IP 与 HTTP/3 都由它的 libcurl 提供） |

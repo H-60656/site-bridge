@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import html as _html
 import re
+from collections.abc import Mapping
 from urllib.parse import unquote
 
 # ---------------------------------------------------------------- 小工具
@@ -449,6 +450,39 @@ def parse_s_page_error(body: str) -> tuple[str, str] | None:
         if pattern.search(body):
             return code, text(body)
     return None
+
+
+# ---------------------------------------------------------------- 官方 API
+
+# 上面三套是「HTML 存根」，这里是**第四条路径**：官方 ``api.php`` 的 gdata 把
+# 错误放在条目里的 ``error`` 字段，HTTP 状态码仍然是 **200**。实测（2026-10）：
+#   ``Key missing, or incorrect key provided.``   token 错或太短
+#   ``Gallery not found. If you just added …``     gid 不存在（上游还把它夹到
+#                                                  ``2147483647``）
+# 只看状态码会把它当成功返回，调用方拿到一条什么字段都没有的空壳 —— 和当初
+# HTML 路径那个坑一模一样（见 §20），只是换了传输方式。
+_GDATA_STUB_PATTERNS = (
+    ("key", re.compile(r"Key missing, or incorrect key provided", re.I)),
+    ("removed", re.compile(r"Gallery not found", re.I)),
+)
+
+
+def parse_gdata_error(entry) -> tuple[str, str] | None:
+    """这条 gdata 条目是不是「取不到」？是就返回 ``(code, 原始文本)``。
+
+    ``error`` 缺字段 / 是 ``None`` / 是空串都算**正常条目**（返回 ``None``）。
+    """
+    if not isinstance(entry, Mapping):
+        return None
+    raw = entry.get("error")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    raw = raw.strip()
+    for code, pattern in _GDATA_STUB_PATTERNS:
+        if pattern.search(raw):
+            return code, raw
+    # 上游哪天换文案也别当成功：只要有非空的 error，就是取不到。
+    return "error", raw
 
 
 # ---------------------------------------------------------------- 大图页
