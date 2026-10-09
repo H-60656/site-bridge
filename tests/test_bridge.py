@@ -2915,16 +2915,15 @@ class NavigationTestCase(unittest.TestCase):
     def test_the_real_project_lists_every_api_project_in_nav_order(self):
         sites = self.nav.site_items()
         self.assertEqual(
-            [item.name for item in sites], ["pixiv", "iwara", "asmr_one", "pornhub"]
+            [item.name for item in sites], ["pixiv", "iwara", "asmr_one"]
         )
-        self.assertEqual([item.order for item in sites], [1, 2, 3, 4])
-        self.assertEqual([item.kind for item in sites], ["site"] * 4)
+        self.assertEqual([item.order for item in sites], [1, 2, 3])
+        self.assertEqual([item.kind for item in sites], ["site"] * 3)
         self.assertEqual(sites[0].title, "Pixiv Bridge")
         self.assertEqual(sites[0].entry, PROJECT_ROOT / "pixiv" / "run.py")
         self.assertTrue(sites[0].description.startswith("Pixiv 接口站点"))
         self.assertTrue(sites[1].description.startswith("iwara.tv 接口站点"))
         self.assertTrue(sites[2].description.startswith("asmr.one 接口站点"))
-        self.assertTrue(sites[3].description.startswith("Pornhub 接口站点"))
 
     def test_the_real_project_lists_extensions_that_are_not_entries(self):
         extensions = self.nav.extension_items()
@@ -2936,7 +2935,7 @@ class NavigationTestCase(unittest.TestCase):
                 self.assertTrue(item.title)
         # 站点列表跟着 package 的注册表走，不再写死两个。
         self.assertEqual(
-            self.nav.site_names(), ["pixiv", "iwara", "asmr_one", "pornhub"]
+            self.nav.site_names(), ["pixiv", "iwara", "asmr_one"]
         )
 
     def test_render_navigation_shows_numbers_extensions_and_hints(self):

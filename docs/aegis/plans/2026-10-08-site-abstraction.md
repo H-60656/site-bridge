@@ -3,7 +3,7 @@
 - 日期：2026-10-08
 - 触发需求（用户原话，m00001）："项目中存在错误布局，两个接口项目应该是同级的，错误修正后更新分享包；现在想抽象两个接口项目，方便后续实现其他接口项目"
 - 用户已确认的方案（m00066）：`depth=A`（彻底分层）+ `iwara_stack=只提供 iwara 接口`
-- 状态：**已完成**（2026-10-08 收尾，35 / 35，见第 7 节尾注与第 8 节实测）。第 12 节是同日追加的「根目录启动＝项目导航」；第 13 节是后续用本抽象落地的第三个站点 `asmr_one/`；第 14 节是第四个站点 `pornhub/`（抓取器）—— 两次加站点都验证了「实现侧零硬编码、只有壳文件与文档要手改」这条抽象承诺；第 15 节是 pornhub 线上探活揪出的传输层致命缺陷及其修复（提交 `28a3c76`），含一条工程教训与一条已知未验证边界。
+- 状态：**已完成**（2026-10-08 收尾，35 / 35，见第 7 节尾注与第 8 节实测）。第 12 节是同日追加的「根目录启动＝项目导航」；第 13 节是后续用本抽象落地的第三个站点 `asmr_one/`；第 14 节是第四个站点 `pornhub/`（抓取器）—— 两次加站点都验证了「实现侧零硬编码、只有壳文件与文档要手改」这条抽象承诺；第 15 节是 pornhub 线上探活揪出的传输层致命缺陷及其修复（提交 `28a3c76`），含一条工程教训与一条已知未验证边界；第 16 节是「通过 cloudflare 连接」路径穷举（结论：pornhub 不在 CF 上，本机无法连通，代码零改动）。**第 17 节已按用户决定整体退役 `pornhub/` 站点**（站数回到三个：pixiv / iwara / asmr_one），故第 14～16 节记录的是**已删除**的站点，读时以第 17 节为准。
 
 ## 1. Goal
 
@@ -500,3 +500,64 @@ CF 的**控制面与 Pages 托管面在本机可达**（`_scratch/_probe_cf_rela
 3. 唯一剩路是 **CF Worker/Pages 反代**，但**需用户提供 CF 账号/Token** 才能部署；且必须避开被阻断的 `*.workers.dev`。
 4. 本次**未做任何代码改动**。第 15.3 节「真实抓取在有代理的环境里仍需补做」的边界**仍然成立且未变**；本节的增量是：把「需要代理」这个笼统归因，落实为**可按域名/SNI 复现的定点封锁 + pornhub 不在 CF** 这两条硬事实。
 5. 若将来要真正打通，有两条后续路线（均需用户投入/授权，不在本次范围）：(a) 由用户提供可用出口（商业代理/VPN）或 CF 账号走 Worker 反代；(b) 为 pornhub 补 `PORNHUB_BRIDGE_PROXY` 支持以对齐 pixiv 的 `PIXIV_PROXY`（`pixiv_bridge/config.py:64` 定义 `proxy: str = ""`、`pixiv_bridge/config.py:208-210` 读 `PIXIV_PROXY`/`PIXIV_BRIDGE_PROXY`）。
+
+---
+
+## 17. 退役 pornhub 站点（2026-10-08）
+
+用户决定（原话）：「不能用就清理对应项目」。既然第 16 节已把「本机无法连通 pornhub」证成硬结论，且没有任何无需用户投入就能打通的路径，pornhub 接口项目作为「永远连不上、永远回 502」的死代码保留在仓库里只会：
+- 让每次改框架都要多维护一个站点的自检、打包、路由差集；
+- 让文档里「四个同级接口项目」这类表述持续失真；
+- 给后来者留下「这个项目是能用的」的错误预期。
+
+故**整体移除**，站数从四个回到三个（pixiv / iwara / asmr_one）。
+
+### 17.1 移除清单（逐项）
+
+**删除的文件**（`git rm`）：
+- `pornhub/` 全目录 10 个文件：`__init__.py`、`app.py`、`client.py`、`config.py`、`ech.py`、`envcheck.py`、`requirements.txt`、`run.py`、`routes/__init__.py`、`routes/videos.py`
+- `tests/test_pornhub.py`
+- `dist/pornhub-api.zip`（构建产物；`dist/` 本就在 `.gitignore:24` 内，未入版本库）
+
+**构建侧登记表** `scripts/sites.py`：
+- 删 `SiteInfo(name="pornhub", ...)` 整块（原 L88-99）
+- 删 `SITE_ASSETS` 里的 `"pornhub": ()`
+- 删 `PH_ROUTE_PATHS` frozenset（原 L200-208）及 `SITE_ROUTE_PATHS` 里的 `"pornhub": PH_ROUTE_PATHS`
+- 复验：`SITES = ['pixiv','iwara','asmr_one']`、`SITE_ROUTE_PATHS = ['asmr_one','iwara']`、`SITE_ASSETS = ['asmr_one','iwara','pixiv']`、`ENTRY_POINTS = ('pixiv/run.py','iwara/run.py','asmr_one/run.py')`
+
+**打包脚本** `scripts/make_share_packages.py`：
+- 删 `PH_SETUP` / `PH_NOTES` 定义、`PORNHUB = SITES_BY_NAME["pornhub"]`、`PackageSpec(key="pornhub-api", ...)` 整块（原 L257-283）、`BASE_NOTES` 里的 `` `pornhub/` ``（原 L121）
+- `--check` 现输出 **7 个包**：pixiv-api 59 / iwara-api 45 / asmr-api 43 / novel-extension 17 / iwara_web-extension 8 / pixiv-novel 72 / iwara-iwara_web 49
+
+**测试** `tests/test_bridge.py`：
+- `test_the_real_project_lists_every_api_project_in_nav_order` 现断言 `["pixiv","iwara","asmr_one"]` / `[1,2,3]` / `["site"]*3`，删掉 `sites[3].description.startswith("Pornhub 接口站点")`
+- `test_the_real_project_lists_extensions_that_are_not_entries` 的 `self.nav.site_names()` 现为 `["pixiv","iwara","asmr_one"]`
+
+**配置样例** `.env.example`：删掉 `PORNHUB_BRIDGE_ECH` / `PORNHUB_BRIDGE_ECH_CONFIG` / `PORNHUB_BRIDGE_ECH_IPS` 三行及其注释（原 L76-85）。
+
+**文档**（四处口径全部从「四个」改回「三个」）：
+- `README.md`：L7 四层总述、特性表「可选的 pornhub 站点」整条、L143 入口列表、L153 启动方式表行、L155 段落里的 pornhub 自检与「要 pornhub 就拷…」、目录树 pornhub 块（原 L333-342）、测试计数（844 → **712** 项：框架与站点 334 + iwara 199 + asmr_one 134 + 打包 45）、「入口只有四个」→ 三个、分享包「八个」→ **七个** 及 `pornhub-api` 表行
+- `INSTALL.md`：入口数、`curl_cffi` 需用站点（去掉 pornhub）、入口段落、`--check` 自检说明、启动表两行、抓取器说明段、接口地址列表、分享包段落、排错表 `/api/pornhub/...` 行
+- `DIRECT.md`：适用对象站点数、站点隔离清单、重依赖说明、§7 标题「同一套方法、四个不同站点」→ 三个 并删掉整列 pornhub 列、§7 结论段、§8 环境变量表里的三行 `PORNHUB_BRIDGE_ECH*`、自检说明段
+- `Dockerfile`：`RUN for req in ...` 循环去掉 `pornhub/requirements.txt`、`BRIDGE_SITE=pornhub` 示例行、注释里的站点枚举
+- `start.bat` / `start.sh`：标题、用法示例里的 `start.bat pornhub` / `sh start.sh pornhub`、同级站点列表、扩展说明括号、提示语里的站点枚举
+
+**无需改动**（已确认是动态的，自动随站点数收敛）：
+- `scripts/check_boundary.py` 从 `SITE_ROUTE_PATHS` 动态遍历（L243-252），无 pornhub 硬编码
+- `tests/test_packaging.py:64` 期望 `len(packaging.PACKAGES) == len(packaging.SITES) + 4`（动态）
+- 全文无 pornhub 字面量的其它测试
+
+### 17.2 验证结果
+
+- 全量测试：`.venv\Scripts\python.exe -m unittest discover -s tests` → **Ran 712 tests … OK (skipped=1)**，24.569s。失败数为 0。
+- 边界自检：`python scripts/check_boundary.py` → 「边界通过」，路由差集为 pixiv 60（自有 54）、iwara 16（自有 10）、asmr_one 13（自有 7）、novel 10、iwara_web 1。
+- 打包自检：`python scripts/make_share_packages.py --check` → 7 个包全部「内容就绪」。
+- `dist/` 重建：`dist/` 下现有 7 个 zip（`pixiv-api.zip` 6110404 / `pixiv-novel.zip` 6172296 / `iwara-api.zip` 161530 / `iwara-iwara_web.zip` 171964 / `asmr-api.zip` 149957 / `novel-extension.zip` 132853 / `iwara_web-extension.zip` 81023），`pornhub-api.zip` 已不存在。
+- 仓库级 grep：除本计划文档（历史记录，刻意保留 §16/§17 的 pornhub 字样）外，全仓无 `pornhub` / `PORNHUB` / `Pornhub` 残留（排除 `.git` / `_scratch` / `dist` / `.venv` / `__pycache__`）。
+
+### 17.3 保留的教训（不随代码删除）
+
+- **站点能否落地，先判「目标站在谁的网络上」。** 第 16 节最大的产出不是「连不上」，而是「一开始就不该按 Cloudflare 反代去设计」。`pornhub/ech.py` 与整个种子 IP 池 + ECH 骨架都是照 asmr.one 抄的，前提（目标在 CF 后）从未被验证过，结果所有 CF-IP 探针全灭。
+- **「缺代理」是结论，不是原因。** 本机 UDP:53 完全正常、`dash.cloudflare.com` / `api.cloudflare.com` / `*.pages.dev` 均可达，被阻断的是**按域名/SNI 定点**的几个主机（`*.workers.dev`、WARP 数据面 `162.159.192.x`）。诊断时先分层定位再归因。
+- **能用 `curl` 拿到的结论，不要写成「环境不行」。** 可复现的硬证据（DoH CNAME 链、CF 官方段表不命中、RDAP AS29789、NS 记录、UDP 端口扫描零回包）能直接判定可行性；反之，「本机对外 TLS 整体被阻断」这种笼统表述会掩盖真实原因（第 15.3 节的原文已因此被订正）。
+
