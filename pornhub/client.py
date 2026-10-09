@@ -50,9 +50,14 @@ DOH_ENDPOINTS = (
     "https://cloudflare-dns.com/dns-query",
 )
 
-# 借道用的 Cloudflare anycast IP（与 asmr_one 同组结论：实测可通 Pornhub 边缘的
-# 一批 CF IP）。Pornhub 自己的边缘 IP 在本机是否被 RST 取决于网络环境，换一批
-# anycast IP 是统一能提成功率的做法。
+# 借道用的 Cloudflare anycast IP。
+#
+# ⚠️ 实测结论（不要被「同为 CF IP 所以互通」误导）：这批 IP 是从 asmr_one 的池子
+# 抄过来的，**并不承载 Pornhub 边缘** —— 逐个探测是 6 秒超时或
+# ``SSLError: Recv failure: Connection was reset``，带上 ECH 也只是换成
+# ``SSLV3_ALERT_HANDSHAKE_FAILURE``。所以它们只是「DoH 也拿不到答案」时的最后
+# 兜底，绝不会优先于 ``_resolve`` 解出来的真实 IP；而且真正会不会被采用由
+# ``_pick_ip`` 的 TCP 预探测决定（不通的会被跳过）。
 SEED_IPS = (
     "104.18.10.118",
     "104.18.11.118",
@@ -257,7 +262,9 @@ class PornhubClient:
         self.ech_config = ech_config
         self._ech_ips = tuple(ech_ips)
         self._live_ips: dict[str, str] = {}
+        self._dead_ips: dict[str, set[str]] = {}
         self._sessions: dict[str, Any] = {}
+        self._session_ips: dict[str, str | None] = {}
         self._doh_client = httpx.AsyncClient(
             headers={"accept": "application/dns-json"}, timeout=5.0
         )
@@ -288,6 +295,21 @@ class PornhubClient:
             return list(SEED_HOSTS[host])
         return list(self._ech_ips or SEED_IPS)
 
+    async def _tcp_reachable(self, ip: str, port: int = 443) -> bool:
+        """先 TCP 探一下：借道池里混着整段不通的 IP，直接发请求只会白等超时。"""
+        try:
+            _reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(ip, port), timeout=self.probe_timeout
+            )
+        except (OSError, asyncio.TimeoutError):
+            return False
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:  # noqa: BLE001 - 探测完关不干净不影响结论
+            pass
+        return True
+
     async def _pick_ip(self, host: str) -> tuple[str, list[str]]:
         """返回一个 (IP, 其余候选) 供换 IP 重试。"""
         cached = self._live_ips.get(host)
@@ -298,27 +320,61 @@ class PornhubClient:
             ips = list(SEED_IPS)
         # 把显式 ech_ips 顶到最前面（用户想锁定某几个 IP 时）。
         ordered = list(self._ech_ips) + [ip for ip in ips if ip not in self._ech_ips]
-        self._live_ips[host] = ordered[0]
-        return ordered[0], ordered[1:]
+        # 已经确认连不上的别再排进来；全黑（极端情况）就退回全表，交给上层换。
+        dead = self._dead_ips.get(host) or set()
+        candidates = [ip for ip in ordered if ip not in dead] or ordered
+        probes = candidates[: self.ip_attempts]
+        # 借道池里混着整段不通的 IP（见 SEED_IPS 注释）：先 TCP 探一下，
+        # 选第一个通的固定下来；一个都不通就仍旧固定第一个，让请求层去换 IP。
+        reachable = await asyncio.gather(*(self._tcp_reachable(ip) for ip in probes))
+        chosen = next((ip for ip, ok in zip(probes, reachable) if ok), probes[0])
+        self._live_ips[host] = chosen
+        rest = [ip for ip in candidates if ip != chosen]
+        return chosen, rest
 
-    # ----- 内部：单次请求 ---------------------------------------------------
+    async def mark_ip_dead(self, host: str, ip: str) -> None:
+        """把某个 IP 拉黑：下次解析不再选它，并丢掉钉在它上面的那个会话。"""
+        self._dead_ips.setdefault(host, set()).add(ip)
+        if self._live_ips.get(host) == ip:
+            self._live_ips.pop(host, None)
+        self._sessions.pop(host, None)
+        self._session_ips.pop(host, None)
 
-    def _session(self, host: str):
-        """按 host 复用 curl_cffi AsyncSession（贴 ECH/impersonate 配置）。"""
-        if host in self._sessions:
+    # ----- 内部：会话与单次请求 ---------------------------------------------
+
+    def _session(self, host: str, ip: str | None = None):
+        """按 host 复用 curl_cffi AsyncSession，把 IP 与 ECH 钉进会话级 curl_options。
+
+        这里**不能**在建好会话后 ``session.curl.setopt(...)``：``AsyncSession``
+        只有 ``.acurl``（``.curl`` 是同步 ``Session`` 才有的），而且会话级
+        ``curl_options`` 每次请求都会重新下发（curl_cffi 的 ``_request_once``
+        把它交给 ``set_curl_options``），所以只需在建会话时设一次。
+        """
+        if ip is None:
+            ip = self._live_ips.get(host)
+        if host in self._sessions and self._session_ips.get(host) == ip:
             return self._sessions[host]
-        options: dict[str, Any] = {
-            "impersonate": self.impersonate,
-            "timeout": self.timeout,
+        # 换 IP 必须重建会话：RESOLVE 是会话级的，改不了就别用旧会话。
+        self._sessions.pop(host, None)
+        self._session_ips.pop(host, None)
+        curl_options: dict[Any, Any] = {
+            CurlOpt.CONNECTTIMEOUT: int(self.connect_timeout),
         }
+        if ip:
+            # RESOLVE 不是候选列表：同一 host:port libcurl 只认最后一条，一次钉一个。
+            curl_options[CurlOpt.RESOLVE] = [f"{host}:443:{ip}"]
         if self.ech and is_ech_host(host):
             option = _ech.ech_option(override=self.ech_config)
             if option is not None:
-                options["curl_options"] = {CurlOpt.ECH: option.encode()}
+                curl_options[CurlOpt.ECH] = option.encode()
         session = curl_requests.AsyncSession(
-            headers=dict(_BROWSER_HEADERS), **options
+            headers=dict(_BROWSER_HEADERS),
+            impersonate=self.impersonate,
+            timeout=self.timeout,
+            curl_options=curl_options,
         )
         self._sessions[host] = session
+        self._session_ips[host] = ip
         return session
 
     async def request(
@@ -342,8 +398,7 @@ class PornhubClient:
         last_exc: Exception | None = None
         for ip in attempts:
             try:
-                session = self._session(host)
-                session.curl.setopt(CurlOpt.RESOLVE, [f"{host}:443:{ip}"])
+                session = self._session(host, ip)
                 resp = await session.request(
                     method,
                     f"https://{host}{path}",
@@ -352,15 +407,19 @@ class PornhubClient:
                     data=body,
                     allow_redirects=True,
                 )
-                self._live_ips[host] = ip
                 if resp.status_code in (403, 503) and "cf-chl" in (resp.text or "").lower():
                     raise PornhubChallengeError(f"{host} 返回 Cloudflare 挑战（IP {ip}）")
+                self._live_ips[host] = ip
                 return resp
             except PornhubChallengeError:
+                # 挑战页也被当成「这个 IP 不可用」，但最后全败时的文案要走
+                # 「无异常信息」而不是把挑战异常塞进「失败：...」里。
                 last_exc = None
+                await self.mark_ip_dead(host, ip)
                 continue
             except Exception as exc:  # noqa: BLE001 - 换 IP 重试
                 last_exc = exc
+                await self.mark_ip_dead(host, ip)
                 continue
         if last_exc is not None:
             raise PornhubChallengeError(f"{host} 全部 IP 失败：{last_exc}")

@@ -149,10 +149,15 @@ class _FakeStreamResp:
 
 
 class _FakeSession:
-    """顶替 curl_cffi 的 AsyncSession：记录每次尝试固定的那个 IP。"""
+    """顶替 curl_cffi 的 AsyncSession：按顺序吐出预定的响应/异常。
+
+    注意：这里**不能**再造一个 ``self.curl`` —— ``AsyncSession`` 根本没有
+    ``.curl``（只有 ``.acurl``）。真实的钉 IP 走会话级 ``curl_options``，
+    所以「这次试哪个 IP」由 ``_FakeSessions`` 记录 ``_session(host, ip)`` 的
+    入参来断言，而不是去偷看一个并不存在的属性。
+    """
 
     def __init__(self, outcomes=()):
-        self.curl = _FakeCurl()
         self.outcomes = list(outcomes)
         self.calls = []
         self._last = None
@@ -171,17 +176,6 @@ class _FakeSession:
 
     async def close(self):
         return None
-
-
-class _FakeCurl:
-    """只关心 ``CURLOPT_RESOLVE``：那才是「这次试哪个 IP」。"""
-
-    def __init__(self):
-        self.resolves = []
-
-    def setopt(self, option, value):
-        if option == CurlOpt.RESOLVE:
-            self.resolves.append(list(value))
 
 
 # 真实的视频页 initialState 形状：字段名与线上一致。
@@ -683,6 +677,9 @@ class PornhubTransportTestCase(unittest.TestCase):
     def _client(self, **kw):
         client = PornhubClient(**kw)
         self.addCleanup(lambda: asyncio.run(client.aclose()))
+        # TCP 预探测一律打桩成「通」：否则用例会真去连候选 IP（借道池里
+        # 大部分是不通的），测试既慢又依赖网络。要验证探测本身时再单独覆盖。
+        client._tcp_reachable = AsyncMock(return_value=True)  # type: ignore[assignment]
         # 默认把 DoH 也掐掉：这几个用例关心的是 IP 选择与会话参数，不是解析。
         # 忘了打桩就会真去查阿里/Cloudflare 的 DoH，测试也就不可复现了。
         return self._patch_doh(client, error=httpx.ConnectError("DoH 已打桩"))
@@ -699,7 +696,19 @@ class PornhubTransportTestCase(unittest.TestCase):
         return client
 
     def _patch_session(self, client, session):
-        client._session = lambda host: session  # type: ignore[assignment]
+        """顶掉 ``_session`` 并记下每次尝试钉的 IP。
+
+        真实实现把 IP 写进**会话级** ``curl_options``（``AsyncSession`` 没有
+        ``.curl``，建会话之后没法再 setopt），所以「这次试哪个 IP」只能从
+        ``_session(host, ip)`` 的入参观察。
+        """
+        client.pinned = []
+
+        def fake_session(host, ip=None):
+            client.pinned.append((host, ip))
+            return session
+
+        client._session = fake_session  # type: ignore[assignment]
         return session
 
     # ---------- DNS ----------
@@ -788,6 +797,31 @@ class PornhubTransportTestCase(unittest.TestCase):
         # RESOLVE 只是「把域名解到哪个 IP」，不改 Host/SNI：TLS 里仍是真实域名。
         self.assertEqual(captured["impersonate"], "chrome")
         self.assertTrue(captured["timeout"] > 0)
+        options = captured["curl_options"]
+        self.assertEqual(options[CurlOpt.RESOLVE], [f"{SITE_HOST}:443:8.8.8.8"])
+        self.assertGreater(options[CurlOpt.CONNECTTIMEOUT], 0)
+
+    def test_session_rebuilds_when_the_ip_changes(self):
+        """换 IP 必须重建会话：RESOLVE 是会话级的，旧会话改不了。"""
+        client = self._patch_doh(
+            self._client(doh_endpoints=("https://doh/a",)),
+            {SITE_HOST: [{"type": 1, "data": "1.1.1.1"}]},
+        )
+        built = []
+
+        def fake_session(**kwargs):
+            built.append(kwargs)
+            return MagicMock()
+
+        with patch("pornhub.client.curl_requests.AsyncSession", fake_session):
+            first = client._session(SITE_HOST, "1.1.1.1")
+            again = client._session(SITE_HOST, "1.1.1.1")
+            second = client._session(SITE_HOST, "2.2.2.2")
+
+        self.assertIs(first, again, "同一个 IP 该复用会话")
+        self.assertIsNot(first, second, "换了 IP 必须换会话")
+        self.assertEqual(len(built), 2)
+        self.assertEqual(built[1]["curl_options"][CurlOpt.RESOLVE], [f"{SITE_HOST}:443:2.2.2.2"])
 
     def test_session_reuses_the_same_object_per_host(self):
         client = self._client()
@@ -798,8 +832,8 @@ class PornhubTransportTestCase(unittest.TestCase):
             return MagicMock()
 
         with patch("pornhub.client.curl_requests.AsyncSession", fake_session):
-            first = client._session(SITE_HOST)
-            second = client._session(SITE_HOST)
+            first = client._session(SITE_HOST, "1.1.1.1")
+            second = client._session(SITE_HOST, "1.1.1.1")
 
         self.assertIs(first, second)
         self.assertEqual(len(built), 1)
@@ -815,7 +849,7 @@ class PornhubTransportTestCase(unittest.TestCase):
         with patch("pornhub.client.curl_requests.AsyncSession", fake_session), patch.object(
             ph_ech, "available", lambda: True
         ):
-            client._session(SITE_HOST)
+            client._session(SITE_HOST, "1.1.1.1")
 
         option = captured["curl_options"][CurlOpt.ECH]
         self.assertEqual(option, ("ecl:" + GOOD_ECH_B64).encode())
@@ -829,9 +863,9 @@ class PornhubTransportTestCase(unittest.TestCase):
             return MagicMock()
 
         with patch("pornhub.client.curl_requests.AsyncSession", fake_session):
-            client._session("example.com")
+            client._session("example.com", "1.1.1.1")
 
-        self.assertNotIn("curl_options", captured)
+        self.assertNotIn(CurlOpt.ECH, captured["curl_options"])
 
     def test_session_leaves_ech_off_when_the_switch_is_off(self):
         client = self._client(ech=False, ech_config=GOOD_ECH_B64)
@@ -844,9 +878,9 @@ class PornhubTransportTestCase(unittest.TestCase):
         with patch("pornhub.client.curl_requests.AsyncSession", fake_session), patch.object(
             ph_ech, "available", lambda: True
         ):
-            client._session(SITE_HOST)
+            client._session(SITE_HOST, "1.1.1.1")
 
-        self.assertNotIn("curl_options", captured)
+        self.assertNotIn(CurlOpt.ECH, captured["curl_options"])
 
     def test_session_leaves_ech_off_when_libcurl_lacks_it(self):
         client = self._client(ech=True, ech_config=GOOD_ECH_B64)
@@ -859,9 +893,9 @@ class PornhubTransportTestCase(unittest.TestCase):
         with patch("pornhub.client.curl_requests.AsyncSession", fake_session), patch.object(
             ph_ech, "available", lambda: False
         ):
-            client._session(SITE_HOST)
+            client._session(SITE_HOST, "1.1.1.1")
 
-        self.assertNotIn("curl_options", captured)
+        self.assertNotIn(CurlOpt.ECH, captured["curl_options"])
 
     # ---------- 请求与重试 ----------
 
@@ -872,7 +906,7 @@ class PornhubTransportTestCase(unittest.TestCase):
 
         asyncio.run(client.request("GET", "/video"))
 
-        self.assertEqual(session.curl.resolves, [[f"{SITE_HOST}:443:1.1.1.1"]])
+        self.assertEqual(client.pinned, [(SITE_HOST, "1.1.1.1")])
         self.assertEqual(session.calls[0][1], f"https://{SITE_HOST}/video")
 
     def test_request_passes_the_params_through(self):
@@ -895,9 +929,11 @@ class PornhubTransportTestCase(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(session.calls), 2)
-        # 两次尝试固定的是两个不同的 IP。
-        self.assertNotEqual(session.curl.resolves[0], session.curl.resolves[1])
-        self.assertEqual(client._live_ips[SITE_HOST], session.curl.resolves[1][0].split(":")[2])
+        # 两次尝试固定的是两个不同的 IP，失败的第一个要被拉黑。
+        self.assertEqual(len(client.pinned), 2)
+        self.assertNotEqual(client.pinned[0][1], client.pinned[1][1])
+        self.assertIn("1.1.1.1", client._dead_ips[SITE_HOST])
+        self.assertEqual(client._live_ips[SITE_HOST], client.pinned[1][1])
 
     def test_a_cloudflare_challenge_moves_on_to_the_next_ip(self):
         client = self._client(ip_attempts=2)
@@ -963,7 +999,7 @@ class PornhubTransportTestCase(unittest.TestCase):
         asyncio.run(client.request("GET", "/cdn-cgi/trace", host="pornhub.com"))
 
         self.assertEqual(session.calls[0][1], "https://pornhub.com/cdn-cgi/trace")
-        self.assertEqual(session.curl.resolves[0][0], "pornhub.com:443:1.1.1.1")
+        self.assertEqual(client.pinned, [("pornhub.com", "1.1.1.1")])
 
 
 @unittest.skipUnless(HAVE_PORNHUB, SKIP_REASON)
