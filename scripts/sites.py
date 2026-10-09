@@ -85,6 +85,18 @@ SITES = (
         requirements="asmr_one/requirements.txt",
         files=("run.py", "requirements.txt"),
     ),
+    SiteInfo(
+        name="pornhub",
+        directory="pornhub",
+        title="Pornhub Bridge",
+        # 与 iwara / asmr_one 同因：Pornhub 在 Cloudflare 后面只认浏览器 TLS 指纹，
+        # 换边缘 IP 与叠 ECH 都要 libcurl（curl_cffi 的 impersonate + CURLOPT_RESOLVE
+        # + CURLOPT_ECH）；纯 httpx 会被判机器人返回 403。Pornhub 没有公开 API，
+        # 这个站点是**抓取器**（爬网页里的 initialState），匿名就能看公开内容。
+        extra_modules=("curl_cffi",),
+        requirements="pornhub/requirements.txt",
+        files=("run.py", "requirements.txt"),
+    ),
 )
 
 SITES_BY_NAME = {site.name: site for site in SITES}
@@ -94,6 +106,7 @@ SITE_ASSETS = {
     "pixiv": ("openssl-libs",),
     "iwara": (),
     "asmr_one": (),
+    "pornhub": (),
 }
 
 
@@ -184,11 +197,22 @@ ASM_ROUTE_PATHS = frozenset(
     }
 )
 
+PH_ROUTE_PATHS = frozenset(
+    {
+        "/api/pornhub/health",
+        "/api/pornhub/search",
+        "/api/pornhub/stream",
+        "/api/pornhub/video/{viewkey}",
+        "/api/pornhub/videos",
+    }
+)
+
 #: 「站点名 → 该站点自己的路由」：路由隔离检查按这张表逐个站点比对，
 #: 加站点时只要在这里补一条（不写死某个站点名）。
 SITE_ROUTE_PATHS = {
     "iwara": IWARA_ROUTE_PATHS,
     "asmr_one": ASM_ROUTE_PATHS,
+    "pornhub": PH_ROUTE_PATHS,
 }
 
 #: 顶层包名：项目根下所有「有 __init__.py 的目录」+ 各站点目录。

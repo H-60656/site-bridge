@@ -118,7 +118,7 @@ BASE_NOTES = (
     "所以它直接启动；想显式指定就在 `.env` 里写 `BRIDGE_SITE=<站点目录名>`。",
     "个人数据都在 `data/` 里（登录凭据 / 阅读历史 / 下载记录 / 收藏台账 / 页面配置）；"
     "换机只拷这一个目录。",
-    "三个接口项目 `pixiv/` / `iwara/` / `asmr_one/` 是**同级**的：各自一个 `run.py`，"
+    "各接口项目 `pixiv/` / `iwara/` / `asmr_one/` / `pornhub/` 是**同级**的：各自一个 `run.py`，"
     "互相不挂载，都只用框架 `pixiv_bridge/`。",
 )
 
@@ -148,6 +148,21 @@ ASMR_NOTES = (
     "`/api/asmr/stream?url=...` 代转（`/api/asmr/tracks/{id}` 里给的直链是给本站用的）。",
 )
 
+PH_SETUP = (
+    "pornhub 不需要登录：公开浏览、搜索与播放匿名就够。"
+    "（要登录的只有收藏 / 订阅那几个端点，本站不暴露它们。）",
+)
+
+PH_NOTES = (
+    "pornhub 的 ECH **默认开**（`PORNHUB_BRIDGE_ECH`）：它在 Cloudflare 后面只认"
+    "浏览器 TLS 指纹，关掉大概率抓取全灭（纯 httpx 会被判机器人返回 403）。",
+    "换 IP 与叠 ECH 都要 libcurl，所以本包同样带 `curl_cffi`（首次启动会多装一个编译包）。",
+    "Pornhub **没有公开 API**：这个站点是抓取器，拿网页里的 `window.initialState` 解析。"
+    "改版会让字段消失，接口会回 502，这是已知脆弱性。",
+    "视频直链带时效签名，浏览器同样到不了那些 CDN 边缘 —— 播放器要走本站的"
+    "`/api/pornhub/stream?url=...` 代转。",
+)
+
 
 def _site_dirs(*names, with_assets=True) -> tuple:
     """组装包里要带的目录：框架 + 指定站点（+ 站点资产 + 公共目录）。"""
@@ -163,6 +178,7 @@ def _site_dirs(*names, with_assets=True) -> tuple:
 PIXIV = SITES_BY_NAME["pixiv"]
 IWARA = SITES_BY_NAME["iwara"]
 ASMR = SITES_BY_NAME["asmr_one"]
+PORNHUB = SITES_BY_NAME["pornhub"]
 
 PACKAGES = (
     PackageSpec(
@@ -236,6 +252,33 @@ PACKAGES = (
             "`/api/health` 等入口）。",
         )
         + ASMR_NOTES
+        + BASE_NOTES,
+    ),
+    PackageSpec(
+        key="pornhub-api",
+        zip_name="pornhub-api",
+        title="pornhub 接口包",
+        kind="api",
+        summary="pornhub 视频接口（抓取器：列表 / 搜索 / 视频详情含直链 / 播放代转）+ `/` 导航页。",
+        dirs=_site_dirs(PORNHUB.directory, with_assets=False),
+        files=API_ROOT_FILES,
+        start_commands=(
+            "# Windows",
+            "start.bat",
+            "",
+            "# 其它平台",
+            PORNHUB.command(),
+        ),
+        setup_lines=BASE_SETUP + PH_SETUP,
+        notes=(
+            "入口是 `pornhub/run.py`，它**只挂 pornhub 的接口** —— Pixiv / iwara / asmr 的"
+            "路由都不在本包里（各接口项目同级，互不挂载）。",
+            "Pornhub **没有公开 API**：这个站点是抓取器，拿网页里的 `window.initialState` 解析；"
+            "Pornhub 改版会让字段消失，接口会回 502，这是已知脆弱性。",
+            "启动后浏览器打开 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、"
+            "`/api/health` 等入口）。",
+        )
+        + PH_NOTES
         + BASE_NOTES,
     ),
     PackageSpec(
