@@ -4,7 +4,7 @@
 Pixiv 官方 App API（`app-api.pixiv.net`）调用方式（请求签名、OAuth 认证、全部端点），用 Python 重新实现的一个
 **自托管 HTTP 接口服务**。启动后，任何语言的代码通过普通 HTTP 请求即可调用 Pixiv 数据能力，无需处理签名、token 刷新、防盗链等细节。
 
-> 项目分四层：**`pixiv_bridge/`**（**框架**：启动、配置、环境自检、扩展机制、导航页与 `/api/health`；不含任何站点知识）、**`pixiv/`**、**`iwara/`** 与 **`asmr_one/`**（三个**同级的接口项目**，各有一个同构的 `run.py` 入口：分别提供 Pixiv 接口、iwara.tv 接口、asmr.one 接口）、**`novel/`** 与 **`iwara_web/`**（两个**扩展**：小说阅读器与 iwara 视频页面，没有自己的入口，把目录名写进配置就挂到对应站点上）。**新增一个站点** = 建一个与它们同级的目录（`app.py` 里按 `Site` 契约给出站点信息、自带检查（与可选的登录校验），`run.py` 只做三件事：`bootstrap()` → `from <站点>.app import SITE` → `pixiv_bridge.cli.main(site=SITE)`），框架一行都不用改；详见「附属项目（扩展）」与「新增一个接口项目」。
+> 项目分三层：**`pixiv_bridge/`**（**框架**：启动、配置、环境自检、扩展机制、导航页与 `/api/health`；不含任何站点知识）、**`pixiv/`**、**`iwara/`** 与 **`asmr_one/`**（三个**同级的接口项目**，各有一个同构的 `run.py` 入口：分别提供 Pixiv 接口、iwara.tv 接口、asmr.one 接口）、**`novel/`** 与 **`iwara_web/`**（两个**扩展**：小说阅读器与 iwara 视频页面，没有自己的入口，把目录名写进配置就挂到对应站点上）。**新增一个站点** = 建一个与它们同级的目录（`app.py` 里按 `Site` 契约给出站点信息、自带检查（与可选的登录校验），`run.py` 只做三件事：`bootstrap()` → `from <站点>.app import SITE` → `pixiv_bridge.cli.main(site=SITE)`），框架一行都不用改；详见「附属项目（扩展）」与「新增一个接口项目」。
 
 ## 特性
 
@@ -140,7 +140,7 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 .venv/bin/python asmr_one/run.py
 ```
 
-项目分成四层，**站点与扩展依赖框架**、单向依赖不反过来（各站点之间也互不依赖）。**每个接口项目各有一个同构的入口脚本**（`pixiv/run.py`、`iwara/run.py` 与 `asmr_one/run.py`）；小说阅读器与 iwara 视频页面都没有专属入口，它们作为扩展挂上去：
+项目分成三层，**站点与扩展依赖框架**、单向依赖不反过来（各站点之间也互不依赖）。**每个接口项目各有一个同构的入口脚本**（`pixiv/run.py`、`iwara/run.py` 与 `asmr_one/run.py`）；小说阅读器与 iwara 视频页面都没有专属入口，它们作为扩展挂上去：
 
 | 启动方式 | 提供什么 |
 | --- | --- |
@@ -407,7 +407,7 @@ pixiv-bridge/
 
 ## 附属项目（扩展）
 
-项目分四层，但**入口只有三个**（`pixiv/run.py`、`iwara/run.py` 与 `asmr_one/run.py`：三个同级接口项目，命令行完全一样）。小说阅读器（`novel`）与 iwara 视频页面（`iwara_web`）都不带专属入口脚本，它们作为**扩展**挂在各自的宿主站点上：把扩展目录名写进配置，站点启动时自己去该目录找固定名字的入口文件 `extension.py`。
+项目分三层，但**入口只有三个**（`pixiv/run.py`、`iwara/run.py` 与 `asmr_one/run.py`：三个同级接口项目，命令行完全一样）。小说阅读器（`novel`）与 iwara 视频页面（`iwara_web`）都不带专属入口脚本，它们作为**扩展**挂在各自的宿主站点上：把扩展目录名写进配置，站点启动时自己去该目录找固定名字的入口文件 `extension.py`。
 
 ```
 PIXIV_BRIDGE_EXTENSIONS=novel        # 相对路径按项目根算
@@ -853,7 +853,7 @@ python scripts/make_share_packages.py --check   # 分享包内容自检（不写
 
 ### 一键生成分享包（推荐）
 
-项目现在是四层（框架 + 三个同级接口项目 + 两个扩展），按用途拆成七个分享包：
+项目现在是三层（框架 + 三个同级接口项目 + 两个扩展），按用途拆成七个分享包：
 
 ```bash
 python scripts/make_share_packages.py            # 七个包全做，写进 dist/
