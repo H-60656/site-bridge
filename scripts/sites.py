@@ -203,6 +203,8 @@ EH_ROUTE_PATHS = frozenset(
         "/api/eh/images/{gid}/{token}",
         "/api/eh/list",
         "/api/eh/metadata",
+        "/api/eh/page",
+        "/api/eh/popular",
         "/api/eh/proxy",
         "/api/eh/search",
     }

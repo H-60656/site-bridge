@@ -1,13 +1,17 @@
 """E-Hentai 的只读接口（``/api/eh/*``）。
 
-七个端点，和 asmr 的布局一一对应；区别只有两处，都是这个站点的传输特性逼
+九个端点，和 asmr 的布局一一对应；区别只有三处，都是这个站点的传输特性逼
 出来的：
 
-- **翻页用光标不用页码**：E-Hentai 的列表页只认 ``?next=<最后一个 gid>``，
+- **列表翻页用光标不用页码**：E-Hentai 的列表页只认 ``?next=<最后一个 gid>``，
   ``?page=N`` 会被完全忽略（实测），所以 ``/list`` 收的是 ``cursor``。
+- **详情翻页用页码**：画廊详情页反过来认 0 基的 ``?p=``，一屏 20 张，所以
+  ``/gallery`` 与 ``/images`` 收的是 ``page``，并用 ``showing.total`` 算出
+  总屏数与下一页（``/images`` 返回 ``next_page``）。
 - **图片要服务端代转**：图片挂在 ``*.hath.network`` 上，浏览器直连能不能通
   取决于运气（节点是随机分配的家用带宽节点），所以 ``/proxy`` 由服务端取字节
-  再转发，并在遇到死节点时换边缘重解析。
+  再转发，并在遇到死节点时换边缘重解析；``/page`` 则只解析直链与图元信息，
+  不下载字节。
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from ..client import EhError, is_allowed_proxy
+from ..client import EhError, is_allowed_proxy, is_image_page
 from . import get_client
 
 router = APIRouter(prefix="/api/eh", tags=["eh"])
@@ -51,6 +55,21 @@ async def list_galleries(
     client = get_client(request)
     try:
         return await client.list_galleries(cursor=cursor.strip(), query=query.strip())
+    except EhError as exc:
+        _raise(exc)
+
+
+@router.get("/popular", summary="热门画廊")
+async def popular(request: Request):
+    """``/popular`` 热门页（**一次给完，没有翻页**）。
+
+    实测这一页不印 ``Found N results``、也没有 ``dnext`` 光标，喂 ``?next=`` 上去
+    返回的字节数完全一样，所以它跟 ``/list`` 不是同一套分页：这里只返回一页，
+    ``next`` 永远为空，别拿它循环翻页。
+    """
+    client = get_client(request)
+    try:
+        return await client.popular()
     except EhError as exc:
         _raise(exc)
 
@@ -95,26 +114,59 @@ async def images(
     token: str,
     page: int = Query(1, ge=1),
 ):
-    """这一屏的 ``/s/`` 大图页地址列表（把它们逐个丢给 ``/proxy`` 即可看图）。"""
+    """这一屏的 ``/s/`` 大图页地址列表（把它们逐个丢给 ``/proxy`` 即可看图）。
+
+    顺带回真实分页信息：``total`` 是全画廊图片数，``total_pages`` 是总屏数，
+    ``next_page`` 是下一屏页码（最后一屏为 ``null``）。``page`` 超出总屏数时
+    ``items`` 会为空、``next_page`` 也是 ``null``。
+    """
     client = get_client(request)
     try:
         data = await client.gallery(gid, token, page=page)
     except EhError as exc:
         _raise(exc)
     links = data.get("page_links") or []
+    page_size = data.get("page_size") or 20
     return {
         "gid": data.get("gid"),
         "token": data.get("token"),
         "page": data.get("page"),
-        "page_size": data.get("page_size"),
-        "total": (data.get("showing") or {}).get("total"),
+        "page_size": page_size,
+        "total": data.get("total"),
+        "total_pages": data.get("total_pages"),
+        "next_page": data.get("next_page"),
+        "has_next": data.get("has_next"),
         "count": len(links),
         "items": [
-            {"index": (page - 1) * data.get("page_size", 20) + offset + 1, "url": url}
+            {"index": (page - 1) * page_size + offset + 1, "url": url}
             for offset, url in enumerate(links)
         ],
         "next_cursor": None,
     }
+
+
+@router.get("/page", summary="解析大图页直链")
+async def image_page(
+    request: Request,
+    url: str = Query(..., description="/s/ 大图页地址（例如 /images 返回的 items[].url）"),
+):
+    """把 ``/s/`` 大图页解析成**真实图片直链**与图元信息（不下字节）。
+
+    和 ``/proxy`` 的分工：``/proxy`` 取字节给你看图，``/page`` 只告诉你在哪、
+    多大——因为直链在 ``*.hath.network`` 上是随机的 H@H 节点，客户端想自己下
+    （或换个 Referer 自己试）时用它。直链同样只在 H@H 上才会返回，否则 502。
+    """
+    if not is_image_page(url):
+        raise HTTPException(
+            status_code=400,
+            detail="只解析 e-hentai.org 的 /s/ 大图页，其它地址一律拒绝",
+        )
+    client = get_client(request)
+    try:
+        page = await client.image_page(url)
+    except EhError as exc:
+        _raise(exc)
+    return page
 
 
 @router.get("/metadata", summary="官方 gdata 元数据")

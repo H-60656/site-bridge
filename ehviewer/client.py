@@ -168,6 +168,40 @@ def split_ips(value: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in items.split(",") if part.strip())
 
 
+def pagination(page: int, showing: dict | None, page_size: int = PAGE_SIZE) -> dict:
+    """详情页的页码分页算术（``/gallery`` 与 ``/images`` 共用）。
+
+    E-Hentai 的**列表页**是光标分页（``?next=``，页码会被忽略），但**详情页**
+    是页码分页（0 基 ``?p=``，一屏 ``PAGE_SIZE`` 张）。后者能靠 ``showing.total``
+    算出总屏数，所以这里把「还有没有下一页」这个判断收成一处，免得每个调用方
+    各算一遍还各算错一次（``next_cursor`` 曾经就是写死的 ``None``）。
+    """
+    try:
+        page = max(1, int(page))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = max(1, int(page_size))
+    except (TypeError, ValueError):
+        page_size = PAGE_SIZE
+    raw_total = (showing or {}).get("total")
+    try:
+        total = int(raw_total) if raw_total not in (None, "") else None
+    except (TypeError, ValueError):
+        total = None
+    if not total or total <= 0:
+        # 数不出来时不要瞎猜：宁可说「未知」，也不给一个会把客户端带进
+        # 空页的页码（那会让翻页循环停不下来）。
+        return {"total": total, "total_pages": None, "next_page": None, "has_next": None}
+    total_pages = (total + page_size - 1) // page_size
+    return {
+        "total": total,
+        "total_pages": total_pages,
+        "next_page": page + 1 if page < total_pages else None,
+        "has_next": page < total_pages,
+    }
+
+
 # ---------------------------------------------------------------- 客户端
 
 
@@ -375,6 +409,28 @@ class EhClient:
             raise EhError("搜索关键词为空", status=400)
         return await self.list_galleries(cursor=cursor, query=query)
 
+    async def popular(self) -> dict:
+        """``/popular`` 热门页（**一次给完，不能翻页**）。
+
+        实测：``/popular`` 返回约 74 行、页面里**没有** ``dnext`` 那条翻页链接，
+        喂 ``?next=<gid>`` 上去字节数一模一样（165242 vs 165242），所以它跟首页
+        不是同一套分页。这里因此不接 ``cursor``，也不假装有下一页——只把
+        ``found`` 留空（该页本来就不印 "Found N results"）。
+        """
+        body = await self._get_html(BASE_URL + "/popular")
+        items = _parse.parse_galleries(body)
+        nav = _parse.parse_list_nav(body)
+        return {
+            "query": "",
+            "cursor": "",
+            "count": len(items),
+            "found": nav["found"],
+            "next": "",
+            "prev": "",
+            "next_url": "",
+            "items": items,
+        }
+
     # ---------- 详情 / 页面 ----------
 
     async def gallery(self, gid: Any, token: str, page: int = 1) -> dict:
@@ -401,6 +457,9 @@ class EhClient:
         data["page_size"] = PAGE_SIZE
         data["page_links"] = _parse.parse_page_links(body)
         data["showing"] = _parse.parse_showing(body)
+        # 详情页是**页码**分页（0 基 ?p=），所以总屏数能直接算出来；
+        # 让调用方不必自己拿 showing.total 去除以 20。
+        data.update(pagination(page, data["showing"], data["page_size"]))
         return data
 
     async def image_page(self, url: str) -> dict:

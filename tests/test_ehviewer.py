@@ -51,6 +51,7 @@ try:
         is_image_page,
         is_media_host,
         is_media_url,
+        pagination,
         parse_gallery_path,
         split_ips,
     )
@@ -520,6 +521,63 @@ class EhClientAddressTestCase(unittest.TestCase):
         self.assertNotIn("172.66.132.196", EDGE_IPS)
         self.assertNotIn("172.66.140.62", EDGE_IPS)
         self.assertGreaterEqual(len(EDGE_IPS), 8)
+
+
+@unittest.skipUnless(HAVE_EH, SKIP_REASON)
+class EhPaginationTestCase(unittest.TestCase):
+    """详情页的分页算术（曾经 ``next_cursor`` 是写死的 ``None``）。"""
+
+    def test_middle_screen_points_at_the_next_one(self):
+        self.assertEqual(
+            pagination(1, {"total": 40}, 20),
+            {"total": 40, "total_pages": 2, "next_page": 2, "has_next": True},
+        )
+
+    def test_last_screen_has_no_next(self):
+        self.assertEqual(
+            pagination(2, {"total": 40}, 20),
+            {"total": 40, "total_pages": 2, "next_page": None, "has_next": False},
+        )
+
+    def test_a_partial_last_screen_rounds_up(self):
+        # 118 张 / 一屏 20 ⇒ 6 屏，最后那屏只有 18 张。
+        body = pagination(1, {"total": 118}, 20)
+
+        self.assertEqual(body["total_pages"], 6)
+        self.assertTrue(pagination(5, {"total": 118}, 20)["has_next"])
+        self.assertFalse(pagination(6, {"total": 118}, 20)["has_next"])
+
+    def test_a_page_beyond_the_end_does_not_advertise_a_next(self):
+        body = pagination(99, {"total": 40}, 20)
+
+        self.assertIsNone(body["next_page"])
+        self.assertFalse(body["has_next"])
+
+    def test_a_missing_total_is_reported_as_unknown(self):
+        for showing in (None, {}, {"total": None}, {"total": ""}, {"total": "abc"}):
+            body = pagination(1, showing, 20)
+            self.assertIsNone(body["total_pages"], showing)
+            self.assertIsNone(body["next_page"], showing)
+            self.assertIsNone(body["has_next"], showing)
+
+    def test_a_zero_total_is_unknown_not_a_one_page_album(self):
+        body = pagination(1, {"total": 0}, 20)
+
+        self.assertIsNone(body["next_page"])
+        self.assertIsNone(body["has_next"])
+
+    def test_junk_arguments_fall_back_instead_of_raising(self):
+        body = pagination("nope", {"total": 40}, "nope")
+
+        self.assertEqual(body["total_pages"], 2)
+        self.assertTrue(body["has_next"])
+
+    def test_a_single_short_screen_has_no_next(self):
+        body = pagination(1, {"total": 3}, 20)
+
+        self.assertEqual(body["total_pages"], 1)
+        self.assertIsNone(body["next_page"])
+        self.assertFalse(body["has_next"])
 
 
 # ---------------------------------------------------------------- 传输层
@@ -1063,6 +1121,9 @@ class _FakeEhClient:
         self.error = None
         self.proxy_error = None
         self.proxy_status = 200
+        self.image_page_error = None
+        #: 详情页的 showing：空字典表示「上游没给总数」，用来测未知分支。
+        self.gallery_showing = {"from": 1, "to": 20, "total": 40}
 
     def _maybe_fail(self):
         if self.error is not None:
@@ -1096,20 +1157,57 @@ class _FakeEhClient:
         self._maybe_fail()
         return await self.list_galleries(cursor=cursor, query=query)
 
+    async def popular(self):
+        self.calls.append(("popular",))
+        self._maybe_fail()
+        return {
+            "query": "",
+            "cursor": "",
+            "count": 1,
+            "found": "",
+            "next": "",
+            "prev": "",
+            "next_url": "",
+            "items": [{"gid": 4241792, "token": "aabbccddee", "title": "Popular One"}],
+        }
+
+    async def image_page(self, url):
+        self.calls.append(("image_page", url))
+        self._maybe_fail()
+        if self.image_page_error is not None:
+            raise self.image_page_error
+        return {
+            "image_url": "https://zurswtyclg.hath.network/om/262577133/0de46151-x/1.jpg",
+            "title": "Popular One",
+            "filename": "1.jpg",
+            "width": 1024,
+            "height": 1024,
+            "size": "220.3 KiB",
+            "current": 1,
+            "total": 118,
+            "gid": "4242119",
+            "prev": "https://e-hentai.org/s/aabb/4242119-1",
+            "next": "https://e-hentai.org/s/ccdd/4242119-3",
+            "url": url,
+        }
+
     async def gallery(self, gid, token, page=1):
         self.calls.append(("gallery", str(gid), token, page))
         self._maybe_fail()
-        return {
+        data = {
             "gid": int(gid),
             "token": token,
             "page": page,
             "page_size": 20,
-            "showing": {"from": 1, "to": 20, "total": 40},
+            "showing": dict(self.gallery_showing),
             "page_links": [
                 "https://e-hentai.org/s/b73be0a953/4240495-1",
                 "https://e-hentai.org/s/b6062cc00f/4240495-2",
             ],
         }
+        # 用真实的分页助手，别在假客户端里另写一套 —— 否则路由测试测的是假货。
+        data.update(pagination(page, data["showing"], data["page_size"]))
+        return data
 
     async def metadata(self, gid, token):
         self.calls.append(("metadata", int(gid), token))
@@ -1183,6 +1281,34 @@ class EhRouteTestCase(unittest.TestCase):
         self.assertEqual(body["query"], "lolicon")
         self.assertEqual(self.fake.calls[0], ("search", "lolicon", "4242034"))
 
+    def test_popular_comes_back_in_one_page(self):
+        client = self._client()
+
+        body = client.get("/api/eh/popular").json()
+
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["items"][0]["gid"], 4241792)
+        self.assertEqual(self.fake.calls[0], ("popular",))
+
+    def test_popular_advertises_no_cursor(self):
+        client = self._client()
+
+        body = client.get("/api/eh/popular").json()
+
+        # 上游 /popular 忽略 ?next=，所以这里必须承认没有下一页，
+        # 不能给出一个会把调用方带进循环的 next。
+        self.assertEqual(body["next"], "")
+        self.assertEqual(body["next_url"], "")
+        self.assertEqual(body["cursor"], "")
+        self.assertEqual(body["found"], "")
+
+    def test_popular_ignores_an_unknown_cursor_argument(self):
+        client = self._client()
+
+        # 本端点不接 cursor；多喂一个只是被忽略，绝不悄悄变成翻页语义。
+        self.assertEqual(client.get("/api/eh/popular?cursor=4241792").status_code, 200)
+        self.assertEqual(self.fake.calls[0], ("popular",))
+
     # ---------- 详情 / 图片 ----------
 
     def test_gallery_decorates_the_detail(self):
@@ -1223,6 +1349,75 @@ class EhRouteTestCase(unittest.TestCase):
         # 第 3 屏的第一张是全画廊第 41 张。
         self.assertEqual(body["items"][0]["index"], 41)
         self.assertEqual(body["page"], 3)
+
+    def test_images_reports_the_real_next_page(self):
+        client = self._client()
+
+        # 假客户端固定给 total=40 / page_size=20 ⇒ 共 2 屏。
+        body = client.get(f"/api/eh/images/4240495/{GALLERY_TOKEN}").json()
+
+        self.assertEqual(body["total_pages"], 2)
+        self.assertEqual(body["next_page"], 2)
+        self.assertTrue(body["has_next"])
+
+    def test_images_says_there_is_no_next_page_on_the_last_screen(self):
+        client = self._client()
+
+        body = client.get(f"/api/eh/images/4240495/{GALLERY_TOKEN}?page=2").json()
+
+        self.assertEqual(body["total_pages"], 2)
+        self.assertIsNone(body["next_page"])
+        self.assertFalse(body["has_next"])
+
+    def test_images_without_a_total_says_unknown_instead_of_guessing(self):
+        client = self._client()
+        self.fake.gallery_showing = {}
+
+        body = client.get(f"/api/eh/images/4240495/{GALLERY_TOKEN}").json()
+
+        # 数不出来就别编页码：编错会把调用方带进空屏。
+        self.assertIsNone(body["total_pages"])
+        self.assertIsNone(body["next_page"])
+        self.assertIsNone(body["has_next"])
+
+    def test_page_returns_the_direct_link_and_image_metadata(self):
+        client = self._client()
+
+        body = client.get("/api/eh/page", params={"url": IMAGE_PAGE_URL}).json()
+
+        self.assertEqual(body["image_url"], "https://zurswtyclg.hath.network/om/262577133/0de46151-x/1.jpg")
+        self.assertEqual(body["filename"], "1.jpg")
+        self.assertEqual((body["width"], body["height"]), (1024, 1024))
+        self.assertEqual(body["size"], "220.3 KiB")
+        self.assertEqual((body["current"], body["total"]), (1, 118))
+        self.assertEqual(body["url"], IMAGE_PAGE_URL)
+        self.assertEqual(self.fake.calls[0], ("image_page", IMAGE_PAGE_URL))
+
+    def test_page_requires_a_url(self):
+        client = self._client()
+
+        self.assertEqual(client.get("/api/eh/page").status_code, 422)
+        self.assertEqual(self.fake.calls, [], "缺参数不该打到客户端")
+
+    def test_page_rejects_anything_that_is_not_an_s_page(self):
+        client = self._client()
+
+        for url in (
+            "https://e-hentai.org/g/4240495/8bcad20a1a/",
+            "https://e-hentai.org/",
+            "https://example.com/s/b73be0a953/4240495-3",
+        ):
+            self.assertEqual(client.get("/api/eh/page", params={"url": url}).status_code, 400, url)
+        self.assertEqual(self.fake.calls, [], "非 /s/ 页不该打到客户端")
+
+    def test_page_surfaces_a_client_error(self):
+        client = self._client()
+        self.fake.image_page_error = EhError("大图页里没有图片直链", status=502)
+
+        response = client.get("/api/eh/page", params={"url": IMAGE_PAGE_URL})
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("没有图片直链", response.json()["detail"])
 
     def test_metadata_needs_both_ids(self):
         client = self._client()
@@ -1439,7 +1634,7 @@ class EhEntryPointTestCase(unittest.TestCase):
     def test_nav_lists_only_json_apis_under_the_site_prefix(self):
         paths = [item.path for item in EH_NAV.items]
 
-        self.assertEqual(len(paths), 7)
+        self.assertEqual(len(paths), 9)
         self.assertTrue(all(p.startswith("/api/eh/") for p in paths), paths)
         self.assertTrue(EH_NAV.title)
         self.assertTrue(EH_NAV.note)
@@ -1466,9 +1661,11 @@ class EhEntryPointTestCase(unittest.TestCase):
             extra,
             {
                 "/api/eh/list",
+                "/api/eh/popular",
                 "/api/eh/search",
                 "/api/eh/gallery/{gid}/{token}",
                 "/api/eh/images/{gid}/{token}",
+                "/api/eh/page",
                 "/api/eh/metadata",
                 "/api/eh/proxy",
                 "/api/eh/auth",
@@ -1520,9 +1717,11 @@ class EhEntryPointTestCase(unittest.TestCase):
         self.assertIn("curl_cffi", info.extra_modules)
         self.assertEqual(sites.SITE_ROUTE_PATHS["ehviewer"], frozenset({
             "/api/eh/list",
+            "/api/eh/popular",
             "/api/eh/search",
             "/api/eh/gallery/{gid}/{token}",
             "/api/eh/images/{gid}/{token}",
+            "/api/eh/page",
             "/api/eh/metadata",
             "/api/eh/proxy",
             "/api/eh/auth",

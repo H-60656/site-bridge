@@ -20,7 +20,7 @@ Pixiv 官方 App API（`app-api.pixiv.net`）调用方式（请求签名、OAuth
 - **数据都在 `data/`**：token、阅读历史、下载记录、收藏台账、页面配置统一放在项目下的 `data/` 目录（老版本的 `tokens.json` / `history.jsonl` 首次启动自动搬过去），换机只需拷这一个目录
 - **可选的 iwara.tv 站点**（接口项目 `iwara/`，与 `pixiv/` 同级，用 `python iwara/run.py` 启动）：只提供 iwara 的视频浏览 / 搜索 / 详情 / 直链解析 / 缩略图（`/api/iwara/*`，不挂任何 Pixiv 路由），还自带一个**视频页面**（`http://127.0.0.1:8766/iwara`）：列表 / 搜索 / 筛选、点开详情看简介与标签、看相关视频、`<video>` 直接播（服务端代转字节并透传 `Range`，清晰度可切换）。直链是带签名的 MP4，浏览器里能直接播。用 `pixiv/run.py` 启动时这些地址是 404
 - **可选的 asmr.one 站点**（接口项目 `asmr_one/`，与 `pixiv/` 同级，用 `python asmr_one/run.py` 启动）：只提供 asmr.one 的作品浏览 / 关键词搜索 / 作品详情 / 音轨树 / 音频与封面代转（`/api/asmr/*`，不挂任何 Pixiv 路由），**匿名可用、不需要登录**。封面与音频字节一律由服务端代转（`/api/asmr/cover/{id}`、`/api/asmr/stream?url=...`），因为浏览器所在机器同样到不了那些 Cloudflare 边缘 IP。它和 iwara 一样自带 `curl_cffi` 客户端（种子 IP 池 + ECH），但**ECH 默认是开的**（asmr 的边缘 IP 在本机是 IP 级被阻断，不叠 ECH 基本不通；要关就写 `ASMR_BRIDGE_ECH=0`）。用 `pixiv/run.py` 启动时这些地址是 404
-- **可选的 E-Hentai 站点**（接口项目 `ehviewer/`，与 `pixiv/` 同级，用 `python ehviewer/run.py` 启动）：只提供 E-Hentai / e-hentai.org 的画廊列表 / 关键词搜索 / 画廊详情 / 图片页 / 图片代转（`/api/eh/*`，不挂任何 Pixiv 路由），**匿名可用、不需要登录**（exhentai 里站内容会返回 401，本站不碰）。它自带 `curl_cffi` 客户端并**借道 Cloudflare 别的 anycast IP + 强制 HTTP/3** 直连 `e-hentai.org`——E-Hentai 自己解析出来的边缘 IP 在本机是 IP 级被阻断的，所以 `EH_BRIDGE_HTTP3` 默认开着，关掉大概率整个站不通。大图字节一律由服务端代转（`/api/eh/proxy?url=...`），因为 `*.hath.network` 浏览器同样到不了。用 `pixiv/run.py` 启动时这些地址是 404
+- **可选的 E-Hentai 站点**（接口项目 `ehviewer/`，与 `pixiv/` 同级，用 `python ehviewer/run.py` 启动）：只提供 E-Hentai / e-hentai.org 的画廊列表 / 热门榜单 / 关键词搜索 / 画廊详情 / 图片页 / 大图页解析 / 元数据 / 图片代转（`/api/eh/*`，不挂任何 Pixiv 路由），**匿名可用、不需要登录**（exhentai 里站内容会返回 401，本站不碰）。它自带 `curl_cffi` 客户端并**借道 Cloudflare 别的 anycast IP + 强制 HTTP/3** 直连 `e-hentai.org`——E-Hentai 自己解析出来的边缘 IP 在本机是 IP 级被阻断的，所以 `EH_BRIDGE_HTTP3` 默认开着，关掉大概率整个站不通。大图字节一律由服务端代转（`/api/eh/proxy?url=...`），因为 `*.hath.network` 浏览器同样到不了。用 `pixiv/run.py` 启动时这些地址是 404
 - **OpenAPI 文档**：启动后访问 `http://127.0.0.1:8765/docs` 在线调试
 
 ## 原理
@@ -154,7 +154,7 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 | `iwara/run.py` | iwara.tv 接口项目（`iwara/`）：**只有**那十个 `/api/iwara/*`（浏览 / 搜索 / 详情 / 相关 / 直链解析 / 代转播放 / 图片 / 缩略图 / 登录态 / 授权），外加 `/` 上的**导航页**；它不挂任何 Pixiv 路由 |
 | `iwara/run.py` + `PIXIV_BRIDGE_EXTENSIONS=iwara_web` | 上面那些，再挂上 iwara 视频页面扩展（`iwara_web`）：`/iwara` 上的播放页（浏览 / 搜索 / 播放 / 相关视频） |
 | `asmr_one/run.py` | asmr.one 接口项目（`asmr_one/`）：**只有**那七个 `/api/asmr/*`（作品列表 / 搜索 / 作品详情 / 音轨树 / 封面代转 / 音频代转 / 登录态），外加 `/` 上的**导航页**；它不挂任何 Pixiv 或 iwara 路由 |
-| `ehviewer/run.py` | E-Hentai 接口项目（`ehviewer/`）：**只有**那七个 `/api/eh/*`（列表 / 搜索 / 画廊详情 / 图片页 / 元数据 / 图片代转 / 匿名态），外加 `/` 上的**导航页**；它不挂任何别的站点的路由 |
+| `ehviewer/run.py` | E-Hentai 接口项目（`ehviewer/`）：**只有**那九个 `/api/eh/*`（列表 / 热门画廊 / 搜索 / 画廊详情 / 图片页 / 大图页解析 / 元数据 / 图片代转 / 匿名态），外加 `/` 上的**导航页**；它不挂任何别的站点的路由 |
 
 各接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3～4 项 iwara 专属自检（开了 `IWARA_BRIDGE_ECH=1` 才多出 ECH 那一项），`asmr_one/run.py` 追加 2～3 项 asmr 专属自检（默认就开 ECH，见「环境检查说明」），`ehviewer/run.py` 追加 3 项 ehviewer 专属自检（依赖 / 边缘 / 站点）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`；要 asmr.one 就拷 `pixiv_bridge/` + `asmr_one/`，要 E-Hentai 就拷 `pixiv_bridge/` + `ehviewer/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
 
@@ -383,7 +383,7 @@ pixiv-bridge/
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
-├── tests/                              单元测试（840 项：框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 128 + 打包 45）
+├── tests/                              单元测试（858 项：框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 146 + 打包 45）
 ├── openssl-libs/                       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -771,9 +771,11 @@ E-Hentai 是第四个站点，与前三个都无关，由独立的接口项目 `
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/eh/list?cursor=&query=` | 首页画廊列表（一页 25 条）。分页用**游标**（上游的 `?next=`），不是页码；同时带 `query` 时直接当搜索用 |
+| GET | `/api/eh/popular` | 上游 `/popular` 热门榜单。**一页给完**（实测约 74 条），`next` 永远为空、`found` 也留空——上游这个页面忽略 `?next=`，确实不能翻页 |
 | GET | `/api/eh/search?query=&cursor=` | 关键词搜索（`query` 必填）。走的是与列表同一个上游页面的 `f_search` 参数 |
-| GET | `/api/eh/gallery/{gid}/{token}?page=` | 画廊详情：元信息（分类 / 上传者 / 评分 / 页数 / 标签 / 封面）+ 当页的图片页链接。**`page` 从 1 开始**，换算成上游的 0 基 `?p=` |
-| GET | `/api/eh/images/{gid}/{token}?page=` | 把当页的 20 个 `/s/...` 图片页链接列成带序号的清单（给客户端自己逐个取） |
+| GET | `/api/eh/gallery/{gid}/{token}?page=` | 画廊详情：元信息（分类 / 上传者 / 评分 / 页数 / 标签 / 封面）+ 当页的图片页链接 + `total_pages` / `next_page` / `has_next`。**`page` 从 1 开始**，换算成上游的 0 基 `?p=` |
+| GET | `/api/eh/images/{gid}/{token}?page=` | 把当页的 20 个 `/s/...` 图片页链接列成带序号的清单（给客户端自己逐个取）。带回 `total_pages` / `next_page` / `has_next`（由详情页的 `showing.total` 算出）；算不出来时这三项是 `null`，别拿它当「下一页是第 1 页」 |
+| GET | `/api/eh/page?url=` | 只解析一个 `/s/` 大图页，返回真实图片直链与尺寸（`image_url` / `filename` / `width` / `height` / `size` / `current` / `total`），**不下载字节**。要字节请走 `/api/eh/proxy` |
 | GET | `/api/eh/metadata?gid=&token=` | 走官方 `api.php` 的 `gdata`（批量元数据），返回上游原始 JSON |
 | GET | `/api/eh/proxy?url=` | 图片字节代转。接受 `/s/` 大图页 URL 或 `*.hath.network` 直链；前者会先解析出图片直链再取字节。透传 `Range` / `If-Range` / `If-None-Match` / `If-Modified-Since`，响应头带 `x-eh-image-url` 与 `x-eh-page-url` |
 | GET | `/api/eh/auth` | 链路诊断：`{site, anonymous, http3, impersonate, edge_count, edge_ips, pinned_edge}`。本站只有匿名态，`anonymous` 永远是 `true` |
@@ -786,6 +788,7 @@ E-Hentai 是第四个站点，与前三个都无关，由独立的接口项目 `
 2. **必须强制 HTTP/3**（`EH_BRIDGE_HTTP3` 默认开）。用 HTTPS/1.1 或 HTTP/2 打这些 IP 会因 SNI 与目标不符被拒；HTTP/3 走 UDP 不受这个限制。关掉这个开关大概率整个站不通。
 3. **换 IP 与强制 HTTP/3 都要 libcurl，所以本包同样带 `curl_cffi`**；`ehviewer/run.py` 也因此不从框架的通用入口启动（和前两个站点同一个原因）。
 4. **元数据走官方 `api.php`**（`gdata` 方法，body 必须是 `{"method":"gdata","gidlist":[[gid,token],…],"namespace":1}` 的 bytes），比抓 HTML 稳。
+5. **详情页是页码分页、首页是游标分页**，两者不能混：`/api/eh/list` 与 `/api/eh/search` 认上游的 `?next=` 游标，`/api/eh/gallery` 与 `/api/eh/images` 认 0 基的 `?p=` 页码（对外统一从 `page=1` 起算）。详情页一屏 20 张，页面上印着 `Showing 1-20 of N`，所以总屏数与下一页可以直接算出来（`total_pages` / `next_page` / `has_next`）；首页**不印**这个总数，于是 `/api/eh/list` 只能照抄上游的 `next` 游标。上游 `/popular` 更是连 `?next=` 都忽略（喂同一个游标返回的字节数一模一样），因此 `/api/eh/popular` 老实讲「只有这一页」——`next` 给空串，别拿它循环翻页。
 
 ## 调用示例
 
@@ -881,7 +884,7 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 840 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 128 + 打包 45）
+python -m unittest discover -s tests       # 858 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 146 + 打包 45）
 python scripts/check_boundary.py           # 拆分边界自检
 python scripts/make_share_packages.py --check   # 分享包内容自检（不写 zip）
 ```

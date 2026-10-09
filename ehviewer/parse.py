@@ -318,8 +318,6 @@ def parse_detail(body: str) -> dict:
     gid = int(canonical.group(2)) if canonical else None
     token = canonical.group(3) if canonical else ""
 
-    strip = _STRIP_RE.search(body)
-
     return {
         "gid": gid,
         "token": token,
@@ -339,7 +337,7 @@ def parse_detail(body: str) -> dict:
         "tags": tags,
         "pages": pages,
         "info": info,
-        "cover": attr_text(strip.group(1)) if strip else "",
+        "cover": parse_strip_cover(body),
         "url": f"https://e-hentai.org/g/{gid}/{token}/" if gid else "",
     }
 

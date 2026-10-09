@@ -606,3 +606,45 @@ CF 的**控制面与 Pages 托管面在本机可达**（`_scratch/_probe_cf_rela
 - **纯 TCP 探活比 TLS 探活更可靠。** SNI 不符时 TLS 会失败，但那不代表 IP 不可达；`probe_edge()` 只建 TCP，避免把「SNI 判据」误当成「IP 不通」（这正是 pornhub 时代探针全灭时踩过的坑的反面）。
 - **换节点要重新解析，不要重试死 URL。** H@H 直链带一次性 `keystamp` 且端口随机，重试同一 URL 必然持续失败；每次重新解析 `/s/` 页才是有效重试。
 
+## 19. 后续追加：`ehviewer/` 的三处接口缺口（2026-10-09）
+
+第 18 节把站点做通了，但复查时发现三处「能力有、接口没暴露」或「暴露得不对」的地方。本节记录这次补齐。
+
+### 19.1 三处缺口与判定依据
+
+1. **`/api/eh/images` 回了一个假的 `next_cursor`**。详情页是**页码**分页（上游 0 基 `?p=`），跟首页的 `?next=` 游标根本不是一回事，但 `/images` 照抄了光标形状的字段名，值恒为 `None` —— 客户端照字段语义去翻页就会走进死胡同。
+2. **`image_page()` 在客户端里有、路由没暴露**。想看「这张 `/s/` 页对应哪个图片直链」只能走 `/proxy` 把字节也拖下来。
+3. **上游 `/popular` 完全没接**。
+
+第 3 条的形态必须先探再定（探针 `_scratch/_probe_eh_popular.py`，真实链路 HTTP/3 + 借道边缘，`EXIT=0`）：
+
+| 请求 | bytes | rows | found | nav next |
+| --- | --- | --- | --- | --- |
+| `GET /popular` | 165242 | 74 | `''` | `''` |
+| `GET /popular?next=4241792` | 165242 | 74 | `''` | `''` |
+| `GET /?next=4241792`（对照） | 59316 | 25 | `1,658,289` | `4241767` |
+
+第二行与第一行**字节数完全相同** ⇒ `/popular` 忽略 `?next=`，**确实不可翻页**，且该页不印 `Found N results`。所以没有把它硬塞进光标分页抽象，而是照实暴露成「一页给完」。
+
+### 19.2 改动清单（逐项）
+
+- `ehviewer/client.py`：新增模块级 `pagination(page, showing, page_size=PAGE_SIZE)` —— 由详情页的 `showing.total` 算 `total_pages` / `next_page` / `has_next`；**`total` 缺失、非数字或 ≤ 0 时三者一律 `None`**（注释写明：数不出来时不要瞎猜，否则客户端翻页循环停不下来）。`gallery()` 尾部调它；新增 `popular()`。
+- `ehviewer/routes/galleries.py`：新增 `GET /api/eh/popular` 与 `GET /api/eh/page?url=`（后者先过 `is_image_page()` 白名单，非 `/s/` 页一律 400）；`/images` 去掉误导性的光标语义、改为回 `total_pages` / `next_page` / `has_next`（保留 `next_cursor: None` 作历史字段）。
+- `ehviewer/app.py`：`EH_NAV` 7 → 9 项。
+- `ehviewer/parse.py`：`parse_detail()` 的 `cover` 改为复用 `parse_strip_cover()`，消掉重复的 `_STRIP_RE` 取值。
+- `scripts/sites.py`：`EH_ROUTE_PATHS` 7 → 9 条。
+- `tests/test_ehviewer.py`：新增 `EhPaginationTestCase`（8 例，覆盖中间屏 / 末屏 / 部分末屏 / 超界 / 缺 `total` 的 5 种输入 / `total=0` / 垃圾参数 / 单屏）与 8 个路由用例；**`_FakeEhClient.gallery()` 改为直接调真实 `pagination()`**，避免假客户端里另写一套使路由测试测的是假货。
+- 文档：`README.md`（特性条目 / 入口表 / 端点表 7 → 9 行 / 新增实现说明第 5 条「首页游标 vs 详情页码」）、`INSTALL.md`（第 260 行端点列举、第 281 行接口地址）。
+
+### 19.3 验证结果
+
+- 单模块：`tests.test_ehviewer` **Ran 146 tests … OK**（原 128）。
+- 全量：`.venv\Scripts\python.exe -m unittest discover -s tests -t .` → **Ran 858 tests … OK (skipped=1)**，约 21.8 s（`test_bridge` 334 + `test_iwara` 199 + `test_asmr_one` 134 + **`test_ehviewer` 146** + `test_packaging` 45）。
+- `python scripts/check_boundary.py` → `ehviewer 15 条路由（其中站点自己的 9 条）`，其余站点与框架数字不变，「边界检查通过」。
+- `python scripts/make_share_packages.py --check` → 8 个包全就绪（`ehviewer-api` 43 个文件）。
+
+### 19.4 本段踩到的坑
+
+- **硬编码的路由清单不止一处。** 改完 `scripts/sites.py` 与 `len(paths)` 断言后全量测试仍失败：`tests/test_ehviewer.py:1718 test_the_sites_registry_knows_about_ehviewer` 里还有一个 9 元素 frozenset 是独立写死的，报 `Items in the first set but not the second: '/api/eh/page' '/api/eh/popular'`。教训：加端点时不能只 grep 路由名字符串，**断言用的是集合字面量、grep 关键字未必命中**，跑一遍全量测试才是可靠手段。
+- **假客户端会掩盖真缺陷。** 若 `_FakeEhClient` 自己实现一套分页算术，新增的 `/images` 断言测的就只是假货；改成调用真实 `pagination()` 后，路由测试才真正覆盖生产逻辑。
+

@@ -36,16 +36,22 @@ EH_NAV = NavSection(
     title="E-Hentai（本入口独有）",
     items=(
         NavItem("画廊列表", "/api/eh/list", "首页默认序，一页 25 条；翻页用返回里的 next 光标"),
+        NavItem("热门画廊", "/api/eh/popular", "上游 /popular，一次给完（约 74 条），不能翻页"),
         NavItem("搜索", "/api/eh/search?query=lolicon", "支持站内搜索语法"),
         NavItem(
             "画廊详情",
             "/api/eh/gallery/4240495/8bcad20a1a",
-            "元数据 + 标签 + 条带封面 + 本屏图片页地址",
+            "元数据 + 标签 + 条带封面 + 本屏图片页地址（带总屏数与下一页）",
         ),
         NavItem(
             "图片直链",
             "/api/eh/images/4240495/8bcad20a1a",
             "这一屏的 /s/ 大图页地址（喂给 proxy 即可看图）",
+        ),
+        NavItem(
+            "大图页解析",
+            "/api/eh/page?url=<上一步的 items[].url>",
+            "只解析真实图片直链与尺寸，不下载字节",
         ),
         NavItem("官方元数据", "/api/eh/metadata?gid=4240495&token=8bcad20a1a", "走 api.php 的 gdata"),
         NavItem("代转图片", "/api/eh/proxy?url=<上一步的地址>", "服务端取字节转发，自动换节点重试"),

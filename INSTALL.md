@@ -257,7 +257,7 @@ PIXIV_PROXY=http://127.0.0.1:7890
 | Windows | 只需 Pixiv 接口：`start.bat` 然后回车（导航里的默认项就是它）；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `start.bat`；要用 iwara：`start.bat iwara` 或 `python iwara\run.py`（要 iwara 视频页面再加 `iwara_web`）；要用 asmr.one：`start.bat asmr_one` 或 `python asmr_one\run.py`；要用 E-Hentai：`start.bat ehviewer` 或 `python ehviewer\run.py` |
 | Termux / Linux | 只需接口：`cd pixiv-bridge && sh start.sh` 然后回车；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `sh start.sh`；要用 iwara 视频：`sh start.sh iwara` 或 `python3 iwara/run.py`（要 iwara 视频页面再加 `iwara_web`）；要用 asmr.one：`sh start.sh asmr_one` 或 `python3 asmr_one/run.py`；要用 E-Hentai：`sh start.sh ehviewer` 或 `python3 ehviewer/run.py` |
 
-> 差别只在多挂了什么：一键脚本先给一个**项目导航**（直接回车＝默认的 `pixiv/run.py`）——默认只跑 Pixiv 接口、不挂扩展，浏览器打开 `/` 是**导航页**（列出接口文档、健康检查等自带入口）；在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 就在同一个入口上多挂了小说阅读器页面（`http://127.0.0.1:8765/novel`，导航页上也会多一段链接）与阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara/run.py` 提供的是 `/api/iwara/*`（视频浏览、解析直链、代转播放），它的 `/` 也是导航页、额外多一段 iwara 自己的入口；`asmr_one/run.py` 提供的是 `/api/asmr/*`（作品浏览、搜索、详情、音轨树、封面与音频代转），同样是导航页 + 自己那一段，且**匿名即可用**；`ehviewer/run.py` 提供的是 `/api/eh/*`（画廊列表、搜索、详情、图片页、元数据、图片代转），也是导航页 + 自己那一段，同样**不需要登录**。命令行参数（`--host` / `--port` / `--reload` / `--check`）都一样，`python -m pixiv_bridge --list` 可以只看导航不启动。
+> 差别只在多挂了什么：一键脚本先给一个**项目导航**（直接回车＝默认的 `pixiv/run.py`）——默认只跑 Pixiv 接口、不挂扩展，浏览器打开 `/` 是**导航页**（列出接口文档、健康检查等自带入口）；在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 就在同一个入口上多挂了小说阅读器页面（`http://127.0.0.1:8765/novel`，导航页上也会多一段链接）与阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara/run.py` 提供的是 `/api/iwara/*`（视频浏览、解析直链、代转播放），它的 `/` 也是导航页、额外多一段 iwara 自己的入口；`asmr_one/run.py` 提供的是 `/api/asmr/*`（作品浏览、搜索、详情、音轨树、封面与音频代转），同样是导航页 + 自己那一段，且**匿名即可用**；`ehviewer/run.py` 提供的是 `/api/eh/*`（画廊列表、热门榜单、搜索、详情、图片页、大图页解析、元数据、图片代转），也是导航页 + 自己那一段，同样**不需要登录**。命令行参数（`--host` / `--port` / `--reload` / `--check`）都一样，`python -m pixiv_bridge --list` 可以只看导航不启动。
 
 > **阅读器为什么没有自己的启动命令？** 它现在按「扩展」的方式挂到接口项目上：配置里写目录名（`PIXIV_BRIDGE_EXTENSIONS=novel`），程序自己去找 `novel/extension.py`。这样每个接口项目各留一个入口，阅读器不再需要单独的脚本。写错目录名不会静默降级——启动前会打印一条错误并退出。
 
@@ -278,7 +278,7 @@ PIXIV_PROXY=http://127.0.0.1:7890
 - iwara 视频页面（**需 `iwara/run.py` 入口 + `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`**）：<http://127.0.0.1:8765/iwara>；用 `pixiv/run.py` 启动、或没挂 `iwara_web` 时是 404，属正常
 - iwara 视频接口（**需 `iwara/run.py` 入口**）：<http://127.0.0.1:8765/api/iwara/videos>；用 `pixiv/run.py` 启动时是 404，属正常
 - asmr.one 接口（**需 `asmr_one/run.py` 入口**）：<http://127.0.0.1:8765/api/asmr/works>（搜索 `/api/asmr/search?query=...`、作品详情 `/api/asmr/work/{id}`、音轨 `/api/asmr/tracks/{id}`、封面 `/api/asmr/cover/{id}`、音频 `/api/asmr/stream?url=...`）；用 `pixiv/run.py` 或 `iwara/run.py` 启动时是 404，属正常
-- E-Hentai 接口（**需 `ehviewer/run.py` 入口**）：<http://127.0.0.1:8765/api/eh/list>（搜索 `/api/eh/search?query=...`、画廊详情 `/api/eh/gallery/{gid}/{token}`、图片页清单 `/api/eh/images/{gid}/{token}`、元数据 `/api/eh/metadata?gid=&token=`、图片代转 `/api/eh/proxy?url=...`）；用别的入口启动时是 404，属正常
+- E-Hentai 接口（**需 `ehviewer/run.py` 入口**）：<http://127.0.0.1:8765/api/eh/list>（热门榜单 `/api/eh/popular`、搜索 `/api/eh/search?query=...`、画廊详情 `/api/eh/gallery/{gid}/{token}`、图片页清单 `/api/eh/images/{gid}/{token}`、大图页解析 `/api/eh/page?url=...`、元数据 `/api/eh/metadata?gid=&token=`、图片代转 `/api/eh/proxy?url=...`）；用别的入口启动时是 404，属正常
 - 给别的程序调用，例如：
 
   ```sh
