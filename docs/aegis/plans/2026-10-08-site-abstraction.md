@@ -1048,4 +1048,109 @@ detail = "api.iwara.tv 可达" + (f"（共 {count} 个视频）" if count is not
 - **报给用户的数字，先问它是不是总数。** 伪 count 这类缺陷不会让任何测试变红 —— `iwara` 的自检一直「全绿」，包括它报出「共 2 个视频」的那一刻。**一个看起来精确的数字，比一句「可达」更容易骗过自检。**
 - **横向对照再一次是唯一有效手法。** 这次不是对照上游（换关键词），而是**对照同仓另外三个站点**：同样是「报条数」，asmr 分得清本页与总数、ehviewer 只报条数 —— 只有 iwara 混了。**同仓内同类代码的横向对照，和跨请求的横向对照一样便宜且有效。**
 
+---
+
+## 26. §25 教训回灌：上游回 200 但 body 不是 JSON ⇒ 裸 500（缺陷族，六处）
+
+### 26.1 缘起：候选 ① 的「顺手一问」
+
+§25.7 的第一条教训是「**这个异常有人兜**也是需要验证的假设」，并给了一个廉价查法：*任何一条自带 `try/except` 的文件，都值得问一句「是不是每条都有」*。做完 iwara/asmr 六条路由的修复后，我把这条反复当作查询条件回灌，先查了据称最不该出问题的 **pixiv 路由层**（四个站点里唯一给 `create_bridge_app` 传了 `error_types=PIXIV_ERROR_TYPES` 的）。
+
+**结论 ①：pixiv 路由层本身干净。** 注入假登录态后逐条打 16 条路由（多种上游错误体形状），**零个裸 500**：上游 404 → 对外 404（空 message 会退化为 `上游返回 HTTP 404（上游未给出错误说明）`）；上游 500 → 对外 500；上游 400 `{"error": "invalid_request"}` → 对外 400，且错误体仍是统一的 `{"error": {"message": …, "reason": …}}`。探针标记的两处「非统一形状」经核实**都不是缺陷**（`/img` 的 400 是 `misc.py` 自己抛的、已有测试锁定；`/api/not-a-route` 的 404 是 FastAPI 内建）。
+
+**候选 ① 的价值不在它查出了什么，而在它把我推向了下一个问题：** 上面所有推演都默认「**200 里至少有一个能解析的 body**」—— 骨架、条目级 `error`、恒定结果，§20–§25 的五种形态全都建立在这个前提上。那如果**连 body 都解析不了**呢？
+
+### 26.2 实测：200 + `text/html` ⇒ 三站裸 500，一站早已正常
+
+让 MockTransport 把所有上游请求都回 `200 + text/html`（模拟 Cloudflare 拦截页 / 网关改版 / 反代静态页），再打自己的路由：
+
+| 站点 | 探针 | 结果 |
+| --- | --- | --- |
+| pixiv | `_scratch/_probe_pixiv_200_html.py`，7 条路由 | **6 条裸 500 `text/plain Internal Server Error`**；唯一存活的是 `/api/novel/1/text`（`expect_json=False` 走 text + 自己的正向判据 → 502） |
+| iwara | `_scratch/_probe_json_200.py` | `JSONDecodeError: Expecting value: line 1 column 1 (char 0)` **未兜** |
+| asmr_one | 同上 | 同 iwara，**未兜** |
+| ehviewer | 同上 | **`EhError 502: gdata 返回的不是 JSON：<!DOCTYPE html>…`** —— **唯一正常的站点** |
+
+### 26.3 根因：兜异常兜错了层
+
+三个条件叠加，缺一不可：
+
+1. **`resp.json()` 抛的是 `json.JSONDecodeError`**，而它是 **`ValueError` 的子类**；
+2. **它不属于任何站点错误类型** —— `PixivApiError` / `PixivRateLimitError` / `AuthError` / `IwaraError` / `IwaraAuthError` / `AsmrError` / `EhError` 全不认识它；
+3. **`pixiv_bridge/errors.py:install_error_handlers()` 只认传入的 `error_types` 与 `httpx.HTTPError`** —— 于是它一路逃到 FastAPI 默认处理器，被改写成裸 500 `text/plain`。
+
+**关键区分：陷阱三修的是「路由层」的网，本条要的是「解析层」的网。** §25 那六条路由补 `try/except <站点>Error` 完全兜不住这里 —— 抛出的根本不是站点异常，而是 `ValueError`，`except IwaraError` 抓不到它。**这就解释了为什么 ehviewer 反而正常**：它的 `gdata()` 本来就是手工搭 JSON 请求的一段代码，顺手把 `resp.json()` 包进了 `try/except Exception`（§23 修 gdata 时留下的），属于**偶然正确**，而不是有意识的设计。
+
+### 26.4 修法：在解析点翻译，保留上游原文
+
+口径沿用 §25 的「选项 1」（保状态码、保语义），一律 `except ValueError` 翻成站点异常：
+
+```python
+try:
+    return resp.json()
+except ValueError as exc:
+    raise IwaraError(
+        f"GET {path} 返回的不是 JSON（可能被拦了或改版了）：{resp.text[:200]}",
+        status=502, reason="bad_upstream_body",
+    ) from exc
+```
+
+- 状态码一律 **502**（上游不可用，不是本端参数错误）；
+- `reason` 统一 `"bad_upstream_body"`（便于调用方与测试按语义匹配，而不是匹配文案）；
+- message 带 `resp.text[:200]`，**保留上游原文**（这正是 §25 教训「丢状态码比丢形状严重」的延续 —— 这里两样都要留住）；
+- `pixiv/oauth.py` 与 `iwara/client.py` 两处鉴权用 `AuthError` / `IwaraAuthError`（无 `status` 参数，靠类属性 401），因为对调用方而言「登不上」比「上游格式异常」更准确。
+
+### 26.5 「按类别清点，不按现场清点」—— 6 处，其中 1 处探针从没打到过
+
+**这是本节最值钱的部分。** 探针只在三条路由上炸，但按 §23.6 的教训**把查询条件当类别回灌**，`git grep -n "\.json()"` 过全仓生产代码（排除 `tests/` `examples/`）共 **16 处**，逐处确认「它在不在 `try` 里」，揪出 **6 处**：
+
+| # | 位置 | 说明 |
+| --- | --- | --- |
+| 1 | `pixiv/api.py:356-358` | 原为一行 `return resp.json() if expect_json else resp.text`；**两件事挤在一行**，必须先拆开 text 分支再包 try |
+| 2 | `pixiv/oauth.py:165` | `_token_request` 的 `body = resp.json()`，换 token 路径 |
+| 3 | `iwara/client.py:612` | `get_json` 的 `return resp.json()`，常规读取路径，影响面最大 |
+| 4 | `iwara/client.py:632` | `login` 的 `self.refresh_token = resp.json().get("token")` —— **探针从未覆盖这一条** |
+| 5 | `iwara/client.py:650` | `refresh_access` 的 `token = resp.json().get("accessToken")`；非 JSON 时连字典都拿不到，`.get` 会紧接着再抛一次 |
+| 6 | `asmr_one/client.py:476` | `get_json` 的 `return resp.json()` |
+
+**第 4 处是这一节的论点本身**：它不在任何探针的路径上，只可能靠**按类别清点**发现。如果只按「探针报错的地方」修，这一处会静静留在仓库里 —— 而它恰好是**最不该出问题的一条**（登录成功却解析不了 body，意味着 refresh token 都存不下来）。这正是 §23.6「**修缺陷要按『类别』修，不按『现场』修**」在本节的复现。
+
+同一轮清点还确认了**已经正确的那些**（不必再改，也一并记录以免后人重复排查）：
+
+- `asmr_one/ech.py:117` / `iwara/ech.py:119` / `pixiv/ech_client.py:589` —— 三处 DoH 查询，本来就包在 `try/except Exception` 里；
+- `pixiv/oauth.py:112` `_extract_error` —— 有 `except ValueError: return resp.text`；
+- `pixiv/api.py:368` `_handle_error` —— 有 `except ValueError: body = None`；
+- `iwara/client.py:628` login 失败分支、`iwara/client.py:758` `resolve()` 盐循环 —— 前者有 `except Exception`，后者因为「`X-Version` 不对时 CDN 本来就回空 body」历史上被迫兜过。
+
+**「哪里兜了」和「哪里该兜」是两件事，只有逐处过一遍才分得清。**
+
+### 26.6 改动清单
+
+**生产代码 4 个文件、6 处：** `pixiv/api.py`、`pixiv/oauth.py`、`iwara/client.py`（3 处）、`asmr_one/client.py`。每处都补了注释，说明「裸 `resp.json()` 抛的 `JSONDecodeError` 是 `ValueError`，路由层只兜 `<站点>Error` → 会一路逃成裸 500」，把根因钉在代码里而不是只写在文档里。
+
+### 26.7 回归用例（9 条）
+
+- **`tests/test_iwara.py`（+3 例 +1 辅助类）：** 新增 `class _BadJsonResp(_FakeResp)`（回 200 但 `json()` 抛 `ValueError`，与既有的 `_HtmlResp` 同形）；`IwaraClientCoverageTestCase` 加 `test_get_json_reports_a_non_json_200_instead_of_crashing` 与 `test_login_reports_a_non_json_200_instead_of_crashing`；`IwaraTokenHttpTestCase` 加 `test_refresh_access_reports_a_non_json_200_instead_of_crashing`（顺带断言 `client.access_token is None`）。
+- **`tests/test_asmr_one.py`（+1 例 +1 辅助类）：** 同形 `_BadJsonResp`；`AsmrClientLogicTestCase` 加 `test_get_json_reports_a_non_json_200_instead_of_crashing`。
+- **`tests/test_bridge.py`（+5 例）：** `OAuthTestCase` 加 `test_token_request_maps_a_non_json_200_to_auth_error`；`PixivApiTestCase` 加 `test_success_body_that_is_not_json_maps_to_502` 与 `test_non_json_path_still_returns_raw_text`（后者守住「拆开 text 分支没有破坏 `expect_json=False` 的语义」）；`ServerTestCase` 加 `_html_client()` / `_authorized_html_client()` 两个脚手架 + `test_non_json_upstream_body_is_a_unified_502_not_a_bare_500`（对 6 条路由逐条 `subTest`，断言 502 / `application/json` / `reason == "bad_upstream_body"`）与 `test_html_endpoints_are_unaffected_by_the_non_json_guard`。
+
+**踩坑记录（脚手架）：** `_html_client()` 最初直接 `client.app.state.oauth._access_token = …` → `AttributeError: 'State' object has no attribute 'oauth'`。原因是 **`app.state` 只在 lifespan 启动后才挂上**，`TestClient(app)` 不在 `with` 里就不会触发启动。改成 `@contextlib.contextmanager` 包一层（`with self._html_client() as client:` 内注入）后通过。**这不是被测代码的缺陷，而是 FastAPI 测试脚手架的固有约束**，值得记住。
+
+### 26.8 验证
+
+- 探针复验 **零裸 500**：`_probe_pixiv_200_html.py` 的 7 条路由**全部 502 + `application/json` + `bad_upstream_body`**；`/api/novel/1/text` 保持原有 502「取不到正文：…没有 novel 对象」（`expect_json=False` 分支不受影响）；`_probe_json_200.py` 三站点对比由「iwara/asmr 未兜」变为「三站全部 502」。
+- `tests.test_bridge tests.test_iwara tests.test_asmr_one` → **Ran 690 tests … OK (skipped=1)**（首跑 errors=2，即上面的 `app.state` 问题）。
+- 全量 `-m unittest discover -s tests -t .` → **Ran 916 tests in 17.519s … OK (skipped=1)**（907 → 916，本轮 9 条）。
+- `scripts/check_boundary.py` → 框架外壳 6 / pixiv 60（自有 54）/ iwara 16（10）/ asmr_one 13（7）/ ehviewer 15（自有 9）/ novel ↗pixiv 多 10 / iwara_web ↗iwara 多 1 /「边界检查通过」（本次不动路由，数字不变）。
+- 手册：两处测试计数 907 → **916**（`框架与站点 334 → 339`、`iwara 203 → 206`、`asmr_one 144 → 145`）。
+
+### 26.9 教训
+
+- **「200 里有个能读懂的 body」本身也是需要验证的假设。** §20–§25 的五种形态（空壳、条目级 error、恒定结果…）全都预设了 body 可解析。本条问的是更外一层：**连解析都失败时会怎样** —— 而答案（裸 500）比所有「形状不对」都难查，因为它连形状都没有。
+- **兜异常要兜在「会抛的那一层」。** 陷阱三在路由层补网，本条在解析层补网 —— **同一句「兜异常」在两个不同的层上，互相替代不了**。看到 `except <站点>Error` 不代表安全，要问「这里真正的抛出者是谁、它属于哪个类型」。
+- **`ValueError` 是 Python 最容易被漏掉的异常族。** `JSONDecodeError` 是它的子类，`int()` / `float()` / 解包失败也都是。凡是「解析外部数据」的地方，`except ValueError` 或更宽的 `except Exception` 是必需项，而不是可选项。
+- **按类别清点才能发现探针覆盖不到的那处。** 6 处里有 1 处（`iwara/client.py` 的 login 成功分支）任何探针都没打过。**探针的覆盖面 = 它走过的路径；缺陷的覆盖面 = 所有存在该模式的代码。** 两者的差集只能靠 `grep` 补。
+- **偶然正确也要写进文档。** ehviewer 之所以正常，不是因为设计得更严谨，而是因为 `gdata()` 恰好手工搭 JSON 又顺手包了 try。**「这个站点为什么没事」如果答不出「因为有意识地做了 X」，那它随时可能变得有事** —— 把偶然写清楚，才能在重构时不把它当噪音删掉。
+
+
 

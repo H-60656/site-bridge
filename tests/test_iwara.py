@@ -746,6 +746,20 @@ class _FakeResp:
         return self._payload
 
 
+class _BadJsonResp(_FakeResp):
+    """回 200，但 body 不是 JSON（Cloudflare 拦截页 / 上游改版回 HTML）。
+
+    裸 ``resp.json()`` 抛的 ``JSONDecodeError`` 是 ``ValueError`` 子类；路由层
+    只兜站点自己的错误类型，没人接就会一路逃成裸 500。这里专门钉住这一点。
+    """
+
+    def __init__(self, status_code=200, text="<html>denied</html>", headers=None):
+        super().__init__(status_code, None, headers, text)
+
+    def json(self):
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+
 @unittest.skipUnless(HAVE_IWARA, "需要 curl_cffi：pip install -r iwara/requirements.txt")
 class IwaraTokenHttpTestCase(unittest.TestCase):
     """换 token 的真实 HTTP 形状，以及「403 表示过期」的强制重放。
@@ -811,6 +825,19 @@ class IwaraTokenHttpTestCase(unittest.TestCase):
 
         with self.assertRaises(IwaraAuthError):
             asyncio.run(client.refresh_access())
+
+    def test_refresh_access_reports_a_non_json_200_instead_of_crashing(self):
+        """刷新成功分支的 200 也可能是 HTML，同样不能逃成裸 500。"""
+        client = IwaraClient(refresh_token="refresh-good")
+        seen, queue = self._patch_request(client)
+        queue.append(_BadJsonResp())
+
+        with self.assertRaises(IwaraAuthError) as ctx:
+            asyncio.run(client.refresh_access())
+
+        self.assertIn("返回的不是 JSON", str(ctx.exception))
+        self.assertIn("<html>denied</html>", str(ctx.exception))
+        self.assertIsNone(client.access_token)
 
     def test_refresh_access_without_a_refresh_token_does_not_send_anything(self):
         client = IwaraClient()
@@ -1604,6 +1631,18 @@ class IwaraClientCoverageTestCase(unittest.TestCase):
         self.assertIn("418", str(caught.exception))
         self.assertIn("I am a teapot", str(caught.exception))
 
+    def test_get_json_reports_a_non_json_200_instead_of_crashing(self):
+        """200 + HTML（拦截页/改版）不能逃成裸 500，要翻成站点自己的错误。"""
+        client, _ = self._patched([_BadJsonResp()])
+
+        with self.assertRaises(IwaraError) as caught:
+            asyncio.run(client.get_json("/videos"))
+
+        self.assertEqual(caught.exception.status, 502)
+        self.assertEqual(caught.exception.reason, "bad_upstream_body")
+        self.assertIn("返回的不是 JSON", str(caught.exception))
+        self.assertIn("<html>denied</html>", str(caught.exception))
+
     def test_login_returns_both_tokens_and_refreshes(self):
         client = self._client()
         calls = []
@@ -1656,6 +1695,16 @@ class IwaraClientCoverageTestCase(unittest.TestCase):
             asyncio.run(client.login("me@example.com", "secret"))
 
         self.assertIn("登录未返回 token", str(caught.exception))
+
+    def test_login_reports_a_non_json_200_instead_of_crashing(self):
+        """登录成功分支的 200 也可能是 HTML，同样不能逃成裸 500。"""
+        client, _ = self._patched([_BadJsonResp()])
+
+        with self.assertRaises(IwaraAuthError) as caught:
+            asyncio.run(client.login("me@example.com", "secret"))
+
+        self.assertIn("返回的不是 JSON", str(caught.exception))
+        self.assertIn("<html>denied</html>", str(caught.exception))
 
     def _probe(self, body: bytes, headers=None, status=206):
         """把重试层换成「直接跑一次」，返回 (probe, seen)。"""

@@ -162,7 +162,14 @@ class OAuthManager:
             raise AuthError(str(exc), "connect_failed")
         if resp.status_code != 200:
             raise AuthError(self._extract_error(resp), f"http_{resp.status_code}")
-        body = resp.json()
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            # 200 也可能不是 JSON（被拦、被网关换成 HTML）：裸 .json() 抛的
+            # JSONDecodeError 调用方只兜 AuthError，会一路逃成裸 500。
+            raise AuthError(
+                f"换 token 的上游返回的不是 JSON：{resp.text[:200]}", "bad_upstream_body"
+            ) from exc
         response = body.get("response", {})
         self._access_token = response.get("access_token")
         self._refresh_token = response.get("refresh_token") or self._refresh_token

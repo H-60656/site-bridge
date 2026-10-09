@@ -609,7 +609,17 @@ class IwaraClient:
                 f"GET {path} -> {resp.status_code}: {resp.text[:200]}",
                 status=resp.status_code,
             )
-        return resp.json()
+        # 200 也可能不是 JSON（Cloudflare 拦截页、上游改版回 HTML）。
+        # 裸 resp.json() 抛的 JSONDecodeError 是 ValueError，路由层只兜
+        # IwaraError → 会一路逃成裸 500。
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise IwaraError(
+                f"GET {path} 返回的不是 JSON（可能被拦了或改版了）：{resp.text[:200]}",
+                status=502,
+                reason="bad_upstream_body",
+            ) from exc
 
     # ---------- 登录（尚未对着真实账号验证过） ----------
 
@@ -629,7 +639,12 @@ class IwaraClient:
             except Exception:  # noqa: BLE001
                 message = resp.text[:200]
             raise IwaraAuthError(f"登录失败（{resp.status_code}）: {message}")
-        self.refresh_token = resp.json().get("token")
+        try:
+            self.refresh_token = resp.json().get("token")
+        except ValueError as exc:
+            raise IwaraAuthError(
+                f"登录返回的不是 JSON（可能被拦了或改版了）：{resp.text[:200]}"
+            ) from exc
         if not self.refresh_token:
             raise IwaraAuthError(f"登录未返回 token: {resp.text[:200]}")
         self.access_token = None
@@ -647,7 +662,12 @@ class IwaraClient:
         if resp.status_code >= 400:
             # 注意：本 API 里过期 token 返回 403 而不是 401，两者都要当失败处理。
             raise IwaraAuthError(f"刷新 token 失败（{resp.status_code}）: {resp.text[:200]}")
-        token = resp.json().get("accessToken")
+        try:
+            token = resp.json().get("accessToken")
+        except ValueError as exc:
+            raise IwaraAuthError(
+                f"刷新返回的不是 JSON（可能被拦了或改版了）：{resp.text[:200]}"
+            ) from exc
         if not token:
             raise IwaraAuthError(f"刷新未返回 accessToken: {resp.text[:200]}")
         self.access_token = token

@@ -113,6 +113,39 @@ iwara 更进一步，用一张**实测可用的边缘 IP 表**（`iwara/client.p
 
 **顺带一条「数字也要横着看」：** 自检里报出的数字，先问它到底是不是它声称的那个东西。`iwara/envcheck.py` 曾把上游 `/videos` 顶层的 `count` 当总数报出去，而那个 `count` 实测**恒等于 `page*limit+n+1`**（20 组 `page × limit` 组合全部成立），于是自检煞有介事地报「共 2 个视频」。**同仓横向对照一眼就能看出**：同样是「报条数」，`asmr_one/envcheck.py` 分得清本页（`len(works)`）与真总数（`pagination.totalCount`），`ehviewer/envcheck.py` 只报条数 —— 四个站点里只有 iwara 混了。这类缺陷不会让任何测试变红，**一个看起来精确的数字，比一句「可达」更容易骗过自检。**
 
+**陷阱四：前面六条都在问「200 里的错误长什么样」，还有第七条 ——「200 里甚至没有一个能解析的 body」。** 这是比「空壳」更彻底的一层：网关/Cloudflare 拦截页、上游改版、反代回静态页，都会给出 **HTTP 200 + `text/html`**。这时问题不再是「判据认不认得出错误」，而是**连解析都做不到**。
+
+具体机制：`resp.json()` 在 body 不是 JSON 时抛 `json.JSONDecodeError`，而它是 `ValueError` 的子类 —— **不属于任何站点的错误类型**（`PixivApiError` / `IwaraError` / `AsmrError` / `EhError`），也躲过了 `pixiv_bridge/errors.py` 的 `install_error_handlers()`（它只认传入的 `error_types` 与 `httpx.HTTPError`）。于是异常一路逃到 FastAPI 默认处理器，对外变成 **裸 500 `text/plain Internal Server Error`** —— 形状没了，状态码也被改写成「服务器炸了」，而真相是「上游被拦了」。
+
+四个站点里，**只有 ehviewer 一开始就兜住了**（`ehviewer/client.py:gdata` 把解析包在 `try/except Exception` 里，翻成 `EhError 502`），原因很偶然：它的 `gdata` 本来就是手工搭 JSON 请求的一段代码，顺手包了个 try。这也正是这条陷阱最容易漏的地方 —— **它和「有没有写 try」无关，和「写在哪一层」有关**：路由层兜异常（陷阱三修的那层）永远兜不住解析层抛出的 `ValueError`。
+
+**修法与清单：** 一律在**解析点**把 `ValueError` 翻成站点异常，保留上游原文片段（口径同「选项 1」，保状态码、保语义）：
+
+```python
+try:
+    return resp.json()
+except ValueError as exc:
+    raise IwaraError(
+        f"GET {path} 返回的不是 JSON（可能被拦了或改版了）：{resp.text[:200]}",
+        status=502, reason="bad_upstream_body",
+    ) from exc
+```
+
+**按类别清点，别按现场清点** —— 这是本条最值钱的部分。发现缺陷时是探针在三条路由上炸，但把 `git grep -n "\.json()"` 全仓过一遍（排除 `tests/` `examples/`），**16 处里揪出 6 处**，其中 `iwara/client.py:632` 的 login 成功分支是探针**从没打到过**的：
+
+| 位置 | 说明 |
+| --- | --- |
+| `pixiv/api.py` `get_json` 成功分支 | `return resp.json() if expect_json else resp.text`，两件事挤在一行，得先拆开 text 分支 |
+| `pixiv/oauth.py` `_token_request` | 换 token 本来就是「上游一抽风就彻底登不上」的路径，最该报人话 |
+| `iwara/client.py` `get_json` | 常规读取路径，影响面最大 |
+| `iwara/client.py` `login` 成功分支 | **探针从未覆盖** —— 靠清点才发现 |
+| `iwara/client.py` `refresh_access` | 同 `_token_request`，且它还要 `.get("accessToken")`，非 JSON 时连字典都拿不到 |
+| `asmr_one/client.py` `get_json` | 同 iwara |
+
+同一轮清点还确认了**已经正确的那些**（不必再改）：三个站点的 `ech.py` / `ech_client.py` 里的 DoH 解析（本来就包在 `try/except Exception` 里）、`pixiv/oauth.py:_extract_error`（有 `except ValueError: return resp.text`）、`pixiv/api.py:_handle_error`（有 `except ValueError: body = None`）、`iwara/client.py` 的 login 失败分支与 `resolve()` 盐循环（因为 `X-Version` 不对时 CDN 本来就回空 body，历史上被迫兜过）。**「哪里兜了」和「哪里该兜」是两件事，只有逐处过一遍才分得清。**
+
+**为什么它比前六条更难自证：** 前六条的判据都建立在一个**能读懂的 body** 上（骨架、条目级 error、恒定结果），本条连 body 都读不了；而且它**只在被拦时发生** —— 平时开发环境直连上游一切正常，裸 500 只在真实对抗环境里出现。所以验证手法很朴素：**用 MockTransport 把所有上游请求都改成 `200 + text/html`，然后把自己所有路由打一遍**，看有没有 `text/plain Internal Server Error`。
+
 
 ### 3.3 TLS 层：分「封锁」和「反爬」两种
 
@@ -246,6 +279,7 @@ else:                   # 普通路径
 6. **把可用 IP / 盐 / 指纹配置记成常量并注释来源**，附上实测日期 —— 这些东西会过期，注释是下次维护的入口。
 7. **为每一层写一个离线单测**（用假传输、假响应），这样网络变了以后能区分「代码坏了」和「链路变了」。
 8. **兜异常要逐条检查，别按印象。** 路由层把站点异常映射成 `HTTPException` 这件事，容易只做一半（见 3.2 陷阱三）：拿一个**必定失败**的路径把每条路由都打一遍，确认状态码与上游原文都还在。**文件里有一条兜了，不等于每条都兜了。**
+9. **把所有上游请求改成 `200 + text/html` 再打一遍，看有没有裸 500。** 第 8 条查的是「错误有没有被改写」，这条查的是「连 body 都解析不了时会发生什么」（见 3.2 陷阱四）：网关拦截页、上游改版、反代回静态页都会给出 `200` + 不可解析的 body，而 `resp.json()` 抛的 `JSONDecodeError` 不属于任何站点错误类型，会直接逃成裸 500。**别按现场清点，按类别清点**：`git grep -n "\.json()"` 把全仓过一遍，逐处确认它在 `try` 里 —— 探针打过的那几处只是恰好撞上的，真正漏掉的那处（`iwara/client.py` 的 login 成功分支）从来没人打过。
 
 ---
 

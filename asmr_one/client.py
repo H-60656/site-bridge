@@ -473,7 +473,17 @@ class AsmrClient:
                 f"GET {path} -> {resp.status_code}: {resp.text[:200]}",
                 status=resp.status_code,
             )
-        return resp.json()
+        # 200 也可能不是 JSON（Cloudflare 拦截页、上游改版回 HTML）。
+        # 裸 resp.json() 抛的 JSONDecodeError 是 ValueError，路由层只兜
+        # AsmrError → 会一路逃成裸 500。
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise AsmrError(
+                f"GET {path} 返回的不是 JSON（可能被拦了或改版了）：{resp.text[:200]}",
+                status=502,
+                reason="bad_upstream_body",
+            ) from exc
 
     # ---------- 业务接口 ----------
 

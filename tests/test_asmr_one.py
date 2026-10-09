@@ -112,6 +112,16 @@ class _FakeResp:
         yield self.content
 
 
+class _BadJsonResp(_FakeResp):
+    """回 200，但 body 不是 JSON（Cloudflare 拦截页 / 上游改版回 HTML）。"""
+
+    def __init__(self, status_code=200, text="<html>denied</html>", headers=None):
+        super().__init__(status_code, None, headers, text)
+
+    def json(self):
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+
 # 真实形状（字段名与线上一致）：顶层就是 list，folder 套 folder，叶子是 audio。
 TRACK_TREE = [
     {
@@ -1001,6 +1011,23 @@ class AsmrTransportTestCase(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status, 500)
         self.assertIn("500", ctx.exception.message)
+
+    def test_get_json_reports_a_non_json_200_instead_of_crashing(self):
+        """200 + HTML（拦截页/改版）不能逃成裸 500，要翻成 AsmrError。"""
+        client = self._client()
+
+        async def fake(*_a, **_kw):
+            return _BadJsonResp()
+
+        client.request = fake  # type: ignore[assignment]
+
+        with self.assertRaises(AsmrError) as ctx:
+            asyncio.run(client.get_json("/api/works"))
+
+        self.assertEqual(ctx.exception.status, 502)
+        self.assertEqual(ctx.exception.reason, "bad_upstream_body")
+        self.assertIn("返回的不是 JSON", ctx.exception.message)
+        self.assertIn("<html>denied</html>", ctx.exception.message)
 
 
 @unittest.skipUnless(HAVE_ASMR, SKIP_REASON)

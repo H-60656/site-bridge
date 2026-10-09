@@ -355,7 +355,18 @@ class PixivApi:
             )
         if resp.status_code == 200:
             # /webview/v2/novel 这类接口回的是 HTML，不能在成功分支里硬当 JSON 解析。
-            return resp.json() if expect_json else resp.text
+            if not expect_json:
+                return resp.text
+            # 200 也可能没有 JSON：Cloudflare 拦截页、上游改版、网关吐 HTML 都回 200。
+            # 裸 resp.json() 抛的 JSONDecodeError 是 ValueError，没人兜 → 对外裸 500。
+            try:
+                return resp.json()
+            except ValueError as exc:
+                raise PixivApiError(
+                    f"上游返回的不是 JSON（可能被拦了或改版了）：{resp.text[:200]}",
+                    status=502,
+                    reason="bad_upstream_body",
+                ) from exc
         return await self._handle_error(
             method, path, params, data, resp, retried, expect_json
         )

@@ -57,7 +57,7 @@ from novel.bookmarks import BookmarkStore, normalize_bookmark
 from novel.downloads import DownloadStore, normalize_download
 from novel.history import HistoryStore, normalize_entry
 from pixiv.image_proxy import ImageProxy
-from pixiv.oauth import OAuthManager
+from pixiv.oauth import AuthError, OAuthManager
 from pixiv.app import create_app
 from pixiv.envcheck import ech_transport, network
 from pixiv.config import PixivSettings
@@ -149,6 +149,29 @@ class OAuthTestCase(unittest.IsolatedAsyncioTestCase):
             hashlib.sha256(verifier.encode("utf-8")).digest()
         ).rstrip(b"=")
         self.assertEqual(challenge.encode("ascii"), expected)
+
+    async def test_token_request_maps_a_non_json_200_to_auth_error(self):
+        """换 token 的上游回 200 + HTML 时不能把 JSONDecodeError 漏出去。"""
+
+        settings = make_settings()
+        http = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(
+                    200,
+                    text="<!DOCTYPE html><title>Just a moment…</title>",
+                    headers={"content-type": "text/html"},
+                )
+            )
+        )
+        oauth = OAuthManager(settings, http)
+
+        with self.assertRaises(AuthError) as ctx:
+            await oauth._token_request({"grant_type": "refresh_token"})
+
+        self.assertEqual(ctx.exception.reason, "bad_upstream_body")
+        self.assertIn("返回的不是 JSON", ctx.exception.message)
+        self.assertIn("Just a moment", ctx.exception.message)
+        await http.aclose()
 
 
 class _AsyncBytes(httpx.AsyncByteStream):
@@ -366,6 +389,61 @@ class ServerTestCase(unittest.TestCase):
             )
             self.assertEqual(resp.status_code, 200)
             self.assertIn("image", resp.headers.get("content-type", ""))
+
+    def _html_client(self):
+        """所有上游都回 200 + HTML（Cloudflare 拦截页/网关改版）。
+
+        ``_mock_handler`` 对未知路径一律回 200 空 JSON，所以这里必须自写 handler。
+        app.state 只在 lifespan 启动后才挂上，故必须在 ``with`` 里再注假登录态。
+        """
+
+        def handler(request):
+            return httpx.Response(
+                200,
+                text="<!DOCTYPE html><title>Just a moment…</title>",
+                headers={"content-type": "text/html"},
+            )
+
+        settings = make_settings(token="test-refresh")
+        settings.token_file = SERVER_TOKEN_FILE
+        app = create_app(settings, transport=httpx.MockTransport(handler))
+        return TestClient(app)
+
+    @contextlib.contextmanager
+    def _authorized_html_client(self):
+        with self._html_client() as client:
+            client.app.state.oauth._access_token = "fake-access-token"
+            client.app.state.oauth._expires_at = time.time() + 3600
+            yield client
+
+    def test_non_json_upstream_body_is_a_unified_502_not_a_bare_500(self):
+        """上游 200 + HTML 曾经让 7 条路由里 6 条吐裸 500 text/plain。"""
+
+        with self._authorized_html_client() as client:
+            for path in (
+                "/api/illust/1",
+                "/api/illust/1/related",
+                "/api/user/1",
+                "/api/ranking",
+                "/api/search/illust?word=x",
+                "/api/novel/1",
+            ):
+                with self.subTest(path=path):
+                    resp = client.get(path)
+                    self.assertEqual(resp.status_code, 502, path)
+                    self.assertIn("application/json", resp.headers.get("content-type", ""))
+                    body = resp.json()
+                    self.assertIn("error", body)
+                    self.assertEqual(body["error"]["reason"], "bad_upstream_body")
+                    self.assertIn("返回的不是 JSON", body["error"]["message"])
+
+    def test_html_endpoints_are_unaffected_by_the_non_json_guard(self):
+        """``/api/novel/{id}/text`` 走 text 分支，自己的正向判据照旧生效。"""
+
+        with self._authorized_html_client() as client:
+            resp = client.get("/api/novel/1/text")
+            self.assertEqual(resp.status_code, 502)
+            self.assertIn("没有 novel 对象", resp.json()["error"]["message"])
 
 
 class NovelWebIndexTestCase(unittest.TestCase):
@@ -782,6 +860,39 @@ class PixivApiTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.status, 503)
         self.assertEqual(ctx.exception.message, "Service Unavailable")
         self.assertEqual(ctx.exception.reason, "")
+        await http.aclose()
+
+    async def test_success_body_that_is_not_json_maps_to_502(self):
+        """上游回 200 + HTML（拦截页/改版）时不能把 JSONDecodeError 漏出去。
+
+        裸 ``resp.json()`` 抛的 ``JSONDecodeError`` 是 ``ValueError`` 子类，
+        ``PIXIV_ERROR_TYPES`` 里没有它 → 会一路逃成裸 500。
+        """
+
+        def handler(request):
+            return httpx.Response(
+                200,
+                text="<!DOCTYPE html><title>Just a moment…</title>",
+                headers={"content-type": "text/html"},
+            )
+
+        api, _, http = await self._make_api(handler)
+        with self.assertRaises(PixivApiError) as ctx:
+            await api.illust_detail(1)
+        self.assertEqual(ctx.exception.status, 502)
+        self.assertEqual(ctx.exception.reason, "bad_upstream_body")
+        self.assertIn("返回的不是 JSON", ctx.exception.message)
+        self.assertIn("Just a moment", ctx.exception.message)
+        await http.aclose()
+
+    async def test_non_json_path_still_returns_raw_text(self):
+        """``expect_json=False``（/webview/v2/novel）必须原样回 text，不受上面那条影响。"""
+
+        def handler(request):
+            return httpx.Response(200, text="<html>novel</html>")
+
+        api, _, http = await self._make_api(handler)
+        self.assertEqual(await api.get_text("/webview/v2/novel"), "<html>novel</html>")
         await http.aclose()
 
     async def test_empty_error_body_gets_readable_message(self):
