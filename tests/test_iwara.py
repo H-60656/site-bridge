@@ -1030,6 +1030,49 @@ class IwaraRouteTestCase(unittest.TestCase):
         self.assertEqual(client.get("/api/iwara/videos?limit=999").status_code, 422)
         self.assertEqual(client.get("/api/iwara/videos?limit=0").status_code, 422)
 
+    def test_videos_count_is_the_page_and_total_is_unknown(self):
+        """上游 /videos 的顶层 count 是伪字段（page*limit+len+1），不能当总数透传。
+
+        对外一律 count=本页条数、total=总数；/videos 压根没有总数，就给
+        None，绝不编一个数字顶上。
+        """
+        client = self._client()
+        body = client.get("/api/iwara/videos?limit=5").json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(len(body["results"]), 1)
+        self.assertIsNone(body["total"])
+
+    def test_videos_ignores_the_bogus_upstream_count(self):
+        """上游回什么 count 都不该影响对外形状 —— 对外的 count 由 results 长度决定。"""
+        client = self._client()
+
+        async def bogus(**kwargs):
+            return {"count": 99, "limit": 1, "page": 0, "results": [VIDEO]}
+
+        self.fake.list_videos = bogus  # type: ignore[assignment]
+        body = client.get("/api/iwara/videos").json()
+        self.assertEqual(body["count"], 1)
+        self.assertNotIn(99, [body["count"], body["total"]])
+
+    def test_search_reports_the_real_total(self):
+        """/search 的 count 是跨页恒定的真总数 —— 全站只有它给总数。"""
+        client = self._client()
+        body = client.get("/api/iwara/search?query=dance").json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["total"], 1)
+
+    def test_videos_passes_subscribed_through(self):
+        """客户端早就有 subscribed 参数，路由层以前没给出口。"""
+        client = self._client()
+        client.get("/api/iwara/videos?subscribed=true")
+        self.assertIs(self.fake.calls[0][1]["subscribed"], True)
+        self.fake.calls.clear()
+        client.get("/api/iwara/videos?subscribed=false")
+        self.assertIs(self.fake.calls[0][1]["subscribed"], False)
+        self.fake.calls.clear()
+        client.get("/api/iwara/videos")
+        self.assertIsNone(self.fake.calls[0][1]["subscribed"])
+
     def test_search_requires_query(self):
         client = self._client()
         self.assertEqual(client.get("/api/iwara/search").status_code, 422)
@@ -1057,6 +1100,26 @@ class IwaraRouteTestCase(unittest.TestCase):
         self.assertEqual([item["id"] for item in first["results"]], ["related-1"])
         second = client.get("/api/iwara/related/b0pRCNfo8Igu3p?page=1&limit=1").json()
         self.assertEqual([item["id"] for item in second["results"]], ["related-2"])
+
+    def test_related_metadata_follows_local_trimming(self):
+        """本地裁剪后必须重算元数据，否则会给出自相矛盾的响应。
+
+        上游那三个字段描述的是**裁前**的整页；原样留下就会出现
+        「count 说 2 条、results 里 0 条」（?page=50 就会命中）。
+        """
+        client = self._client()
+        beyond = client.get("/api/iwara/related/b0pRCNfo8Igu3p?page=50").json()
+        self.assertEqual(beyond["results"], [])
+        self.assertEqual(beyond["count"], 0)
+        self.assertEqual(beyond["limit"], 12)
+        self.assertEqual(beyond["page"], 50)
+        self.assertEqual(beyond["total"], 2)
+
+        trimmed = client.get("/api/iwara/related/b0pRCNfo8Igu3p?limit=1").json()
+        self.assertEqual(trimmed["count"], 1)
+        self.assertEqual(trimmed["limit"], 1)
+        self.assertEqual(trimmed["page"], 0)
+        self.assertEqual(trimmed["total"], 2)
 
     def test_related_limit_is_bounded(self):
         client = self._client()
@@ -2020,7 +2083,10 @@ class IwaraRouteGapTestCase(unittest.TestCase):
         self.assertEqual(len(full["results"]), 2)
         self.assertEqual(len(trimmed["results"]), 1)
         self.assertEqual(beyond["results"], [])
-        self.assertEqual(beyond["count"], full["count"])
+        # count 是「本页条数」，裁剪后各页当然不同；跨页不变的是 total。
+        self.assertEqual(beyond["total"], full["total"])
+        self.assertEqual(beyond["count"], 0)
+        self.assertEqual(full["count"], 2)
         # 上游只被调用了一次，page/limit 都没往上传。
         self.assertEqual(self.fake.calls[0], ("related", "b0pRCNfo8Igu3p"))
 

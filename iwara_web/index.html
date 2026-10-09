@@ -277,7 +277,10 @@ async function loadPage(page) {
       $("browse-status").textContent = state.mode === "search" ? "没有匹配的视频。" : "这里暂时没有视频。";
     }
     $("more-wrap").hidden = state.done || results.length === 0;
-    const total = data && data.count;
+    // 只认 total（真总数），别用 count（那是本页条数）。
+    // 上游 /videos 的顶层 count 是个伪字段，后端已改成 count=本页、total=总数；
+    // /videos 没有总数 ⇒ total 为 null ⇒ 不显示「共 N 个」，免得随翻页越翻越大。
+    const total = data && data.total;
     $("browse-count").textContent = total != null ? `共 ${total} 个` : "";
   } catch (err) {
     $("browse-status").className = "status err";

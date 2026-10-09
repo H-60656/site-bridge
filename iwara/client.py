@@ -699,6 +699,16 @@ class IwaraClient:
         user_id: str | None = None,
         subscribed: bool | None = None,
     ) -> dict:
+        """浏览 / 排行。
+
+        注意 ``subscribed``：**只有登录态才有效**，匿名下上游会静默忽略它 ——
+        实测 ``subscribed=true`` / ``false`` / 不传三种取值返回完全相同的条数
+        （8/8、20/20 全同，配 ``sort=trending`` 也不变）。传了不会报错，只是
+        没有作用，不要把它当匿名可用的过滤器。
+
+        返回体的 ``count`` 是上游的伪字段（``page*limit+len+1``），**不要直接
+        当总数用**；对外出口由 ``routes/videos.py:_page_envelope`` 改写。
+        """
         params: dict[str, Any] = {
             "page": page,
             "limit": limit,

@@ -32,6 +32,25 @@ def _decorate_page(page: dict) -> dict:
     return page
 
 
+def _page_envelope(page: dict, *, total: int | None) -> dict:
+    """把上游列表页规整成对外统一形状。
+
+    ``count`` 一律是**本页条数**（恒等于 ``len(results)``），``total`` 是总数 ——
+    上游不给就写 ``None``，绝不编一个数字顶上。
+
+    这条规矩是被上游的伪字段逼出来的：``/videos`` 的顶层 ``count`` 实测恒等于
+    ``page*limit + len(results) + 1``（20 组 page×limit 组合全部成立，翻到越界
+    空页时退化成 ``page*limit``）。它既不是总数也不是本页条数，只是「请求过的
+    条数 + 1」—— 原样透传会让调用方看到「共 N 个」随翻页无限增长。真总数只在
+    ``/search`` 上给（跨页恒定）。这与 ``asmr_one`` 那边 ``count``=本页、
+    ``total``=总数的口径一致。
+    """
+    results = page.get("results")
+    if not isinstance(results, list):
+        return page
+    return {**page, "count": len(results), "total": total}
+
+
 @router.get("/videos")
 async def list_videos(
     request: Request,
@@ -41,15 +60,30 @@ async def list_videos(
     rating: str = "all",
     tags: str | None = None,
     user: str | None = None,
+    subscribed: bool | None = None,
 ):
-    """浏览 / 排行。``sort``: date|trending|popularity|likes|views；``rating``: all|general|ecchi。"""
+    """浏览 / 排行。``sort``: date|trending|popularity|likes|views；``rating``: all|general|ecchi。
+
+    ``subscribed=true`` 只看订阅作者 —— **需要登录**才有效；匿名下上游会
+    静默忽略它（实测三种取值返回完全相同的 8/20 条，见 DIRECT.md 第 5 节第 3 条）。
+
+    返回 ``{count,total,limit,page,results}``：``count`` 是本页条数，
+    ``total`` 固定为 ``null`` —— 上游 ``/videos`` 根本没给总数（它的顶层
+    ``count`` 是个伪字段，见 ``_page_envelope``）。
+    """
     try:
         result = await get_client(request).list_videos(
-            page=page, limit=limit, sort=sort, rating=rating, tags=tags, user_id=user
+            page=page,
+            limit=limit,
+            sort=sort,
+            rating=rating,
+            tags=tags,
+            user_id=user,
+            subscribed=subscribed,
         )
     except IwaraError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.message) from exc
-    return _decorate_page(result)
+    return _page_envelope(_decorate_page(result), total=None)
 
 
 @router.get("/search")
@@ -60,11 +94,15 @@ async def search(
     page: int = 0,
     limit: int = Query(20, ge=1, le=50),
 ):
+    """搜索。``count`` 是本页条数，``total`` 是真总数 —— 全站只有这个端点给总数。"""
     try:
         result = await get_client(request).search(query, type=type, page=page, limit=limit)
     except IwaraError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.message) from exc
-    return _decorate_page(result)
+    result = _decorate_page(result)
+    # 上游 /search 的 count 是跨页恒定的真总数，先取出来再交给 _page_envelope 改写 count。
+    total = result.get("count") if isinstance(result.get("count"), int) else None
+    return _page_envelope(result, total=total)
 
 
 @router.get("/video/{video_id}")
@@ -83,10 +121,14 @@ async def related_videos(
     page: int = 0,
     limit: int = Query(12, ge=1, le=50),
 ):
-    """相关视频，形状同 ``/videos``（``{count,limit,page,results}``）。
+    """相关视频，形状同 ``/videos``（``{count,total,limit,page,results}``）。
 
     多余的 ``page``/``limit`` 只用于本地裁剪：上游这个端点一次返回 12 条，
-    不接受分页参数。
+    不接受分页参数。**裁剪后必须重算元数据** —— 上游给的 ``count``/``limit``/
+    ``page`` 描述的是裁剪前的整页，原样留下就会出现「``count`` 说 12 条、
+    ``results`` 里 0 条」这种自相矛盾的响应（``?page=1`` 就会命中）。
+    这里 ``count`` 一律是**裁剪后本页的真实条数**，``total`` 是上游整页条数
+    （一次性给出、不分页，所以它就是总数）。
     """
     try:
         result = await get_client(request).related(video_id)
@@ -95,10 +137,19 @@ async def related_videos(
 
     result = _decorate_page(result)
     results = result.get("results")
+    if not isinstance(results, list):
+        return result
+
+    total = len(results)
     if page or limit != 12:
-        if isinstance(results, list):
-            start = page * limit
-            result["results"] = results[start : start + limit]
+        start = page * limit
+        results = results[start : start + limit]
+
+    result["results"] = results
+    result["count"] = len(results)
+    result["total"] = total
+    result["limit"] = limit
+    result["page"] = page
     return result
 
 

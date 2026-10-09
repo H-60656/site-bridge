@@ -387,7 +387,7 @@ pixiv-bridge/
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
-├── tests/                              单元测试（924 项：框架与站点 339 + iwara 206 + asmr_one 145 + ehviewer 189 + 打包 45）
+├── tests/                              单元测试（929 项：框架与站点 339 + iwara 211 + asmr_one 145 + ehviewer 189 + 打包 45）
 ├── openssl-libs/                       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -706,10 +706,10 @@ iwara 是另一个站点，与 Pixiv 无关，由独立的接口项目 `iwara/` 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/iwara` | **视频页面**（给人看的，需挂 `iwara_web` 扩展）：列表 / 搜索 / 筛选（排序、分级）、点开详情、`<video>` 走 `/api/iwara/stream` 代转播放、清晰度切换、相关视频、标签跳转、深浅色主题。`iwara/run.py` 的导航页（`/`）上也有入口 |
-| GET | `/api/iwara/videos?page=&limit=&sort=&rating=&tags=&user=` | 视频列表。`sort`: `date`/`trending`/`popularity`/`likes`/`views`；`rating`: `all`/`general`/`ecchi`（R18 不需要登录，显式传 `ecchi` 即可取到）；返回上游的 `{count,limit,page,results}`，并给每条补上 `thumbnailUrl` / `posterUrl` |
-| GET | `/api/iwara/search?query=&type=&page=&limit=` | 搜索，`type` 默认 `videos` |
+| GET | `/api/iwara/videos?page=&limit=&sort=&rating=&tags=&user=&subscribed=` | 视频列表。`sort`: `date`/`trending`/`popularity`/`likes`/`views`；`rating`: `all`/`general`/`ecchi`（R18 不需要登录，显式传 `ecchi` 即可取到）；`subscribed=true` 只看订阅作者（**需要登录**，匿名下上游会静默忽略它）。返回 `{count,total,limit,page,results}`：`count` 是**本页**条数，`total` 是真总数，并给每条补上 `thumbnailUrl` / `posterUrl`。⚠️ 上游 `/videos` 的顶层 `count` 是个伪字段（实测恒等于 `page*limit+len(results)+1`，会随翻页无限增长），本端不把它当总数透传；这个端点也**没有**真总数，`total` 恒为 `null`（只有 `/search` 给总数） |
+| GET | `/api/iwara/search?query=&type=&page=&limit=` | 搜索，`type` 默认 `videos`。`count` 是本页条数，`total` 是真总数（跨页恒定）—— 全站只有这个端点给总数 |
 | GET | `/api/iwara/video/{video_id}` | 视频详情（同样补 `thumbnailUrl` / `posterUrl`） |
-| GET | `/api/iwara/related/{video_id}?page=&limit=` | 相关视频；形状同 `/videos`（同样补缩略图）。上游固定只给 12 条且不接受分页参数，`page`/`limit` 是本地裁剪 |
+| GET | `/api/iwara/related/{video_id}?page=&limit=` | 相关视频；形状同 `/videos`（同样补缩略图）。上游固定只给 12 条且不接受分页参数，`page`/`limit` 是本地裁剪；裁剪后 `count`/`limit`/`page` 会跟着重算（`count` 是裁后本页条数），`total` 是上游整页条数 |
 | GET | `/api/iwara/resolve/{video_id}?probe=true` | 解析可播放的直链：返回各清晰度 `sources`，`probe=true` 时真发一次 Range 请求，把结果放在 `chosen`（`{name,mime,url,host,content_range,verified}`）。`salt_used` 说明用了哪版签名盐 |
 | GET | `/api/iwara/stream?url=` | 代转视频字节并透传 `Range`（原样转发客户端的 `Range` / `If-Range`，返回上游的 206 与 `Content-Range`）。只允许 iwara CDN 主机 |
 | GET | `/api/iwara/thumbnail/{video_id}?index=&original=` | 按视频 id 直接取缩略图，省得前端自己拼 `file.id` |
@@ -885,13 +885,13 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 - `GET /api/config` 多返回两个字段：`warnings`（上面那些提示）与 `writable`（真写一个探针文件判断数据目录能不能写，`{"ok": bool, "dir": "...", "reason": "..."}`），页面在保存前就能提示；
 - 跨文件系统的 `os.replace`（安卓 `/sdcard` 的 FUSE 就会这样，报 `EXDEV`）不再白等重试，直接退回「原地覆盖写」。
 
-还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，框架与站点的用例应全绿（iwara 的 206 项会跳过，见下）。
+还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，框架与站点的用例应全绿（iwara 的 211 项会跳过，见下）。
 > **安卓 / Termux**：请把项目放在 Termux 家目录里（例如 `~/pixiv-bridge`），不要把数据目录指到 `/sdcard` 下的路径。Termux 上依赖会自动换成纯 Python 的 `requirements-termux.txt`（见 INSTALL.md，pydantic 1.x 与 2.x 都支持），与这条路径限制无关。
 
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 924 项应全绿（框架与站点 339 + iwara 206 + asmr_one 145 + ehviewer 189 + 打包 45）
+python -m unittest discover -s tests       # 929 项应全绿（框架与站点 339 + iwara 211 + asmr_one 145 + ehviewer 189 + 打包 45）
 python scripts/check_boundary.py           # 拆分边界自检
 python scripts/make_share_packages.py --check   # 分享包内容自检（不写 zip）
 ```
@@ -905,7 +905,7 @@ python scripts/make_share_packages.py --check   # 分享包内容自检（不写
 
 改了 imports、挪了路由或动了入口脚本后跑一下它，比等到运行时才 404 省事。测试给 `novel` 那一层的用例统一走 helper（`tests/test_bridge.py`），因为三台账 / 配置 / 书架 / 阅读器页面现在都由扩展挂载，用框架外壳或 `pixiv.app.create_app` 打这些路径会 404。
 
-`iwara` 的用例在 `tests/test_iwara.py`（206 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求（`--check` 那几项也是把 `IwaraClient` 整个换掉再断言）。换 token 那一层也不例外：把真正发请求的 `_call_with_ip_retry` 换成「按队列吐假响应」，就能让 `refresh_access()` 的请求形状（POST `/user/token`、空 body、refresh token 放 `authorization` 头）和 `request()` 收到 403 后的那次强制重放真实跑一遍，不需要账号。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 206 项会**整片跳过**（显示 `OK (skipped=206)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
+`iwara` 的用例在 `tests/test_iwara.py`（211 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求（`--check` 那几项也是把 `IwaraClient` 整个换掉再断言）。换 token 那一层也不例外：把真正发请求的 `_call_with_ip_retry` 换成「按队列吐假响应」，就能让 `refresh_access()` 的请求形状（POST `/user/token`、空 body、refresh token 放 `authorization` 头）和 `request()` 收到 403 后的那次强制重放真实跑一遍，不需要账号。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 211 项会**整片跳过**（显示 `OK (skipped=211)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
 
 分享包脚本的用例在 `tests/test_packaging.py`（45 项），同样全部离线、且**不写真实 `dist/`**（用 `patch.object(packaging, "DIST_DIR", 临时目录)` 顶掉）。它盯四类回归：包清单本身（**包数跟着 `scripts/sites.py` 的登记表走**、key 与 zip 名唯一、**每个包里声明的每条目录/文件都真的在盘上**——目录被改名时测试先炸，而不是等打出来的包缺东西）、`validate_specs()` 的结构约束（接口包必须带框架与**恰好一个**站点、扩展包不带站点、组合包的扩展宿主必须也在包里、包清单恰好覆盖所有站点与扩展）、铺包逻辑（扩展包只带自己、自动跳过 `__pycache__` / `.pyc` / `data/`、缺内容时报 `SystemExit` 并指名道姓）、以及 zip 回读（条目都在同名根文件夹下、根有 `README.md`、包内 `<站点>/run.py` 存在、`inspect_zip` 能认出字节码与私密数据）。脚本不在任何包里（`scripts/` 没有 `__init__.py`），所以测试用 `importlib` 按路径加载；注意脚本头有 `from __future__ import annotations`，加载时必须**先**把模块登记进 `sys.modules` 再 `exec_module`，否则 dataclasses 解析字符串注解时会去 `sys.modules` 里找一个还不存在的模块，报 `AttributeError: 'NoneType' object has no attribute '__dict__'`。
 

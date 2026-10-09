@@ -1240,6 +1240,68 @@ except ValueError as exc:
 - **横向对照要覆盖「正常路径」而不只是「异常路径」。** §25 的手法（拿必定失败的路径打一遍）对陷阱三/四是决定性的，但对本条毫无作用 —— 因为缺陷就在成功路径上。补充手法：**把返回体里带回上游语义的字段逐个反向走一遍**（`grep` 返回体 → 问「调用方拿它做什么、有没有对应入参」）。
 - **「上游不支持」也是需要验证的假设。** 直觉会认为「翻页只有 next，prev 大概是摆设」，但实测 `?prev=` 精确取回上一页（25/25 全同）。如果当初按直觉删掉 `prev` 字段，就会把一个**本可实现的能力**当成不存在，并且永远发现不了。
 
+---
+
+## 28. 候选 ④：字段带着错误语义对外（iwara 三处「出口没负责」）
+
+### 28.1 起因与方法
+
+§27 修完「有解析、没出口」之后，把同一个问题反过来问一遍：**返回体里那些带回上游语义的字段，出口那一头有没有人负责它们的正确性？** 扫描方式是「返回字段 ↔ 暴露的查询参数」逐条对照（即 §27 教训里说的「把返回体里带回上游语义的字段逐个反向走一遍」）。一次扫出 iwara 三处，全部**实测坐实**后才动手。
+
+### 28.2 三处缺陷与实测证据
+
+**① `/videos` 的顶层 `count` 是伪总数，本端原样透传还写进了手册。** 实测（`_scratch/_probe_iwara_count_semantics.py`，20 组 `page × limit` 组合全部成立）：
+
+| 请求 | 本页条数 n | 上游 `count` | `page*limit+n+1` |
+| --- | --- | --- | --- |
+| `page=0 limit=8` | 8 | 9 | 9 |
+| `page=1 limit=8` | 8 | 17 | 17 |
+| `page=2000 limit=8` | 8 | 16009 | 16009 |
+| `page=1 limit=50` | 50 | 101 | 101 |
+| `page=100000 limit=8`（越界空页） | 0 | 800000 | `page*limit`（不 +1） |
+
+它既不是总数也不是本页条数，只是「请求过的条数 + 1」，**同一份内容 `?page=0` 说「共 9 个」、`?page=100` 就说「共 809 个」**。真总数只由 `/search` 给出（`page=0/1/100/2000` 以及越界页全部恒定 `15106`）。而本端 `_decorate_page` 是 `{**page, "results": ...}`，把这个伪字段原样发出去；`README.md:709` 还把它当契约写进表格，`iwara_web/index.html:280` 直接读它渲染「共 N 个」。**§25 修过同一个伪 count**（`iwara/envcheck.py:85-90` 改成报「本页 N 个视频」），但**只修了自检那一处，对外出口没修** —— 于是自检对、手册错、前端照做，三处口径各自为政。
+
+**② `/related/{video_id}` 本地裁剪后元数据不跟着改。** 上游这个端点一次给 12 条、不接受分页参数，本端用 `page`/`limit` 裁 `results`，却不重算随内容一起返回的 `count`/`limit`/`page`。实测（`_scratch/_probe_iwara_related_meta.py`，EXIT=2）：
+
+| 请求 | `count` | `limit` | `page` | 实际条数 |
+| --- | --- | --- | --- | --- |
+| 默认 | 12 | 12 | 0 | 12 |
+| `?limit=5` | 12 | 12 | 0 | 5 |
+| `?page=1` | 12 | 12 | 0 | **0** |
+| `?page=2&limit=5` | 12 | 12 | 0 | 2 |
+
+`?page=1` 那一行就是自相矛盾的响应：`count` 说 12 条，`results` 里 0 条。
+
+**③ `subscribed` 有参数、没出口；且手册里的说法与实测相反。** `iwara/client.py:700,711-712` 支持 `subscribed: bool | None`，但 `iwara/routes/videos.py` 的路由签名里没有它 —— 客户端有能力、**对外不可达**（与 §27 同类：这次是「有能力没出口」）。而 `DIRECT.md` 第 5 节第 3 条把它当成「实测与静态报告不符」的例子，写着「`subscribed=true` 匿名也能用」。实测（`_scratch/_probe_iwara_subscribed.py`）三种取值返回**完全相同**：不传 / `true` / `false` → 8/8 全同，`limit=20` 时 20/20 全同，配 `sort=trending` 也不变。真相是**被静默忽略**，不是「能用」。本仓没有 iwara 凭证（`.env` 只有 pixiv 的 `TOKEN`），所以只能在匿名态验证 —— 而那正是它被忽略的状态，因此修法只能是「把参数透出来 + 明确标注需要登录」，不能声称它在匿名下有效。
+
+### 28.3 修法
+
+出口处把语义定死，**宁可说「未知」也不编一个数字**：
+
+- `iwara/routes/videos.py` 新增 `_page_envelope(page: dict, *, total: int | None) -> dict`：`count` 一律 = `len(results)`（本页条数），`total` = 总数，上游不给就写 `None`。`/videos` 传 `total=None`（该端点根本没有总数）；`/search` 先把上游那个真总数取出来再传进去。
+- `/related` 在裁剪之后统一回写 `results`/`count`/`limit`/`page`，并给出 `total` = 上游整页条数（它一次性给全，所以那就是总数）。
+- `/videos` 路由补上 `subscribed: bool | None = None` 并转传；`iwara/client.py:list_videos` 补 docstring 写明它**只有登录态才有效**、匿名静默忽略。
+- 消费者跟着改：`iwara_web/index.html` 由 `data.count` 改为 `data.total`（`/videos` 恒 `null` ⇒ 不再显示会越翻越大的「共 N 个」）；`README.md` 端点表改写返回形状并标注伪字段。
+- 口径与 `asmr_one` 一致（那边早就是 `count`=本页、`total`=`totalCount`），**横向对照一下就能看出谁对谁错**。
+
+回归用例 5 个（`tests/test_iwara.py`，`IwaraRouteTestCase`）：伪 count 被忽略（把假客户端改成回 `count: 99`，对外仍是本页条数）、`/videos` 的 `total` 为 `null`、`/search` 给真总数、`subscribed` 三态透传、`/related` 裁剪后元数据自洽（`?page=50` → `count=0`/`limit=12`/`page=50`/`total=2`）。另有一处**既有断言必须改**：`test_related_trims_locally_and_can_run_off_the_end` 原来断言 `beyond["count"] == full["count"]`，这条恰好把缺陷②钉成了「正确行为」，改成比对 `total`、并分别断言 `0` 与 `2`。
+
+### 28.4 门禁
+
+- 全量 `-m unittest discover -s tests -t .` → **Ran 929 tests … OK (skipped=1)**（924 → 929 = iwara 206 → 211）。
+- `scripts/check_boundary.py` → **EXIT=0**，路由数字不变（本次不动路由集合）。
+- `scripts/make_share_packages.py --check` → **EXIT=0**，8 个分享包内容就绪。
+- 手册计数同步：`README.md` 三处 924 → 929、iwara 206 → 211（含「整片跳过」时显示的 `OK (skipped=211)`）。
+
+### 28.5 教训
+
+- **字段名是上游的命名习惯，不是契约。** `count` 这个名字本身不保证「总数」语义；原样透传等于把上游的实现细节写进自己的文档，还顺手让下游照着建分页。
+- **判据不是「名字像不像」，而是「跨页是不是常数」。** 总数类字段跨页必须恒定；随 `page` 单调增长的就不是总数。再加两个对照：固定页码只改 `limit`（跟着变 ⇒ 只是「请求过的条数」），以及找一个**真值端点**（这里是 `/search`）当参照物。
+- **修完一处要注意「同一个坑的另一半」。** §25 已经识别出这个伪 count 并修掉了自检，但**出口那一半没人负责** —— 缺陷可以在同一次修复里被认出来、却被只修一半。识别出一个坏字段后，要顺着它问「还有谁在用这个字段」（手册、前端、别处代码）。
+- **裁剪/转换类接口必须重算它自己那些描述性字段。** 内容变了、元数据没变，就是一个自相矛盾的响应体；`?page=1` 给出「count=12、results=0」比报错更难发现，因为它不报错。
+- **「手册里的实测结论」也要跟着实测更新。** `DIRECT.md` 那句「`subscribed=true` 匿名也能用」本身就是一条**没验过的实测记录**，被后续实测推翻 —— 手册的权威性来自复核，不是来自它写在手册里。
+
 
 
 
