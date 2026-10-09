@@ -1,13 +1,15 @@
 """ehviewer 站点的启动自检。
 
-补本站自己那四样，通过 ``Site.checks`` 挂进框架同一张 ``[环境检查]`` 表：
+补本站自己那六样，通过 ``Site.checks`` 挂进框架同一张 ``[环境检查]`` 表：
 
     ehviewer 依赖   curl_cffi 在不在（编译包，框架 REQUIRED 不含它）
     ehviewer 边缘   借道用的 Cloudflare 边缘有没有可用的（含 TCP 探测）
     ehviewer 站点   e-hentai.org 能不能真的取回一页（这才是整条链路通不通的判据）
     ehviewer 详情   详情页解析还认不认得出真实页面（守住骨架判据，见下）
+    ehviewer 榜单   /popular 那页还在不在、还能不能解析出画廊
+    ehviewer 大图   大图页解析还认不认得出真实页面（守住图片直链判据，见下）
 
-四项都**不中止启动**：依赖缺失时启动本身会走 ``deps.bootstrap`` 自动补；网络
+六项都**不中止启动**：依赖缺失时启动本身会走 ``deps.bootstrap`` 自动补；网络
 不通也只是接口返回 502，服务照常起来，方便用户先看到界面再排查。
 
 **为什么「详情」要单独一项。** 上游对取不到的画廊回的是 HTTP 200 + 一句纯文本
@@ -17,6 +19,11 @@
 详情页结构、正则不再命中 —— **真实画廊会被整批误判成存根，全部返回 404**，比
 原来的空壳更难查。``_site_check`` 探的是**列表页**，走另一套解析，证明不了这一点；
 所以这里另外真取几条详情，确认它们仍能解析出标题。
+
+**「榜单」和「大图」同理，各守一个别处证明不了的判据。** 榜单走的是 ``/popular``
+这个独立入口，首页好着不代表它还在；大图守的是 ``parse_s_page`` 的图片直链判据
+（``_IMG_SRC_RE`` + ``_S_STUB_PATTERNS``），失效时 ``/api/eh/proxy`` 对真实大图页
+整批 502，而列表与详情都还是绿的。
 
 这里**没有 ECH 自检** —— 该站点不用 ECH（封锁是 SNI 字符串 + DNS 投毒，
 ECH 的外层 SNI 恰好是被封的那个，叠上去只会更糟），所以也就没有 ``ech*`` 配置。
@@ -33,6 +40,8 @@ DEPS_NAME = "ehviewer 依赖"
 EDGE_NAME = "ehviewer 边缘"
 SITE_NAME = "ehviewer 站点"
 DETAIL_NAME = "ehviewer 详情"
+POPULAR_NAME = "ehviewer 榜单"
+PAGE_NAME = "ehviewer 大图"
 
 # 边缘探测是并发的，给一个总上限即可。
 EDGE_TIMEOUT = 20.0
@@ -40,6 +49,10 @@ EDGE_TIMEOUT = 20.0
 SITE_TIMEOUT = 30.0
 # 详情探测要取列表 + 若干条详情，同样给宽一点（上面对每条不再单独计时）。
 DETAIL_TIMEOUT = 40.0
+# 榜单探测只是一次 GET，跟站点探测同量级。
+POPULAR_TIMEOUT = 30.0
+# 大图探测要串三次请求（列表 → 详情 → /s/ 页），比详情再宽一点。
+PAGE_TIMEOUT = 60.0
 # 取几条详情来验判据。一条就够看出「判据还认不认得真实页面」，取两条是为了
 # 万一第一条恰好是刚被删除/改版的上传，不至于就报故障。
 DETAIL_SAMPLES = 2
@@ -51,6 +64,15 @@ _HINT_EDGE = (
 _HINT_DETAIL = (
     "多半是上游改了详情页结构，ehviewer/parse.py 的骨架判据"
     "（#gn / #gdc / #gdd）不再命中 —— 真实画廊会被当成存根"
+)
+_HINT_POPULAR = (
+    "/popular 页面的结构可能变了（list_galleries 那套解析不再命中），"
+    "或者上游把这个入口下线了"
+)
+_HINT_PAGE = (
+    "多半是上游改了大图页结构，ehviewer/parse.py 的 _IMG_SRC_RE"
+    "（id=\"img\" 的 src）不再命中，或存根判据（invalid / key）不再命中"
+    " —— /api/eh/proxy 会对真实大图页整批 404"
 )
 
 
@@ -235,10 +257,134 @@ async def _detail_check(settings) -> CheckResult:
         await client.aclose()
 
 
+async def _popular_check(settings) -> CheckResult:
+    """``/popular`` 还取不取得到、还解析不解析得出画廊。
+
+    这条**必须单独探**：热门榜单虽然复用列表页那套解析，但走的是另一个 URL
+    （``/popular``），上游完全可能只动这一个入口（改版、下线、重定向到登录页）。
+    ``_site_check`` 探的是首页，它绿着也不代表榜单还在。
+    """
+    try:
+        from .client import EhClient, EhError
+        from .config import as_eh_settings, split_ips
+    except Exception as exc:  # noqa: BLE001 - curl_cffi 缺失时退化
+        return CheckResult(POPULAR_NAME, False, f"跳过（{exc.__class__.__name__}: {exc}）")
+
+    client_settings = as_eh_settings(settings)
+    client = EhClient(
+        http3=client_settings.http3,
+        edge_ips=split_ips(client_settings.edge_ips),
+        edge_attempts=client_settings.edge_attempts,
+        image_attempts=client_settings.image_attempts,
+    )
+    try:
+        page = await asyncio.wait_for(client.popular(), timeout=POPULAR_TIMEOUT)
+    except asyncio.TimeoutError:
+        return CheckResult(
+            POPULAR_NAME, False, f"榜单探测超过 {POPULAR_TIMEOUT:.0f} 秒；{_HINT_EDGE}"
+        )
+    except EhError as exc:
+        return CheckResult(
+            POPULAR_NAME, False, f"榜单不可用：{exc.message}；{_HINT_POPULAR}"
+        )
+    except Exception as exc:  # noqa: BLE001 - 未知异常也让自检给出结论
+        return CheckResult(
+            POPULAR_NAME,
+            False,
+            f"榜单探测失败（{exc.__class__.__name__}: {exc}）",
+        )
+    finally:
+        await client.aclose()
+
+    items = page.get("items") if isinstance(page, dict) else None
+    if not items:
+        return CheckResult(
+            POPULAR_NAME, False, f"榜单页没解析出画廊；{_HINT_POPULAR}"
+        )
+    return CheckResult(
+        POPULAR_NAME,
+        True,
+        f"榜单页解析正常（{len(items)} 条画廊）",
+    )
+
+
+async def _page_check(settings) -> CheckResult:
+    """大图页解析还认不认得出真实页面 —— 守住 ``/api/eh/proxy`` 的图片直链判据。
+
+    跟「详情」是同一个道理，但守的是另一套正则：``parse_s_page`` 靠
+    ``_IMG_SRC_RE``（``id="img"`` 的 ``src``）取图片直链，靠 ``_S_STUB_PATTERNS``
+    分辨存根。这条一旦失效，``/api/eh/proxy`` 拿不到直链，**真实大图页会整批
+    502**，而列表页与详情页都还是好的。
+
+    串起整条链才作数：列表 → 取一条详情的图列表 → 拿第一个 ``/s/`` 页面真解一次。
+    """
+    try:
+        from .client import EhClient, EhError
+        from .config import as_eh_settings, split_ips
+    except Exception as exc:  # noqa: BLE001 - curl_cffi 缺失时退化
+        return CheckResult(PAGE_NAME, False, f"跳过（{exc.__class__.__name__}: {exc}）")
+
+    client_settings = as_eh_settings(settings)
+    client = EhClient(
+        http3=client_settings.http3,
+        edge_ips=split_ips(client_settings.edge_ips),
+        edge_attempts=client_settings.edge_attempts,
+        image_attempts=client_settings.image_attempts,
+    )
+
+    async def probe() -> CheckResult:
+        page = await client.list_galleries()
+        items = page.get("items") if isinstance(page, dict) else None
+        if not items:
+            return CheckResult(PAGE_NAME, False, "列表页没给出画廊，无法验大图解析")
+        item = items[0]
+        detail = await client.gallery(item["gid"], item["token"])
+        links = detail.get("page_links") if isinstance(detail, dict) else None
+        if not links:
+            return CheckResult(
+                PAGE_NAME,
+                False,
+                f"详情页没给出图片页链接（gid={item.get('gid', '?')}），无法验大图解析",
+            )
+        shot = await client.image_page(links[0])
+        if not shot.get("image_url"):
+            return CheckResult(
+                PAGE_NAME, False, f"大图页里没有图片直链：{links[0]}；{_HINT_PAGE}"
+            )
+        return CheckResult(
+            PAGE_NAME,
+            True,
+            f"大图页解析正常（{shot.get('filename') or '首张'}，来自 {links[0]}）",
+        )
+
+    try:
+        return await asyncio.wait_for(probe(), timeout=PAGE_TIMEOUT)
+    except asyncio.TimeoutError:
+        return CheckResult(
+            PAGE_NAME, False, f"大图探测超过 {PAGE_TIMEOUT:.0f} 秒；{_HINT_EDGE}"
+        )
+    except EhError as exc:
+        return CheckResult(
+            PAGE_NAME, False, f"大图不可用：{exc.message}；{_HINT_PAGE}"
+        )
+    except Exception as exc:  # noqa: BLE001 - 未知异常也让自检给出结论
+        return CheckResult(
+            PAGE_NAME,
+            False,
+            f"大图探测失败（{exc.__class__.__name__}: {exc}）",
+        )
+    finally:
+        await client.aclose()
+
+
 async def _async_checks(settings) -> list[CheckResult]:
     return list(
         await asyncio.gather(
-            _edge_check(settings), _site_check(settings), _detail_check(settings)
+            _edge_check(settings),
+            _site_check(settings),
+            _detail_check(settings),
+            _popular_check(settings),
+            _page_check(settings),
         )
     )
 

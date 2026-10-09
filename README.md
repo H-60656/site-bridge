@@ -156,7 +156,7 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 | `asmr_one/run.py` | asmr.one 接口项目（`asmr_one/`）：**只有**那七个 `/api/asmr/*`（作品列表 / 搜索 / 作品详情 / 音轨树 / 封面代转 / 音频代转 / 登录态），外加 `/` 上的**导航页**；它不挂任何 Pixiv 或 iwara 路由 |
 | `ehviewer/run.py` | E-Hentai 接口项目（`ehviewer/`）：**只有**那九个 `/api/eh/*`（列表 / 热门画廊 / 搜索 / 画廊详情 / 图片页 / 大图页解析 / 元数据 / 图片代转 / 匿名态），外加 `/` 上的**导航页**；它不挂任何别的站点的路由 |
 
-各接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3～4 项 iwara 专属自检（开了 `IWARA_BRIDGE_ECH=1` 才多出 ECH 那一项），`asmr_one/run.py` 追加 2～3 项 asmr 专属自检（默认就开 ECH，见「环境检查说明」），`ehviewer/run.py` 追加 3 项 ehviewer 专属自检（依赖 / 边缘 / 站点）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`；要 asmr.one 就拷 `pixiv_bridge/` + `asmr_one/`，要 E-Hentai 就拷 `pixiv_bridge/` + `ehviewer/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
+各接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3～4 项 iwara 专属自检（开了 `IWARA_BRIDGE_ECH=1` 才多出 ECH 那一项），`asmr_one/run.py` 追加 2～3 项 asmr 专属自检（默认就开 ECH，见「环境检查说明」），`ehviewer/run.py` 追加 6 项 ehviewer 专属自检（依赖 / 边缘 / 站点 / 详情 / 榜单 / 大图）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`；要 asmr.one 就拷 `pixiv_bridge/` + `asmr_one/`，要 E-Hentai 就拷 `pixiv_bridge/` + `ehviewer/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
 
 首次运行输出示例：
 
@@ -206,7 +206,7 @@ INFO:     Uvicorn running on http://127.0.0.1:8765
 
 这三项也**不在致命清单里**：asmr 依赖缺失或 API 不可达时入口仍能启动，接口失败只返回 502。另外 asmr **没有登录自检**——它公开浏览与播放匿名就够，要登录的端点（标签 / 用户收藏）本站不暴露。
 
-`ehviewer` 入口是 `python ehviewer/run.py --check`，它在同一张表里追加 4 项（**没有 ECH 那一项**——本站不用 ECH，改用「借道边缘 + HTTP/3」）：
+`ehviewer` 入口是 `python ehviewer/run.py --check`，它在同一张表里追加 6 项（**没有 ECH 那一项**——本站不用 ECH，改用「借道边缘 + HTTP/3」）：
 
 | ehviewer 检查项 | 失败影响 | 说明 |
 | --- | --- | --- |
@@ -214,8 +214,10 @@ INFO:     Uvicorn running on http://127.0.0.1:8765
 | `ehviewer 边缘` | 仅警告，不中止 | 并发探一遍 16 个候选边缘 IP，只建 TCP（不发 TLS，所以不会被 SNI 判据误伤）。报「N/16 个候选边缘可建连（示例 x.x.x.x）」 |
 | `ehviewer 站点` | 仅警告，不中止 | 真发一次首页 `GET /`（`list_galleries()`），确认整条「借道 Cloudflare 边缘 + 强制 HTTP/3」链路通、能拿回画廊列表。只探 TCP 不够——真正的坎在 HTTP/3 与 SNI |
 | `ehviewer 详情` | 仅警告，不中止 | 从刚取回的列表里挑头两条真取一次详情，确认「页面骨架」判据（`#gn` / `#gdc` / `#gdd`）仍认得上游页面。守的是这条：上游对取不到的画廊回 HTTP 200 + 一句纯文本，判据一旦失效，**真实画廊会被整批误判成存根、全部 404**。列表页走的是另一套解析，证明不了这一点 |
+| `ehviewer 榜单` | 仅警告，不中止 | 真发一次 `GET /popular`，确认热门榜单这个**独立入口**还在、还能解析出画廊。首页好着不代表它还在——上游完全可能只动这一个入口（改版、下线、重定向到登录页） |
+| `ehviewer 大图` | 仅警告，不中止 | 串完整条链：列表 → 取一条详情的图片页链接 → 真解一次那个 `/s/` 页面，确认图片直链判据（`id="img"` 的 `src`）与存根判据仍认得上游页面。守的是这条：判据一旦失效，`/api/eh/proxy` 拿不到直链，**真实大图页会整批 502**，而列表与详情都还是绿的 |
 
-这四项也**不在致命清单里**：ehviewer 依赖缺失或站点不可达时入口仍能启动，接口失败只返回 502。另外 ehviewer **没有登录自检**——公开画廊匿名就能看（exhentai 里站内容会返回 401，本站不碰）。
+这六项也**不在致命清单里**：ehviewer 依赖缺失或站点不可达时入口仍能启动，接口失败只返回 502。另外 ehviewer **没有登录自检**——公开画廊匿名就能看（exhentai 里站内容会返回 401，本站不碰）。
 
 ### 获取 refresh_token（三种方式任选）
 
@@ -338,7 +340,7 @@ pixiv-bridge/
 │   ├── app.py          站点声明：Site 契约 + create_app()，把 EhClient 挂到 app.state（nav_order=4）
 │   ├── client.py       eh 客户端：借道 Cloudflare 边缘 IP + 强制 HTTP/3 + 裸 TCP 探边缘 + 会话级 RESOLVE；无登录态
 │   ├── parse.py        站点页解析（列表 / 画廊详情 / 标签 / 图片页 / 条带封面；纯函数，便于离线测试）
-│   ├── envcheck.py     ehviewer 专属自检（依赖 / 边缘 / 站点），经 Site.checks 追加到入口检查表
+│   ├── envcheck.py     ehviewer 专属自检（依赖 / 边缘 / 站点 / 详情 / 榜单 / 大图），经 Site.checks 追加到入口检查表
 │   ├── config.py       ehviewer 的配置：`EhSettings(Settings)` 加了 HTTP3 / 边缘 IP 池 / 重试次数四项（`EH_BRIDGE_*`）
 │   ├── requirements.txt 本站点额外依赖（curl_cffi + cffi，刻意不放进根清单；必须是带 HTTP/3 的版本）
 │   └── routes/         本站点路由（galleries 接口：`/api/eh/*`）
@@ -384,7 +386,7 @@ pixiv-bridge/
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
-├── tests/                              单元测试（873 项：框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 161 + 打包 45）
+├── tests/                              单元测试（882 项：框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 170 + 打包 45）
 ├── openssl-libs/                       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -886,7 +888,7 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 873 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 161 + 打包 45）
+python -m unittest discover -s tests       # 882 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 170 + 打包 45）
 python scripts/check_boundary.py           # 拆分边界自检
 python scripts/make_share_packages.py --check   # 分享包内容自检（不写 zip）
 ```

@@ -758,4 +758,66 @@ CF 的**控制面与 Pages 托管面在本机可达**（`_scratch/_probe_cf_rela
 - **修完一个缺陷，问的下一句是「同类缺陷还有谁会发现」。** §20 修的是代码，不是「代码错了没人知道」这件事；后者要靠自检补。离线测试按定义就发现不了这类「假设与上游不符」的错，所以**真跑链路的那一项才是最后一道网**。
 - **一条守判据的自检比一条验功能的测试更值。** 验功能的测试在上游改版时会跟着一起错（夹具是我按假设写的）；守判据的自检直接打真实页面，是唯一不受我自己假设影响的一环。
 
+## 22. 自检补齐另两个独立入口：榜单与大图（2026-10-09）
+
+### 22.1 动机
+
+§21 的教训是「自检探到的层，必须是你真正怕坏的那一层」。§21 补完「详情」后，我把同一句话对整条链又问了一遍，发现还有两个**解析判据**没人守：
+
+- **`/popular` 热门榜单。** 它是一个**独立入口**（`popular()` 直接 `GET /popular`，不是首页的别名）。首页 `list_galleries()` 好着不代表它还在：上游完全可以只动这一个入口 —— 改版、下线、或重定向到登录页。而 §21 的 `_site_check` 探的是首页，`_detail_check` 探的是详情，两个都覆盖不到它。
+- **`/s/` 大图页。** `parse_s_page` 靠 `_IMG_SRC_RE`（`id="img"` 的 `src`）取图片直链、靠 `_S_STUB_PATTERNS`（`invalid` / `key`）分辨存根。**这两个判据一旦失效，`/api/eh/proxy` 拿不到直链，真实大图页会整批 502 —— 而列表与详情都还是绿的。** 列表页走 `parse_galleries`、详情页走 `parse_detail`，第三套解析（`parse_s_page`）此前没有任何自检碰过。
+
+两个都是「判据静默失效 → 一整类接口全灭 → 别处看起来还是绿的」的同一形状，正是 §21 要守的那类。
+
+### 22.2 设计
+
+`ehviewer/envcheck.py` 新增两项（4 → 6），`_async_checks` 由三项并发改为五项并发：
+
+| 项 | 常量 | 超时 | 做什么 |
+| --- | --- | --- | --- |
+| `ehviewer 榜单` | `POPULAR_NAME` | `POPULAR_TIMEOUT = 30.0` | 真发一次 `client.popular()`，确认这个独立入口还在、还能解析出画廊 |
+| `ehviewer 大图` | `PAGE_NAME` | `PAGE_TIMEOUT = 60.0` | 串整条链：列表 → 取一条详情的 `page_links[0]` → `client.image_page()` 真解那个 `/s/` 页 |
+
+超时取值有依据：榜单只是一次 GET，与站点项同量级（30 s）；大图要串**三次**请求（列表 → 详情 → `/s/` 页），比详情项（40 s）再宽一点（60 s）。
+
+`_popular_check` 的失败分支：`items` 为空 → 「榜单页没解析出画廊；`_HINT_POPULAR`」；`EhError` → 「榜单不可用：…」。`_page_check` 内部 `probe()` 逐级报出卡在哪一环（「列表页没给出画廊」/「详情页没给出图片页链接（gid=…）」/「大图页里没有图片直链：…」），而不是笼统报失败 —— 链路有三跳，卡在哪一跳是可操作信息。
+
+两个刻意的决定：
+
+- **同样不吞 `EhNotFoundError`。** 真实大图页被判成存根时抛的正是它；吞掉就等于把这项自检要抓的故障吞了。
+- **「大图」刻意只验**判据是否命中**，不下载图片。** 自检的目的是「解析还认得上游页面吗」，不是「媒体链路通不通」—— 后者由 `/api/eh/proxy` 的真实使用去发现，自检里下一张图只会让 `--check` 变慢变脆。
+
+### 22.3 先改断言、再交东西
+
+`tests/test_ehviewer.py` 的 `EhEnvCheckTestCase`：import 行改为括号多行（加 `PAGE_NAME` / `POPULAR_NAME`），类 docstring「三项自检」→「六项自检」，`_fake_client` 扩 `popular` / `popular_error` / `shot` / `shot_error` 四个口子，`test_extra_checks_runs_deps_first_then_the_network_trio` 更名为 `..._then_the_network_five`。新增 9 个用例：
+
+| 用例 | 输入 | 断言 |
+| --- | --- | --- |
+| `test_popular_check_accepts_a_real_looking_listing` | 默认 | ok，含「2 条」 |
+| `test_popular_check_reports_an_empty_listing` | `popular={"count":0,"items":[]}` | 不 ok，含「榜单页没解析出画廊」 |
+| `test_popular_check_reports_an_eh_error` | `popular_error=EhUnavailableError(...)` | 不 ok，含「榜单不可用」与 `/popular` |
+| `test_popular_check_times_out_instead_of_hanging` | 永不返回 + `POPULAR_TIMEOUT=0.01` | 含「探测超过」；`aclose` 被 await |
+| `test_page_check_walks_the_whole_chain` | 默认 | ok，含「大图页解析正常」，且 `image_page` 收到的是详情给的 `page_links[0]` |
+| `test_page_check_reports_a_stub_s_page` | `shot_error=EhNotFoundError("不是有效的大图页（invalid）…")` | 不 ok，含「大图不可用」与 `_IMG_SRC_RE` |
+| `test_page_check_reports_a_detail_without_image_links` | `detail={"title":…,"page_links":[]}` | 含「没给出图片页链接」 |
+| `test_page_check_reports_an_empty_image_url` | `shot={"image_url":"","filename":""}` | 含「没有图片直链」 |
+| `test_page_check_times_out_instead_of_hanging` | 永不返回 + `PAGE_TIMEOUT=0.01` | 含「探测超过」 |
+
+**踩到并修掉的一个坑**：超时替身最初写成 `async def never():`，而 `image_page(url)` 会传一个位置参数，报 `TypeError: never() takes 0 positional arguments but 1 was given` —— 断言于是落空（异常被 `except Exception` 分支接住，消息也对不上）。改成 `async def never(*_args):` 才对。**超时用例的替身必须与被测函数的签名兼容**，否则测的是 TypeError 不是超时。
+
+### 22.4 验证结果
+
+- `tests.test_ehviewer`：**Ran 170 tests … OK**（161 → 170）。
+- 全量：**Ran 882 tests … OK (skipped=1)**，27.4 s（334 + 199 + 134 + **170** + 45）。
+- `check_boundary.py` → 路由数不变（`ehviewer 15 条，自有 9 条`），「边界检查通过」。**自检不是路由**，边界检查与分享包清单均不受影响。
+- **真实链路**（`python ehviewer/run.py --check`，`EXIT=0`，六项全 OK）：… `ehviewer 站点 OK e-hentai.org 可达（HTTP/3 + 借道边缘），首页取回 25 条` / `ehviewer 详情 OK 2 条真实详情解析正常（判据仍认得上游页面）` / **`ehviewer 榜单 OK 榜单页解析正常（75 条画廊）`** / **`ehviewer 大图 OK 大图页解析正常（ComfyUI_00196_.png，来自 https://e-hentai.org/s/dc3e58d10b/4242221-1）`**。
+
+两项新自检都取到了活数据 —— 这也再次说明「离线全绿≠对」：如果只跑单测，我拿到的只是「按我的假设写的替身能跑通」。
+
+### 22.5 教训
+
+- **「整站通不通」要按入口数点一遍，而不是按模块数点一遍。** `/popular` 是独立入口这件事，代码里一目了然（`popular()` 里写着自己的 URL），但自检清单上是空白 —— 因为自检是按「列表 / 详情」这种**功能**划分的，而故障是按**入口**发生的。
+- **一条链有三跳时，把「卡在哪一跳」写进失败信息。** 三跳都笼统报「大图不可用」，出问题时还得自己复现一次才知道是列表、详情还是 `/s/` 页坏了。
+- **文档里的计数也是被守对象。** 本轮开工前发现 `README.md` 两处仍写「3 项」（上一轮升到 4 项时漏改），与同一文件里已写对的「4 项」自相矛盾。**改完自检项数，要 grep 一遍数字**（`grep -n '3 项\|4 项\|项 ehviewer'`），因为同一事实散落在入口表、目录树、命令示例三处。
+
 

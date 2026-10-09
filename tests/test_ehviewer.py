@@ -56,7 +56,14 @@ try:
         split_ips,
     )
     from ehviewer.config import EhSettings, as_eh_settings
-    from ehviewer.envcheck import DETAIL_NAME, DEPS_NAME, EDGE_NAME, SITE_NAME
+    from ehviewer.envcheck import (
+        DETAIL_NAME,
+        DEPS_NAME,
+        EDGE_NAME,
+        PAGE_NAME,
+        POPULAR_NAME,
+        SITE_NAME,
+    )
 
     HAVE_EH = True
     EH_IMPORT_ERROR = ""
@@ -1838,7 +1845,7 @@ class EhEntryPointTestCase(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_EH, SKIP_REASON)
 class EhEnvCheckTestCase(unittest.TestCase):
-    """``ehviewer/envcheck.py``：三项自检都只给结论，绝不中止启动。"""
+    """``ehviewer/envcheck.py``：六项自检都只给结论，绝不中止启动。"""
 
     def _settings(self, **kw):
         return EhSettings(rate_limit_rpm=10000, **kw)
@@ -1864,6 +1871,10 @@ class EhEnvCheckTestCase(unittest.TestCase):
         page_error=None,
         detail=None,
         detail_error=None,
+        popular=None,
+        popular_error=None,
+        shot=None,
+        shot_error=None,
     ):
         """让 envcheck 内部的 ``from .client import EhClient`` 拿到假的。"""
         instance = MagicMock()
@@ -1882,6 +1893,18 @@ class EhEnvCheckTestCase(unittest.TestCase):
                 return_value=detail
                 if detail is not None
                 else {"title": "Some Gallery", "page_links": ["https://e-hentai.org/s/aa/1-1"]}
+            )
+        if popular_error is not None:
+            instance.popular = AsyncMock(side_effect=popular_error)
+        else:
+            instance.popular = AsyncMock(return_value=popular or self._page())
+        if shot_error is not None:
+            instance.image_page = AsyncMock(side_effect=shot_error)
+        else:
+            instance.image_page = AsyncMock(
+                return_value=shot
+                if shot is not None
+                else {"image_url": "https://s1.hath.network/h/aa.jpg", "filename": "aa.jpg"}
             )
         instance.aclose = AsyncMock()
 
@@ -1983,7 +2006,7 @@ class EhEnvCheckTestCase(unittest.TestCase):
         self.assertIn("侥幸", result.detail)
         self.assertFalse(instance.http3)
 
-    def test_extra_checks_runs_deps_first_then_the_network_trio(self):
+    def test_extra_checks_runs_deps_first_then_the_network_five(self):
         from ehviewer.envcheck import extra_checks
 
         patcher, _ = self._fake_client()
@@ -1991,10 +2014,11 @@ class EhEnvCheckTestCase(unittest.TestCase):
             results = extra_checks(self._settings())
 
         self.assertEqual(
-            [r.name for r in results], [DEPS_NAME, EDGE_NAME, SITE_NAME, DETAIL_NAME]
+            [r.name for r in results],
+            [DEPS_NAME, EDGE_NAME, SITE_NAME, DETAIL_NAME, POPULAR_NAME, PAGE_NAME],
         )
         self.assertTrue(all(r.ok for r in results))
-        # 四项都不中止启动：返回的是结论，不是异常。
+        # 六项都不中止启动：返回的是结论，不是异常。
         self.assertTrue(all(hasattr(r, "ok") for r in results))
 
     def test_detail_check_accepts_a_real_looking_detail(self):
@@ -2044,6 +2068,120 @@ class EhEnvCheckTestCase(unittest.TestCase):
 
         self.assertFalse(result.ok)
         self.assertIn("无法验详情解析", result.detail)
+
+    def test_popular_check_accepts_a_real_looking_listing(self):
+        from ehviewer.envcheck import _popular_check
+
+        patcher, _ = self._fake_client()
+        with patcher:
+            result = asyncio.run(_popular_check(self._settings()))
+
+        self.assertTrue(result.ok)
+        self.assertIn("2 条", result.detail)
+
+    def test_popular_check_reports_an_empty_listing(self):
+        """入口还在但解析不出画廊 —— 同样是这一项要报的故障。"""
+        from ehviewer.envcheck import _popular_check
+
+        patcher, _ = self._fake_client(popular={"count": 0, "items": []})
+        with patcher:
+            result = asyncio.run(_popular_check(self._settings()))
+
+        self.assertFalse(result.ok)
+        self.assertIn("榜单页没解析出画廊", result.detail)
+
+    def test_popular_check_reports_an_eh_error(self):
+        from ehviewer.envcheck import _popular_check
+
+        patcher, _ = self._fake_client(
+            popular_error=EhUnavailableError("/popular 取不到")
+        )
+        with patcher:
+            result = asyncio.run(_popular_check(self._settings()))
+
+        self.assertFalse(result.ok)
+        self.assertIn("榜单不可用", result.detail)
+        self.assertIn("/popular", result.detail)
+
+    def test_popular_check_times_out_instead_of_hanging(self):
+        from ehviewer.envcheck import _popular_check
+
+        async def never():
+            await asyncio.sleep(3600)
+
+        patcher, instance = self._fake_client()
+        instance.popular = AsyncMock(side_effect=never)
+        with patcher, patch("ehviewer.envcheck.POPULAR_TIMEOUT", 0.01):
+            result = asyncio.run(_popular_check(self._settings()))
+
+        self.assertFalse(result.ok)
+        self.assertIn("探测超过", result.detail)
+        instance.aclose.assert_awaited()
+
+    def test_page_check_walks_the_whole_chain(self):
+        """列表 → 详情 → /s/ 页，一路都要串起来才作数。"""
+        from ehviewer.envcheck import _page_check
+
+        patcher, instance = self._fake_client()
+        with patcher:
+            result = asyncio.run(_page_check(self._settings()))
+
+        self.assertTrue(result.ok)
+        self.assertIn("大图页解析正常", result.detail)
+        # 用的是详情页给出的那个 /s/ 链接（默认 fixture 里就是它）。
+        self.assertEqual(
+            instance.image_page.await_args.args[0], "https://e-hentai.org/s/aa/1-1"
+        )
+
+    def test_page_check_reports_a_stub_s_page(self):
+        """真实大图页被判成存根（404）—— /api/eh/proxy 会整批 404，必须报出来。"""
+        from ehviewer.envcheck import _page_check
+
+        patcher, _ = self._fake_client(
+            shot_error=EhNotFoundError("不是有效的大图页（invalid）：Invalid page.")
+        )
+        with patcher:
+            result = asyncio.run(_page_check(self._settings()))
+
+        self.assertFalse(result.ok)
+        self.assertIn("大图不可用", result.detail)
+        self.assertIn("_IMG_SRC_RE", result.detail)
+
+    def test_page_check_reports_a_detail_without_image_links(self):
+        from ehviewer.envcheck import _page_check
+
+        patcher, _ = self._fake_client(detail={"title": "Some Gallery", "page_links": []})
+        with patcher:
+            result = asyncio.run(_page_check(self._settings()))
+
+        self.assertFalse(result.ok)
+        self.assertIn("没给出图片页链接", result.detail)
+
+    def test_page_check_reports_an_empty_image_url(self):
+        """解析跑通了但没拿到直链 —— 判据半残，同样是故障。"""
+        from ehviewer.envcheck import _page_check
+
+        patcher, _ = self._fake_client(shot={"image_url": "", "filename": ""})
+        with patcher:
+            result = asyncio.run(_page_check(self._settings()))
+
+        self.assertFalse(result.ok)
+        self.assertIn("没有图片直链", result.detail)
+
+    def test_page_check_times_out_instead_of_hanging(self):
+        from ehviewer.envcheck import _page_check
+
+        async def never(*_args):
+            await asyncio.sleep(3600)
+
+        patcher, instance = self._fake_client()
+        instance.image_page = AsyncMock(side_effect=never)
+        with patcher, patch("ehviewer.envcheck.PAGE_TIMEOUT", 0.01):
+            result = asyncio.run(_page_check(self._settings()))
+
+        self.assertFalse(result.ok)
+        self.assertIn("探测超过", result.detail)
+        instance.aclose.assert_awaited()
 
     def test_envcheck_has_no_ech_check(self):
         text = (PROJECT_ROOT / "ehviewer" / "envcheck.py").read_text(encoding="utf-8")
