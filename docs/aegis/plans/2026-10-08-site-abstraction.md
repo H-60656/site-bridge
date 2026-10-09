@@ -414,3 +414,89 @@ error:10000410:SSL routines:OPENSSL_internal:SSLV3_ALERT_HANDSHAKE_FAILURE
 进一步用裸 `ssl` 逐个换 SNI 对照（`www.pornhub.com` / `pornhub.com` / `asmr.one` / `example.com`），**全部 `ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接`**；连对照请求 `httpx.get("https://api.asmr.one/api/works?page=1")` 也是 `ConnectError [WinError 10054]`。
 
 **结论：与本项目代码无关，是本机网络环境（需代理）导致。** 因此 pornhub 的端到端验证在本机**只能到「不再抛 AttributeError、DoH 解析与 TCP 预探测链路正常选中 IP」这一层**；真实抓取（`/api/pornhub/health` 之外四个接口拿到真数据）在有代理的环境里仍需补做。此边界不改变第 14.3 节的「已知脆弱性」判断。
+
+> 注（第 16 节修正）：本节「本机对外 TLS 被**整体**阻断」的表述**不准确**。实测阻断是**按域名/SNI 分级**的，`example.com`、`www.cloudflare.com`、`api.github.com`、`dns.alidns.com` 等在本机均可正常握手。且阻断的直接原因**不是「缺代理」**，而是对 pornhub 域的**定点 SNI 封锁**——见第 16 节。
+
+## 16. 后续追加：pornhub 线上连通性彻底排查（「通过 cloudflare 连接」路径穷举，代码零改动）
+
+第 15.3 节把 pornhub 不可达笼统归因为「本机网络环境（需代理）」，但没说清阻断在哪一层、也没验证「是不是换条路就能通」。本次针对用户提出的口径「**通过 cloudflare 连接**」把可行路径逐条穷举干净，结论如下（**本节目的是固化结论、封存已排除的死路，避免后来者重复踩坑；未做任何代码改动**）。
+
+所有探针都写在仓库外的临时目录 `_scratch/`（`.gitignore:27` 已忽略），全程 `git status --porcelain` 为空、HEAD 停在第 15 节修复后的 `28a3c76` 之后的 `a574d4a`。
+
+### 16.1 决定性前提：pornhub 根本不在 Cloudflare 上
+
+这是整轮排查里最重要的一条，它直接解释了此前所有「打 CF IP」的尝试为何全灭——**pornhub 没有 CF 边缘可打**。
+
+| 证据 | 实测结果 |
+| --- | --- |
+| 可信 DoH 解析链（ECH+钉 CF IP 打 `cloudflare-dns.com`，该通道对已知域名返回正确地址故可信） | `www.pornhub.com` → CNAME `pornhub.com.` → A **`66.254.114.41`**（24 轮重试命中 18 次，**答案零方差**） |
+| 是否落在 CF 官方段内（段表取自 `https://www.cloudflare.com/ips-v4`，HTTP 200，15 个 ipv4 段，逐段用 `ipaddress` 判定） | **不在任何一段内** |
+| RDAP 归属 | `66.254.114.41` → `REFLECTED-1` / `NET-66-254-96-0-1`，**AS29789**（Reflected Networks） |
+| 外部三方互证 | Shodan `https://www.shodan.io/host/66.254.114.41` 主机名 = `pornhub.com`、`reflectededge.reflected.net`；BeaverCheck `https://beavercheck.com/sites/pornhub.com/infrastructure` = "hosted on REFLECTED - Reflected Networks, Inc., US, **AS29789**"；URLert `https://www.urlert.com/domains/rncdn7.com` = REFLECTED AS29789 |
+| `pornhub.com` 的 NS（经可信 DoH 查 NS 记录） | `ns-92.awsdns-11.com` / `ns-531.awsdns-02.net` / `ns-1499.awsdns-59.org` / `ns-1567.awsdns-03.co.uk` / `sdns3.ultradns.{biz,com,net,org}` ⇒ **AWS Route53 + UltraDNS，不是 Cloudflare NS** |
+| 内容 CDN | `ei.phncdn.com` → CNAME `ei.phncdn.com.sds.rncdn7.com.` → `64.210.156.{18,19,22}`；`ev-h.phncdn.com` → `*.lds.rncdn7.com.` → `64.210.156.{3,7,2}`；RDAP = `VIKINGHOST-BV-CDN` / Viking Host BV，**同样不在 CF** |
+
+⇒ **pornhub 主站与内容 CDN 都托管在自有 CDN「Reflected Edge」（AS29789）上**，「用 Cloudflare 的 IP / ECH 绕过从而连上 pornhub」在**物理前提上就不成立**。
+
+> 顺带纠正两条早期误判：(a) `SEED_IPS` 里那 14 个 CF anycast **确实不承载 Pornhub 边缘**（第 15.1 节已记为兜底），本次给出了原因；(b) 早期一度以为 `104.18.10.118` 上 `curl.exe` 得到过 200，**该结论作废**——复测全部 `code=000`，是受 IP 限速/抖动污染的假象。对照组可复现的结论是：**同一个已知可达 CF IP（如 `104.16.124.96`），带 SNI `www.cloudflare.com` → 200，带 SNI `www.pornhub.com` → 000**，即阻断按 SNI 生效。
+
+### 16.2 路径一：CF IP / ECH 绕过 —— 已证伪
+
+- **ECH 机制在本机是真实可用的**（这点必须记住，别误以为 ECH 环境不具备）：`_scratch/_probe_ech_matrix2.py`（钉 IP `104.18.27.97`，ECL 取 `ech.ech_config()`）对照结果——
+
+  | inner SNI | 无 ECH | 有 ECH |
+  | --- | --- | --- |
+  | `www.cloudflare.com` | HTTP 200 (1334670B) | HTTP 200 (1334670B) |
+  | `example.com` | HTTP 200 (577B) | HTTP 200 (577B) |
+  | `www.iwara.tv` | HTTP 200 (2309B) | HTTP 200 (2309B) |
+  | `api.asmr.one` | RST（中间盒） | **HTTP 404（ECH 成功绕开）** |
+  | `www.pornhub.com` | RST（中间盒） | **ALERT（对端拒绝）** |
+
+- **但 ECH 救不了 pornhub**，因为 pornhub 域**不发布 type-65 ECH 配置**：`www.pornhub.com`（仅 CNAME `pornhub.com.`）、`pornhub.com`、`ei.phncdn.com`、`ev-h.phncdn.com`、`mph.pornhub.com`、`mpthc.phncdn.com` 的 HTTPS(65) 记录**全部没有 `ech=` 字段**；对 CDN 强行叠 ECH 直接报 `Failed to perform, curl: (101) ECH required: error:1000013f:`。
+- 只能「借」公共 ECL：`cloudflare-ech.com` 与 `crypto.cloudflare.com` 的 type65 里**有** `ech="AEX+DQBB8gAgACCIZ8uQXidaAaC48rHXa9U…`（与 `pornhub/ech.py` 的 `DEFAULT_ECH_CONFIG` 同族）。但拿这个借来的键去打 pornhub zone，Cloudflare 在握手层直接**拒绝**（RST → `SSLV3_ALERT_HANDSHAKE_FAILURE`）。
+- 一个反直觉的旁证：`www.cloudflare.com` 的 type65 **没有** `ech=` 字段，叠 ECH 却稳定 200。⇒ **「是否发布 type65」与「能否 ECH」是两回事**，真正决定因素是 **CF 侧该 zone 是否启用了 ECH**；pornhub 不在 CF，无从启用。
+- 环境注记：本机 `curl.exe --ech` **不可用**（`curl: option --ech: the installed libcurl version does not support ECH`），ECH 全部实验是通过 **curl_cffi 的 `CurlOpt.ECH`** 完成的。
+
+### 16.3 路径二：起用本机已装的 Clash Verge 订阅 —— 节点可达但凭证已被服务端注销
+
+现场：`C:\Program Files\Clash Verge\{clash-verge.exe, verge-mihomo.exe, verge-mihomo-alpha.exe}`（核心 `Mihomo Meta v1.19.21 windows amd64`）；配置目录 `C:\Users\Administrator\AppData\Roaming\io.github.clash-verge-rev.clash-verge-rev\`（`mixed-port 7897`、`external-controller 127.0.0.1:9097`、`tun.enable: false`、`mode: rule`；`verge.yaml` 里 `enable_system_proxy: false`、`enable_tun_mode: false`；当前 profile `LUGgwWog4DcU`）。排查时 **Clash Verge 完全没在运行**，**无任何代理端口监听**；订阅里**没有 WARP/wireguard 类型节点**。
+
+- 订阅节点**不是 CF 中继**：`*.ccgfw.top` → `172.234.26.134 / 172.236.114.191 / 172.238.172.46`（Linode 网段），`*.okgg.top` → `45.62.109.93`，**均不在 CF 段内**。
+- 链路层其实没被封：裸 Python `ssl` 对 `s246/s678/s644/ipv6s116.*` 等可完成 **TLSv1.3 握手**。
+- 但**协议层全废**：自建最小 mihomo 配置（`mixed-port 17897` / `ctrl 19097`）轮测 6 个 vless 节点，**全部** `URLError: [SSL: UNEXPECTED_EOF_WHILE_READING]`，连 `https://www.cloudflare.com/cdn-cgi/trace` 都取不到。
+- 根因（mihomo 日志原文）：`level=error msg="XTLS Vision server responded unknown UUID: 12040000-0000-0000-0300-000080000400"`。⇒ **该免费订阅的统一 UUID `8f8ccdc5-fe99-38d7-a8a6-422f8c88ef0a` 已被服务端注销**（约 2200 条节点全废）。**此路不通，勿再试。**
+
+### 16.4 路径三：Cloudflare WARP 隧道 —— 注册成功，但数据面被定点阻断
+
+控制面在本机可达：`api.cloudflareclient.com` A = `104.16.24.84 / 104.16.192.82`，`GET /` → 404（协议级响应，非网络阻断）。
+
+- 早先 `POST /v0a2158/reg`（body `{}`）返回 `400 Invalid registration request`。**补全 payload 后注册成功**（脚本 `_scratch/_warp_reg.js`；Node 25.2.1 用 `crypto.generateKeyPairSync('x25519')` 生成密钥对；body 含 `key`(b64 raw pub) / `install_id:''` / `fcm_token:''` / `tos:<ISO time>` / `model:'PC'` / `serial_number:''` / `locale:'en_US'`；headers `CF-Client-Version: a-6.30-2158` / `User-Agent: okhttp/3.12.1`）。账号信息（临时凭据）留在 `_scratch/warp_account.json`：device `a2237f75-a85a-47d4-8576-bccaf7155d56`、account `b3f53f33-3130-487d-a65d-0e6394ae12de`、`account_type: free`、`warp_plus: true`、`ttl 2027-01-07`；分配 `v4 172.16.0.2`；peer 公钥 `bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=`；endpoint `engage.cloudflareclient.com:2408`（`162.159.192.8`），候选端口 `[2408, 500, 1701, 4500]`。
+- **隧道建不起来**：用 mihomo `type: wireguard` outbound 轮测四个端口，**全部失败**——`https://www.cloudflare.com/cdn-cgi/trace` 虽返回 200，但 `ip=111.55.147.168`、**`warp=off`**（= 流量根本没进隧道，回退成了直连）。mihomo 日志：`peer(bmXO…fgyo) - Sending handshake initiation` → `Handshake did not complete after 5 seconds, retrying (try 2)`。
+- 分层定位（`_scratch/_probe_udp.py`）：**UDP 出站本身完全正常**——UDP:53 查询对 `10.209.132.24`、`223.5.5.5`、`1.1.1.1`、`8.8.8.8`、`114.114.114.114` **全部有回包（68B）**。但**到 WARP 数据面的 UDP 全部零回包**：`162.159.192.8` / `162.159.192.1` 的 `2408/500/1701/4500/894/8095/443` 精细扫描 **命中 0**；`162.159.193.1` / `162.159.195.1` / `188.114.98.224` / `188.114.99.224` 的 2408 亦全部超时；连 `162.159.192.8:443/UDP` 与 `104.16.123.96:443/UDP` 也超时。
+
+⇒ **UDP 未被全局封锁，是到 CF WARP 端点（`162.159.192.0/24` 等）的 UDP 被定点丢弃**。**WARP 此路不通。**
+
+### 16.5 路径四（唯一物理上仍成立）：用 CF Worker / Pages 做反代 —— 卡在本机无 CF 账号
+
+CF 的**控制面与 Pages 托管面在本机可达**（`_scratch/_probe_cf_relay_feasible.py`）：
+
+| 端点 | HTTP | 裸 TLS 握手 |
+| --- | --- | --- |
+| `api.cloudflare.com` | 301 | `104.19.192.174/175` → OK TLSv1.3 |
+| `dash.cloudflare.com` | 200 (11756B) | `104.17.110.184/111.184` → OK |
+| `pages.dev` | 301 (167B) | `104.18.20.135` → OK（`104.18.21.135` → Timeout） |
+| `cdnjs.cloudflare.com` | 200 (8891B) | `104.17.24.14/25.14` → OK |
+| `cloudflare-ech.com` | 301 | `104.18.10.118/11.118` → OK |
+| **`workers.dev`** | **`(28) Connection timed out`** | `128.242.245.180` → **Timeout** |
+
+思路：CF 边缘在墙外、能到 pornhub，本机又能到 CF 控制面 —— 部署一个 Worker/Pages 反代取 pornhub 再回吐，是**本机唯一可能成立的「通过 cloudflare 连接」**。注意 `workers.dev` 被单独阻断，故 Worker **必须挂 Custom Domain 或 `*.pages.dev`**，不能只靠 `*.workers.dev`。
+
+**当前阻碍：本机没有任何 CF 账号凭证。** 环境变量无 `CLOUDFLARE*` / `CF_*` / `WRANGLER*`；`~/.wrangler`、`~/.cloudflared`、`~/.cf`、`AppData/Roaming|Local/wrangler` **均不存在**；`wrangler` / `cloudflared` / `wgcf` **未安装**（`npx` / `npm` / `node` v25.2.1 / `git` 可用，足以 `npx wrangler` 但需登录）。
+
+### 16.6 结论与未决项
+
+1. **pornhub 不在 Cloudflare 上**（AS29789 Reflected Networks，NS = AWS Route53 + UltraDNS）。「通过 Cloudflare 连接 pornhub 主站」若指**绕过 CF 反代**，前提不成立。
+2. 已穷举的四条路**全部证伪或不可行**：CF IP/ECH 绕过（前提不成立）、Clash 订阅（UUID 被服务端注销）、WARP（数据面 UDP 被定点丢弃）、本机代理端口（无进程监听、无 `HTTP(S)_PROXY`）。
+3. 唯一剩路是 **CF Worker/Pages 反代**，但**需用户提供 CF 账号/Token** 才能部署；且必须避开被阻断的 `*.workers.dev`。
+4. 本次**未做任何代码改动**。第 15.3 节「真实抓取在有代理的环境里仍需补做」的边界**仍然成立且未变**；本节的增量是：把「需要代理」这个笼统归因，落实为**可按域名/SNI 复现的定点封锁 + pornhub 不在 CF** 这两条硬事实。
+5. 若将来要真正打通，有两条后续路线（均需用户投入/授权，不在本次范围）：(a) 由用户提供可用出口（商业代理/VPN）或 CF 账号走 Worker 反代；(b) 为 pornhub 补 `PORNHUB_BRIDGE_PROXY` 支持以对齐 pixiv 的 `PIXIV_PROXY`（`pixiv_bridge/config.py:64` 定义 `proxy: str = ""`、`pixiv_bridge/config.py:208-210` 读 `PIXIV_PROXY`/`PIXIV_BRIDGE_PROXY`）。
