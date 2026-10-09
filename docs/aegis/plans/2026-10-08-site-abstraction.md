@@ -319,7 +319,7 @@ if __name__ == "__main__":
 - `app.py`：`SITE = Site(name="asmr_one", title="ASMR Bridge", nav_order=3, settings_class=AsmrSettings, checks=extra_checks, ...)`，**没有 `login_check`**（asmr.one 纯匿名可用）。
 - `routes/works.py` 七条 `/api/asmr/*`：`/works`、`/search`、`/work/{id}`、`/tracks/{id}`、`/cover/{id}`、`/stream`、`/auth`。
 - `config.py`：`ASMR_BRIDGE_ECH` 用 `_flag_or_default("ASMR_BRIDGE_ECH", True)` —— 与 iwara 相反，**不写这个变量就是开**（asmr 的 Cloudflare 边缘不带 ECH 会被拦），要关必须显式写 `=0`。
-- `envcheck.py`：三项 `asmr 依赖` / `asmr 网络` / `asmr ECH`；`ASMR_BRIDGE_ECH=0` 关掉后没有 ECH 那一项。
+- `envcheck.py`：三项 `asmr 依赖` / `asmr 网络` / `asmr ECH`；`ASMR_BRIDGE_ECH=0` 关掉后没有 ECH 那一项。**（勘误，2026-10-09：现为四项，多了 `asmr 搜索` —— 见 §24.8。本站当时把一个不存在的 `/api/search/works` 当搜索端点，而这三项自检没有一项能发现。）**
 - 与 iwara 同骨架：种子 IP 池 + `curl_cffi impersonate="chrome"` + DoH，全池轮询换 IP 重试。
 - 站点间禁止互相 import（`check_boundary.py` 会拦），所以 `asmr_one/ech.py` 是 `iwara/ech.py` 的**自足副本**。
 
@@ -338,7 +338,7 @@ if __name__ == "__main__":
 - **全量测试**：`python -m unittest discover -s tests` → **Ran 712 tests … OK (skipped=1)**，约 16 s。构成为 bridge 334 + iwara 199 + **asmr_one 134**（`tests/test_asmr_one.py`）+ packaging 45。
 - **打包自检**：`python scripts/make_share_packages.py --check` → **七个包**：`pixiv-api` 59、`iwara-api` 45、**`asmr-api` 43**、`novel-extension` 17、`iwara_web-extension` 8、`pixiv-novel` 72、`iwara-iwara_web` 49 → `分享包处理完成`。
 - **文档**：`README.md` / `INSTALL.md` / `DIRECT.md` / `.env.example` 四份同步为三站点（含新增 `ASMR_BRIDGE_ECH` / `ASMR_BRIDGE_ECH_CONFIG` / `ASMR_BRIDGE_ECH_IPS`）。
-- **仍未验证**：asmr.one 的真实取流只做过探活（`/api/tracks/{id}`、`/api/work/{id}`、`/api/works`、`/api/search/works`、`/api/auth/me` 的响应形状已核对并写进 `asmr_one/` 注释），未做长时间播放验证。
+- **仍未验证**：asmr.one 的真实取流只做过探活（`/api/tracks/{id}`、`/api/work/{id}`、`/api/works`、`/api/search/works`、`/api/auth/me` 的响应形状已核对并写进 `asmr_one/` 注释），未做长时间播放验证。⚠️ **2026-10-08 当日对 `/api/search/works` 的「已核对」是错的**：那个端点根本不存在，上游把路径里的 `works` 当成了关键词（恒定返回「搜 works」的同一批 117 条）。见 **§24**。
 
 ## 14. 后续追加：第四个站点 `pornhub/`（抓取器，无公开 API）
 
@@ -896,5 +896,84 @@ return resp.json()
 - **批量和单条的契约本就不同，不能共用一套错误处理。** 批量接口的「部分失败」是正常结果，单条接口的「失败」必须抛错。把两者都做成「忠实返回」或都做成「有错就抛」，会各废掉一个接口。
 - **没有稳定的正向判据时，就让「异常信号的存在」当判据。** HTML 能靠骨架（不变）站稳，JSON API 这里没有对应物；那就把 `error` 字段**出现即错误**当规则，并让**认不得的文案也走错误分支** —— 兜底必须朝「可疑」方向倒，不能朝「放过」方向倒。
 
+## 24. 第 20 / 23 节同类缺陷的第 5 种形态：200 + 形状正确但结果是「恒定的一批」（2026-10-09）
 
+### 24.1 起因：把 §23.6 的教训当查询条件回灌
+
+§23.6 的第一条教训是「**修缺陷要按类别修，不按现场修**」。为了验证这句话是否真的兑现，我把它当作查询条件回灌全仓，问一句：**还有哪个站点把上游藏在 200 里的错误当成成功？**（其余三站点横向排查结论：iwara / pixiv 缺失资源都老实回 404，iwara 搜索对无结果的关键词回 `count:0` 的诚实空集，asmr 列表越界回诚实空页 —— 只有 ehviewer 确认存在该类且已在 §20 / §23 修完。）
+
+排查方式是把「上游报不存在时到底换没换状态码」逐个上游实测。**在 asmr.one 上撞到了一个前四节都没覆盖的形态。**
+
+### 24.2 根因：那个端点根本不存在
+
+`asmr_one/client.py` 的 `search()` 一直调用 `GET /api/search/works?keyword=<kw>&page=<n>`。实测：**这个端点不存在。**
+
+上游是 Express（响应头 `x-powered-by: Express`，`server: cloudflare`）。它把路径里那段 `works` **当成了搜索关键词**，于是路径退化成 `GET /api/search/works` = 「搜 `works` 这个词」。这就是为什么 `totalCount` 恒为 **117**、任何查询返回的都是同一批 —— 那 117 条不是「结果」，是「关键词 works 的结果」。
+
+**`/api/asmr/search` 从立项起就完全没在搜索。** 用户可见症状：搜什么都是同一批。
+
+### 24.3 实测对照（决定性）
+
+| 关键词 | `GET /api/search/{kw}`（真契约） | `GET /api/search/works?keyword=kw`（旧代码） |
+| --- | --- | --- |
+| `癒し` | 200 total=**9743** | total=**117** 恒定 |
+| `DLsite` | 200 total=**62626** | total=117 同一批 |
+| `耳かき` | 200 total=**4804** | total=117 同一批 |
+| `zzzzqqxxnotexist` | 200 **空集 total=0**（诚实） | total=117 同一批 |
+| `works` | 200 total=**117**（← 铁证：正好等于旧代码的常数） | total=117 |
+
+第 5 行是闭环证据：拿关键词 `works` 去查真契约，得到的恰好是旧代码恒定返回的那一批。
+
+**真契约**（从前端 bundle `https://asmr.one/js/app.c5f7e7ac.js` 读出）：
+```
+ee["a"].get("/api/search/" + encodeURIComponent(e),
+            {params: {order, sort, page, pageSize, seed, subtitle, …}})
+```
+⇒ **关键词在 URL 路径里**，`order` / `sort` / `page` / `pageSize` 那些才在 query string。POST 变体（body 里带 `keyword`）只用于超长关键词（>500）或本地字幕场景，不是主路径。
+
+顺带纠正另一处错的注释：`/api/works`（列表）**其实支持排序** —— `order` ∈ `create_date`/`release`/`rating`/`dl_count`/`price`/`random`/`id`，`sort` ∈ `asc`/`desc`；早前记的「`sort`/`order` 一律 400」只对**非法值**（如 `order=desc`，`desc` 是 `sort` 的取值不是 `order` 的）成立。
+
+### 24.4 边界（逐条实测）
+
+- **编码必须 `quote(kw, safe="")`**：带斜杠的关键词若保留 `/`，上游当成多级路径 → `404 Cannot GET /api/search/a/b`；编成 `%2F` 才正常。`a?b` / `a#b` / `100%` / `a&b=c` 两种 safe 都一样（`quote` 默认已编 `?#%&`）。
+- **空关键词会退化成全量列表**（`GET /api/search/` → 200 total=**62626**，纯空格同），所以本地直接拒掉（`AsmrError` 400），保持对外契约。
+- `page` 生效（1/2/3 各不同）；`page=0` → 400 `Invalid value`；`page=999999` → 200 空页（诚实）。
+- 含空格关键词 `癒し 耳かき` → 200 total=3408；`two words` → total=0。
+- 响应形状：与列表同为 `{pagination, works}`；条目字段搜索 33 个 / 列表 32 个，仅搜索多 `playlistStatus`。
+- 别处不存在的端点：`/api/search` 与 `/api/works/search` → **401** `{"error":"No authorization token was found"}`（说明真搜索的另一半被鉴权挡着，不是本站能碰的）；`/api/search/works/all` → 404 HTML。
+
+### 24.5 改动
+
+- `asmr_one/client.py`：`from urllib.parse import quote, urlparse`；`search()` 改为
+  ```python
+  return await self.get_json(
+      f"/api/search/{quote(keyword, safe='')}", params={"page": max(1, int(page))}
+  )
+  ```
+  docstring 重写为真契约 + 旧端点为何恒定的说明；`list_works()` 的排序注释一并订正。
+- `asmr_one/routes/works.py`：`/works` 与 `/search` 两处 docstring 订正。**对外契约（`?query=&page=`）不变**，改的只是上游调用方式。
+- `tests/test_asmr_one.py`：原 `test_search_uses_the_dedicated_search_endpoint` 换成两条 —— `test_search_puts_the_keyword_in_the_path`（断言 `/api/search/%E5%82%AC%E7%9C%A0` + `params={"page": 2}`）与 `test_search_url_encodes_the_keyword_into_one_path_segment`（`a/b` → `a%2Fb`、`癒し 耳かき` → `%E7%99%92…%20…`）。空关键词那条不变。
+- `README.md:754-755`（`/api/asmr/works` 排序口径 + `/api/asmr/search` 真语义）、`DIRECT.md` 新增**「陷阱二之补三」**（见 24.6）、本节、以及 §13.3 里那句「`/api/search/works` 响应形状已核对」的勘误标注。
+
+### 24.6 验证
+
+- `python -m unittest tests.test_asmr_one` → **Ran 135 tests … OK**（134 → 135）。
+- **真实链路**（探针 `_scratch/_probe_asmr_search_fix.py`，`EXIT=0`）：修复后 `癒し` → total=9743、`DLsite` → 62626、`耳かき` → 4804、`100%` → 20808、`zzzzqqxxnotexist` → **0（空集）**、`a/b` → 0；旧端点 `癒し`/`DLsite` 仍然同为 total=117 且首条 id 相同（复现症状）；同一关键词修复前后 first3 不同（`[1678999,1662170,1674375]` vs `[1614939,1615358,1585223]`）；空关键词三种形态都被本地 400 拦下；搜索分页 page1/page2 结果不同。
+- 全量测试与边界检查另记于提交信息。
+
+### 24.7 教训
+
+- **「这个端点存在」本身就是需要验证的假设。** 前面四节都在问「上游怎么报错」，这一节的答案是「它没报错，因为它根本没听懂」—— 200 且形状标准，只是内容恒定。**验收一个接口不能只看它「有没有坏」，还要看它「会不会变」**：拿一个必定查不到的词去问，是最便宜的判据。
+- **单次响应永远证明不了「参数生效」；必须做横向对照。** 三种最省力的横向判据，按代价从低到高：① 换一个必定查不到的词（结果不变 ⇒ 没在过滤）；② 同一关键词翻页（`totalCount` 纹丝不动而 ids 在变 ⇒ 分页真、过滤假）；③ 拿一个「常量本身」当关键词反查（输入 `works` 得到旧代码那个恒定 117 ⇒ 铁证）。
+- **猜参数名是死路，契约要从前端 JS 里读。** 在找到真契约之前，我试过 **16 个参数名** × GET + POST(json/form)，全部无效 —— 因为关键词压根不在 query/body 里，而在**路径**里。前端 bundle 是上游唯一的公开契约文档。
+- **§23.6 的教训生效了。** 正因为把「按类别修」当查询条件回灌，才在这个与 ehviewer 毫无关系的站点上发现了同类缺陷的第 5 种形态。**教训只有被当作查询条件用一次，才算真的学会。**
+
+### 24.8 把「参数生效」纳入开机自检（同日补做）
+
+修好还不够 —— 这次缺陷能活这么久，正是因为**自检从来不问「参数有没有生效」**。原 `asmr_one/envcheck.py` 只有三项：`asmr 依赖` / `asmr 网络`（真发 `GET /api/works?page=1`）/ `asmr ECH`。`asmr 网络` 探的是 `/api/works`，搜索端点换成什么它都照样全绿；所以「端点存在与否」和「参数是否生效」这两个假设，一直没有任何一项在守。
+
+- `asmr_one/envcheck.py` 新增第四项 **`asmr 搜索`**（`SEARCH_NAME`）。判据是**横向对照**，不是单次响应：`SEARCH_PROBE_MISS = "zzzzqqxxnotexist"`（必定查不到）必须回 `totalCount == 0`，`SEARCH_PROBE_HIT = "癒し"`（已知有结果）必须**不**为 0 —— 前者抓「关键词被忽略、任何查询返回同一批」，后者抓「搜索整体不可用」的反向故障。`SEARCH_TIMEOUT = 30.0`（要发两次请求，比列表稍宽）。`_async_checks` 改为 `[_network_check(), _search_check(settings)]` + 条件式 `_ech_check` ⇒ 默认共 4 项（关 `ASMR_BRIDGE_ECH=0` 后 3 项）。三项仍都只警告、不中止启动。
+- `tests/test_asmr_one.py`：`_fake_client` 扩出 `search` / `search_error` 两个口子（默认替身「诚实」作答，`zzzzqqxxnotexist` → 0、其它 → 9743），`test_extra_checks_returns_three_results_in_order` 更名 `…_four_results_in_order`，名字集合与顺序断言同步，另加 6 条用例覆盖 `_search_check` 的**通过 / 未过滤 / 整体空 / 抛错 / 缺 total / 超时**六态。`python -m unittest tests.test_asmr_one` → **Ran 141 tests … OK**（135 → 141）。
+- 真实链路 `python asmr_one/run.py --check` → `asmr 搜索 OK 关键词确实在过滤（「癒し」9743 条，「zzzzqqxxnotexist」0 条）`。全量 `-m unittest discover -s tests -t .` → **Ran 900 tests … OK (skipped=1)**（`asmr_one` 141、`ehviewer` 181、`bridge` 334、`iwara` 199、`packaging` 45），`scripts/check_boundary.py` 通过（本次不动路由）。
+- 手册三件套同步改口径：`README.md` 的 asmr 自检「3 项（关掉后 2 项）」→「4 项（关掉后 3 项）」并新增 `asmr 搜索` 表行、两处测试计数 893 → **900**；`INSTALL.md` 两处；`DIRECT.md:261` 的 asmr 段落（同段顺带把 ehviewer 的三项补全为六项）。
 

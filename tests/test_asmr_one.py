@@ -60,7 +60,7 @@ try:
         is_media_host,
     )
     from asmr_one.config import AsmrSettings, as_asmr_settings, split_ips
-    from asmr_one.envcheck import ECH_NAME, NET_NAME
+    from asmr_one.envcheck import ECH_NAME, NET_NAME, SEARCH_NAME
 
     HAVE_ASMR = True
     ASMR_IMPORT_ERROR = ""
@@ -1041,14 +1041,27 @@ class AsmrClientApiTestCase(unittest.TestCase):
 
         self.assertEqual([kw["params"]["page"] for _path, kw in seen], [1, 1])
 
-    def test_search_uses_the_dedicated_search_endpoint(self):
-        # /api/works?keyword= 是不生效的，真搜索必须走 /api/search/works。
+    def test_search_puts_the_keyword_in_the_path(self):
+        # 真契约是 GET /api/search/{关键词}：关键词在路径里，不是查询参数。
         client = self._client()
         seen = self._patch_json(client, PAGE)
 
         asyncio.run(client.search("催眠", page=2))
 
-        self.assertEqual(seen, [("/api/search/works", {"params": {"keyword": "催眠", "page": 2}})])
+        self.assertEqual(seen, [("/api/search/%E5%82%AC%E7%9C%A0", {"params": {"page": 2}})])
+
+    def test_search_url_encodes_the_keyword_into_one_path_segment(self):
+        # 带斜杠的关键词若保留 "/"，上游会当成多级路径回 404，必须编成 %2F。
+        client = self._client()
+        seen = self._patch_json(client, PAGE)
+
+        asyncio.run(client.search("a/b"))
+        asyncio.run(client.search("癒し 耳かき"))
+
+        self.assertEqual(
+            [path for path, _kw in seen],
+            ["/api/search/a%2Fb", "/api/search/%E7%99%92%E3%81%97%20%E8%80%B3%E3%81%8B%E3%81%8D"],
+        )
 
     def test_search_rejects_an_empty_keyword_without_sending_anything(self):
         client = self._client()
@@ -1607,7 +1620,7 @@ class AsmrEntryPointTestCase(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_ASMR, SKIP_REASON)
 class AsmrEnvCheckTestCase(unittest.TestCase):
-    """入口 ``--check`` 时多出来的那三项。
+    """入口 ``--check`` 时多出来的那四项。
 
     它们跟主项目那五项打在同一张 ``[环境检查]`` 表里，但名字都不在
     ``FATAL_CHECKS`` 里 —— 装坏了/没网只该提示，永远不该拦下启动。
@@ -1629,8 +1642,13 @@ class AsmrEnvCheckTestCase(unittest.TestCase):
         base.update(kw)
         return AsmrSettings(**base)
 
-    def _fake_client(self, *, payload=None, error=None):
-        """顶掉 ``asmr_one.client.AsmrClient``，返回 (patch, instance)。"""
+    def _fake_client(self, *, payload=None, error=None, search=None, search_error=None):
+        """顶掉 ``asmr_one.client.AsmrClient``，返回 (patch, instance)。
+
+        ``search`` 默认按关键词给「诚实」的答复：必定查不到的词回 0 条，
+        其余回非 0 —— 也就是修复之后的行为。要模拟缺陷（关键词被忽略）就
+        传一个不区分关键词的 ``search``。
+        """
         cls = MagicMock()
         instance = cls.return_value
         instance.ech = True
@@ -1640,12 +1658,24 @@ class AsmrEnvCheckTestCase(unittest.TestCase):
                 raise error
             return payload if payload is not None else PAGE
 
+        async def _search(keyword, page=1):
+            if search_error is not None:
+                raise search_error
+            if search is not None:
+                return search(keyword)
+            total = 0 if keyword == "zzzzqqxxnotexist" else 9743
+            return {
+                "pagination": {"currentPage": 1, "pageSize": 20, "totalCount": total},
+                "works": [] if total == 0 else [dict(WORK)],
+            }
+
         async def _request(method, path, **kw):
             if error is not None:
                 raise error
             return _FakeResp(200, text="ip=1.2.3.4\nsni=encrypted\nwarp=off\n")
 
         instance.list_works = AsyncMock(side_effect=_list_works)
+        instance.search = AsyncMock(side_effect=_search)
         instance.request = AsyncMock(side_effect=_request)
         instance.pinned_ip = MagicMock(return_value="104.18.10.118")
         instance.aclose = AsyncMock()
@@ -1657,12 +1687,13 @@ class AsmrEnvCheckTestCase(unittest.TestCase):
         from asmr_one.envcheck import DEPS_NAME
         from asmr_one.envcheck import ECH_NAME as ECH
         from asmr_one.envcheck import NET_NAME as NET
+        from asmr_one.envcheck import SEARCH_NAME as SEARCH
 
         self.assertEqual(
-            sorted((DEPS_NAME, NET, ECH)),
-            ["asmr ECH", "asmr 依赖", "asmr 网络"],
+            sorted((DEPS_NAME, NET, SEARCH, ECH)),
+            ["asmr ECH", "asmr 依赖", "asmr 搜索", "asmr 网络"],
         )
-        for name in (DEPS_NAME, NET, ECH):
+        for name in (DEPS_NAME, NET, SEARCH, ECH):
             self.assertNotIn(name, FATAL_CHECKS)
 
     def test_deps_check_really_imports_curl_cffi(self):
@@ -1674,14 +1705,16 @@ class AsmrEnvCheckTestCase(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertIn("curl_cffi", result.detail)
 
-    def test_extra_checks_returns_three_results_in_order(self):
+    def test_extra_checks_returns_four_results_in_order(self):
         from asmr_one.envcheck import DEPS_NAME, extra_checks
 
         patcher, _ = self._fake_client()
         with patcher, patch.object(asmr_ech, "available", lambda: True):
             results = extra_checks(self._settings())
 
-        self.assertEqual([r.name for r in results], [DEPS_NAME, NET_NAME, ECH_NAME])
+        self.assertEqual(
+            [r.name for r in results], [DEPS_NAME, NET_NAME, SEARCH_NAME, ECH_NAME]
+        )
         self.assertTrue(results[0].ok)
 
     def test_the_network_check_reports_the_page_size_and_total(self):
@@ -1726,6 +1759,103 @@ class AsmrEnvCheckTestCase(unittest.TestCase):
         self.assertIn("无响应", net.detail)
         self.assertGreater(NETWORK_TIMEOUT, 0)
 
+    def test_the_search_check_sees_the_keyword_actually_filtering(self):
+        from asmr_one.envcheck import extra_checks
+
+        patcher, instance = self._fake_client()
+        with patcher, patch.object(asmr_ech, "available", lambda: True):
+            results = extra_checks(self._settings())
+
+        search = [r for r in results if r.name == SEARCH_NAME][0]
+        self.assertTrue(search.ok)
+        self.assertIn("关键词确实在过滤", search.detail)
+        self.assertIn("9743", search.detail)
+        # 两侧都要问：一个必定查不到的词 + 一个已知有结果的词。
+        seen = [call.args[0] for call in instance.search.await_args_list]
+        self.assertEqual(seen, ["zzzzqqxxnotexist", "癒し"])
+
+    def test_the_search_check_catches_an_unfiltered_upstream(self):
+        # 这就是本站曾经的缺陷：任何关键词都回同一批 117 条。
+        from asmr_one.envcheck import extra_checks
+
+        def unfiltered(keyword):
+            return {
+                "pagination": {"currentPage": 1, "pageSize": 20, "totalCount": 117},
+                "works": [dict(WORK)],
+            }
+
+        patcher, _ = self._fake_client(search=unfiltered)
+        with patcher, patch.object(asmr_ech, "available", lambda: True):
+            results = extra_checks(self._settings())
+
+        search = [r for r in results if r.name == SEARCH_NAME][0]
+        self.assertFalse(search.ok)
+        self.assertIn("关键词没有被过滤", search.detail)
+        self.assertIn("zzzzqqxxnotexist", search.detail)
+        self.assertIn("/api/search/", search.detail)
+
+    def test_the_search_check_catches_a_search_that_is_all_empty(self):
+        # 反向故障：接口整体坏掉、什么都返回空 —— 只卡「查不到的词回 0」
+        # 会让它假通过，所以还得拿一个已知有结果的词兜住。
+        from asmr_one.envcheck import extra_checks
+
+        def always_empty(keyword):
+            return {
+                "pagination": {"currentPage": 1, "pageSize": 20, "totalCount": 0},
+                "works": [],
+            }
+
+        patcher, _ = self._fake_client(search=always_empty)
+        with patcher, patch.object(asmr_ech, "available", lambda: True):
+            results = extra_checks(self._settings())
+
+        search = [r for r in results if r.name == SEARCH_NAME][0]
+        self.assertFalse(search.ok)
+        self.assertIn("搜索整体不可用", search.detail)
+
+    def test_the_search_check_reports_a_failure_not_raised(self):
+        from asmr_one.envcheck import extra_checks
+
+        patcher, _ = self._fake_client(
+            search_error=AsmrError("搜索炸了", status=502)
+        )
+        with patcher, patch.object(asmr_ech, "available", lambda: True):
+            results = extra_checks(self._settings())
+
+        search = [r for r in results if r.name == SEARCH_NAME][0]
+        self.assertFalse(search.ok)
+        self.assertIn("搜索不可用", search.detail)
+        self.assertIn("搜索炸了", search.detail)
+
+    def test_the_search_check_catches_a_response_without_a_total(self):
+        from asmr_one.envcheck import extra_checks
+
+        patcher, _ = self._fake_client(search=lambda keyword: {"works": []})
+        with patcher, patch.object(asmr_ech, "available", lambda: True):
+            results = extra_checks(self._settings())
+
+        search = [r for r in results if r.name == SEARCH_NAME][0]
+        self.assertFalse(search.ok)
+        self.assertIn("pagination.totalCount", search.detail)
+
+    def test_the_search_check_times_out_instead_of_hanging(self):
+        from asmr_one.envcheck import extra_checks
+
+        async def never(keyword, page=1):
+            await asyncio.sleep(3600)
+
+        patcher, instance = self._fake_client()
+        instance.search = AsyncMock(side_effect=never)
+        with patcher, patch.object(asmr_ech, "available", lambda: True), patch(
+            "asmr_one.envcheck.SEARCH_TIMEOUT", 0.01
+        ):
+            results = extra_checks(self._settings())
+
+        search = [r for r in results if r.name == SEARCH_NAME][0]
+        self.assertFalse(search.ok)
+        self.assertIn("搜索探测超过", search.detail)
+        instance.aclose.assert_awaited()
+
     def test_the_ech_check_is_skipped_when_the_switch_is_off(self):
         from asmr_one.envcheck import extra_checks
 
@@ -1733,7 +1863,7 @@ class AsmrEnvCheckTestCase(unittest.TestCase):
         with patcher, patch.object(asmr_ech, "available", lambda: True):
             results = extra_checks(self._settings(ech=False))
 
-        self.assertEqual([r.name for r in results], ["asmr 依赖", NET_NAME])
+        self.assertEqual([r.name for r in results], ["asmr 依赖", NET_NAME, SEARCH_NAME])
 
     def test_an_encrypted_sni_is_reported_as_ok(self):
         from asmr_one.envcheck import extra_checks

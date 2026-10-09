@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Iterable, Mapping, Sequence
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 from curl_cffi import requests as curl_requests
@@ -480,22 +480,35 @@ class AsmrClient:
     async def list_works(self, page: int = 1) -> dict:
         """作品列表（默认序，一页 20 条）。
 
-        上游不支持排序：``sort`` / ``order`` 传任何值都是 400 ``Invalid value``，
-        不传才是 200。
+        上游其实支持排序：``order`` 接受 ``create_date`` / ``release`` /
+        ``rating`` / ``dl_count`` / ``price`` / ``random`` / ``id``，``sort``
+        只接受 ``asc`` / ``desc``；非法值（例如 ``order=desc``）会被 400
+        ``Invalid value`` 拒绝 —— 是拒绝非法值，不是拒绝排序本身。本站目前
+        不对外暴露排序，只给分页。
         """
         return await self.get_json("/api/works", params={"page": max(1, int(page))})
 
     async def search(self, keyword: str, page: int = 1) -> dict:
         """关键词搜索。
 
-        注意：``/api/works?keyword=`` **不生效**（返回的是同一份全量列表），
-        真搜索必须走 ``/api/search/works``。
+        真契约是 ``GET /api/search/{关键词}`` —— **关键词在 URL 路径里**，
+        不是查询参数（``order`` / ``sort`` / ``page`` / ``pageSize`` 那些才在
+        query string）。上游前端也是这么调的：``/api/search/ + encodeURIComponent(kw)``。
+
+        ⚠️ 曾经的 ``/api/search/works`` 是**不存在的端点**：上游把 ``works``
+        当成了关键词，于是任何查询都恒定返回「搜 works 这个词」的同一批
+        117 条。用 ``/api/works?keyword=`` 同样不生效（返回同一份全量列表）。
+
+        关键词必须 ``quote(..., safe="")``：带斜杠的关键词若保留 ``/``，会被
+        上游当成多级路径，命中 ``404 Cannot GET /api/search/a/b``。
+
+        空关键词上游会退化成全量列表（totalCount 62626），所以这里直接拒掉。
         """
         keyword = (keyword or "").strip()
         if not keyword:
             raise AsmrError("搜索关键词为空", status=400)
         return await self.get_json(
-            "/api/search/works", params={"keyword": keyword, "page": max(1, int(page))}
+            f"/api/search/{quote(keyword, safe='')}", params={"page": max(1, int(page))}
         )
 
     async def work(self, work_id: str) -> dict:

@@ -36,8 +36,9 @@ def _decorate_page(page: dict) -> dict:
 async def list_works(request: Request, page: int = Query(1, ge=1)):
     """作品列表（默认序，一页 20 条）。
 
-    asmr 的排序参数不接受任何值（``sort``/``order`` 一律 400），所以这里不
-    提供排序，只给分页。
+    上游其实支持排序（``order`` ∈ ``create_date``/``release``/``rating``/
+    ``dl_count``/``price``/``random``/``id``，``sort`` ∈ ``asc``/``desc``），
+    非法值才会 400 —— 本站没把排序透出来，只给分页。
     """
     result = await get_client(request).list_works(page=page)
     return _decorate_page(result)
@@ -49,8 +50,10 @@ async def search(
 ):
     """关键词搜索。
 
-    走的是 ``/api/search/works`` —— ``/api/works?keyword=`` 那个 keyword
-    是**不生效**的（返回同一份全量列表）。
+    上游真契约是 ``GET /api/search/{关键词}`` —— 关键词在**路径**里，不是
+    查询参数。``/api/works?keyword=`` 与早前误用的 ``/api/search/works``
+    都是不生效的（后者甚至会被当成「搜 works 这个词」，恒定返回同一批
+    117 条）。本端点对外仍是 ``?query=&page=``。
     """
     result = await get_client(request).search(query, page=page)
     return _decorate_page(result)

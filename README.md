@@ -156,7 +156,7 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 | `asmr_one/run.py` | asmr.one 接口项目（`asmr_one/`）：**只有**那七个 `/api/asmr/*`（作品列表 / 搜索 / 作品详情 / 音轨树 / 封面代转 / 音频代转 / 登录态），外加 `/` 上的**导航页**；它不挂任何 Pixiv 或 iwara 路由 |
 | `ehviewer/run.py` | E-Hentai 接口项目（`ehviewer/`）：**只有**那九个 `/api/eh/*`（列表 / 热门画廊 / 搜索 / 画廊详情 / 图片页 / 大图页解析 / 元数据 / 图片代转 / 匿名态），外加 `/` 上的**导航页**；它不挂任何别的站点的路由 |
 
-各接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3～4 项 iwara 专属自检（开了 `IWARA_BRIDGE_ECH=1` 才多出 ECH 那一项），`asmr_one/run.py` 追加 2～3 项 asmr 专属自检（默认就开 ECH，见「环境检查说明」），`ehviewer/run.py` 追加 6 项 ehviewer 专属自检（依赖 / 边缘 / 站点 / 详情 / 榜单 / 大图）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`；要 asmr.one 就拷 `pixiv_bridge/` + `asmr_one/`，要 E-Hentai 就拷 `pixiv_bridge/` + `ehviewer/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
+各接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3～4 项 iwara 专属自检（开了 `IWARA_BRIDGE_ECH=1` 才多出 ECH 那一项），`asmr_one/run.py` 追加 3～4 项 asmr 专属自检（默认就开 ECH，所以默认 4 项，见「环境检查说明」），`ehviewer/run.py` 追加 6 项 ehviewer 专属自检（依赖 / 边缘 / 站点 / 详情 / 榜单 / 大图）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`；要 asmr.one 就拷 `pixiv_bridge/` + `asmr_one/`，要 E-Hentai 就拷 `pixiv_bridge/` + `ehviewer/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
 
 首次运行输出示例：
 
@@ -175,7 +175,7 @@ INFO:     Uvicorn running on http://127.0.0.1:8765
 
 ### 环境检查说明
 
-每次启动前自动执行下面这些检查：框架给 4 项（`python` / `deps` / `files` / `port`），站点再把自己的追加进同一张表（Pixiv 是 1 项 `network` / `ech` / `proxy`，`iwara/run.py` 还多 3～4 项 iwara 专属——开了 `IWARA_BRIDGE_ECH=1` 才多出那第 4 项；`asmr_one/run.py` 多 2～3 项 asmr 专属——`ASMR_BRIDGE_ECH` 默认开，所以默认 3 项。见下）：
+每次启动前自动执行下面这些检查：框架给 4 项（`python` / `deps` / `files` / `port`），站点再把自己的追加进同一张表（Pixiv 是 1 项 `network` / `ech` / `proxy`，`iwara/run.py` 还多 3～4 项 iwara 专属——开了 `IWARA_BRIDGE_ECH=1` 才多出那第 4 项；`asmr_one/run.py` 多 3～4 项 asmr 专属——`ASMR_BRIDGE_ECH` 默认开，所以默认 4 项。见下）：
 
 | 检查项 | 失败影响 | 说明 |
 | --- | --- | --- |
@@ -196,15 +196,16 @@ INFO:     Uvicorn running on http://127.0.0.1:8765
 
 这四项**故意不在致命清单里**：iwara 依赖缺失或 API 不可达时入口仍能启动（图片/其它接口照用），所以只提示不中止。
 
-`asmr_one` 入口是 `python asmr_one/run.py --check`，它在同一张表里追加 3 项（`ASMR_BRIDGE_ECH` 默认就是开的，所以默认就有 ECH 那一项；关掉后是 2 项）：
+`asmr_one` 入口是 `python asmr_one/run.py --check`，它在同一张表里追加 4 项（`ASMR_BRIDGE_ECH` 默认就是开的，所以默认就有 ECH 那一项；关掉后是 3 项）：
 
 | asmr 检查项 | 失败影响 | 说明 |
 | --- | --- | --- |
 | `asmr 依赖` | 仅警告，不中止 | 真 `import curl_cffi`（与 iwara 同理，ABI 不匹配也照样失败），附版本号；手动补 `pip install -r asmr_one/requirements.txt` |
 | `asmr 网络` | 仅警告，不中止 | 真发一次 `GET /api/works?page=1`，确认 `api.asmr.one` 可达并能拿到 JSON。只探 TCP 不够——这里的坎是「IP 被 RST + 不带 ECH 也会被拦」，要整条「借道 IP 池 + impersonate + ECH」链路通才算过 |
+| `asmr 搜索` | 仅警告，不中止 | **拿两个词横向对照**：一个必定查不到的（`zzzzqqxxnotexist`）必须回 0 条，一个已知有结果的（`癒し`）必须不是 0 条。守的是这条：本站曾经把不存在的 `/api/search/works` 当搜索端点，上游把路径里的 `works` 当成了关键词，于是任何查询都恒定返回同一批 117 条——HTTP 200、形状标准、解析无异常，「能连通」那项照样全绿。**参数有没有生效，只有拿必定查不到的词去问才看得出来** |
 | `asmr ECH` | 仅警告，不中止 | **默认就有（`ASMR_BRIDGE_ECH` 默认开）；写成 `ASMR_BRIDGE_ECH=0` 关掉 ECH 后才没有这一项**。真发一次 `GET /cdn-cgi/trace`，看回显里是不是 `sni=encrypted`（明文是 `sni=plaintext`） |
 
-这三项也**不在致命清单里**：asmr 依赖缺失或 API 不可达时入口仍能启动，接口失败只返回 502。另外 asmr **没有登录自检**——它公开浏览与播放匿名就够，要登录的端点（标签 / 用户收藏）本站不暴露。
+这四项也**不在致命清单里**：asmr 依赖缺失或 API 不可达时入口仍能启动，接口失败只返回 502。另外 asmr **没有登录自检**——它公开浏览与播放匿名就够，要登录的端点（标签 / 用户收藏）本站不暴露。
 
 `ehviewer` 入口是 `python ehviewer/run.py --check`，它在同一张表里追加 6 项（**没有 ECH 那一项**——本站不用 ECH，改用「借道边缘 + HTTP/3」）：
 
@@ -386,7 +387,7 @@ pixiv-bridge/
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
-├── tests/                              单元测试（893 项：框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 181 + 打包 45）
+├── tests/                              单元测试（900 项：框架与站点 334 + iwara 199 + asmr_one 141 + ehviewer 181 + 打包 45）
 ├── openssl-libs/                       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -751,8 +752,8 @@ asmr.one 是第三个站点，与 Pixiv、iwara 都无关，由独立的接口�
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/asmr/works?page=` | 作品列表（一页 20 条）。asmr 的上游**不接受任何排序参数**（`sort`/`order` 一律 400），所以这里只给分页，不给排序 |
-| GET | `/api/asmr/search?query=&page=` | 关键词搜索。走的是上游 `/api/search/works` —— `/api/works?keyword=` 那个 keyword **不生效**（返回同一份全量列表） |
+| GET | `/api/asmr/works?page=` | 作品列表（一页 20 条）。上游其实**接受排序**（`order` ∈ `create_date`/`release`/`rating`/`dl_count`/`price`/`random`/`id`，配 `sort` ∈ `asc`/`desc`），只有非法值才 400 —— 本站没把排序透出来，只给分页 |
+| GET | `/api/asmr/search?query=&page=` | 关键词搜索。走的是上游 `GET /api/search/{关键词}`（关键词在**路径**里，不在查询参数里），**真的按关键词区分结果**：`癒し` → 9743 条、`DLsite` → 62626 条、查不到的词 → 诚实的 0 条 |
 | GET | `/api/asmr/work/{work_id}` | 作品详情（上游 36 个键原样透传，另给封面补上代转地址） |
 | GET | `/api/asmr/tracks/{work_id}?flat=` | 音轨（文件）列表。上游是嵌套树（folder 套 folder，叶子是 audio），默认**展平**成一列文件并保留每个文件的文件夹路径；`flat=false` 时按 `{hash, folders}` 的形状原样返回叶子 |
 | GET | `/api/asmr/cover/{work_id}?type=` | 作品封面代转（`type`: `main` / `sam` / `240x240`，上游给的是 webp） |
@@ -889,7 +890,7 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 893 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 181 + 打包 45）
+python -m unittest discover -s tests       # 900 项应全绿（框架与站点 334 + iwara 199 + asmr_one 141 + ehviewer 181 + 打包 45）
 python scripts/check_boundary.py           # 拆分边界自检
 python scripts/make_share_packages.py --check   # 分享包内容自检（不写 zip）
 ```
