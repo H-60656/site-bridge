@@ -185,10 +185,10 @@ cd ~/pixiv-bridge && python pixiv/get_token.py
 python pixiv/run.py --check        # 查的是同一套环境，跟挂没挂扩展无关
 python iwara/run.py --check  # 同一套 + 3 项 iwara 专属（依赖 / api.iwara.tv / 登录态）
 python asmr_one/run.py --check  # 同一套 + 3 项 asmr 专属（依赖 / api.asmr.one / ECH，默认就有 ECH）
-python ehviewer/run.py --check  # 同一套 + 3 项 ehviewer 专属（依赖 / Cloudflare 边缘 / e-hentai.org 站点）
+python ehviewer/run.py --check  # 同一套 + 4 项 ehviewer 专属（依赖 / Cloudflare 边缘 / e-hentai.org 站点 / 详情页解析）
 ```
 
-（各入口的 `--check` 查的是同一套环境：Python / 依赖 / 项目文件 / 端口 / 网络 / ECH，其中 `port` 在 `--check` 下只警告不中止——毕竟这条路不监听端口。iwara 入口再追加 3 项：`iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录`（没配 token 就报匿名模式，配了就真刷一次并读用户名）。`asmr_one` 入口追加 3 项：`asmr 依赖`（真 import `curl_cffi`）、`asmr 网络`（真发一次 `GET /api/works?page=1`，要整条「借道 IP 池 + impersonate + ECH」链路通才算过）、`asmr ECH`（真发一次 `/cdn-cgi/trace` 看回显是不是 `sni=encrypted`；`ASMR_BRIDGE_ECH` **默认就开**，所以默认有这一项，写成 `ASMR_BRIDGE_ECH=0` 关掉后才剩 2 项）。`ehviewer` 入口追加 3 项：`ehviewer 依赖`（真 import `curl_cffi` 并检查有没有 `CurlHttpVersion`，HTTP/3 就靠它）、`ehviewer 边缘`（并发探内置的 16 个候选 Cloudflare anycast IP，只建 TCP 不发 TLS，不算站点是否通）、`ehviewer 站点`（真发一次首页 `list_galleries()`，这是整条链路唯一的判据；`EH_BRIDGE_HTTP3` 关掉时会提示「取到页面属于侥幸」）。这些都只警告、不中止，因为它们失败只影响该站点自己的接口，入口照样能启动；asmr.one 与 E-Hentai 都没有登录自检，都是纯匿名的。）
+（各入口的 `--check` 查的是同一套环境：Python / 依赖 / 项目文件 / 端口 / 网络 / ECH，其中 `port` 在 `--check` 下只警告不中止——毕竟这条路不监听端口。iwara 入口再追加 3 项：`iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录`（没配 token 就报匿名模式，配了就真刷一次并读用户名）。`asmr_one` 入口追加 3 项：`asmr 依赖`（真 import `curl_cffi`）、`asmr 网络`（真发一次 `GET /api/works?page=1`，要整条「借道 IP 池 + impersonate + ECH」链路通才算过）、`asmr ECH`（真发一次 `/cdn-cgi/trace` 看回显是不是 `sni=encrypted`；`ASMR_BRIDGE_ECH` **默认就开**，所以默认有这一项，写成 `ASMR_BRIDGE_ECH=0` 关掉后才剩 2 项）。`ehviewer` 入口追加 4 项：`ehviewer 依赖`（真 import `curl_cffi` 并检查有没有 `CurlHttpVersion`，HTTP/3 就靠它）、`ehviewer 边缘`（并发探内置的 16 个候选 Cloudflare anycast IP，只建 TCP 不发 TLS，不算站点是否通）、`ehviewer 站点`（真发一次首页 `list_galleries()`；`EH_BRIDGE_HTTP3` 关掉时会提示「取到页面属于侥幸」）、`ehviewer 详情`（从刚取回的列表里挑头两条真取一次详情，确认「页面骨架」判据 `#gn` / `#gdc` / `#gdd` 还认得上游页面——上游对取不到的画廊回的是 HTTP 200 + 一句纯文本，判据一旦失效，真实画廊会被整批误判成存根、全部 404，而列表页走的是另一套解析，证明不了这一点）。这些都只警告、不中止，因为它们失败只影响该站点自己的接口，入口照样能启动；asmr.one 与 E-Hentai 都没有登录自检，都是纯匿名的。）
 
 > **为什么有这些通道、各自对付什么**，以及换到别的站点时怎么从头定位，见 **[DIRECT.md](DIRECT.md)**（直连思路）。这里只讲「按现象选哪一条」。
 

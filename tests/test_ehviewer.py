@@ -56,7 +56,7 @@ try:
         split_ips,
     )
     from ehviewer.config import EhSettings, as_eh_settings
-    from ehviewer.envcheck import DEPS_NAME, EDGE_NAME, SITE_NAME
+    from ehviewer.envcheck import DETAIL_NAME, DEPS_NAME, EDGE_NAME, SITE_NAME
 
     HAVE_EH = True
     EH_IMPORT_ERROR = ""
@@ -1843,7 +1843,28 @@ class EhEnvCheckTestCase(unittest.TestCase):
     def _settings(self, **kw):
         return EhSettings(rate_limit_rpm=10000, **kw)
 
-    def _fake_client(self, edges=("1.1.1.1", "2.2.2.2"), edges_error=None, page=None, page_error=None):
+    @staticmethod
+    def _page(**kw):
+        """默认列表页：带两条画廊，好让「详情」那一项有东西可探。"""
+        page = {
+            "count": 2,
+            "items": [
+                {"gid": 4241779, "token": "29578e0069"},
+                {"gid": 4241780, "token": "aabbccddee"},
+            ],
+        }
+        page.update(kw)
+        return page
+
+    def _fake_client(
+        self,
+        edges=("1.1.1.1", "2.2.2.2"),
+        edges_error=None,
+        page=None,
+        page_error=None,
+        detail=None,
+        detail_error=None,
+    ):
         """让 envcheck 内部的 ``from .client import EhClient`` 拿到假的。"""
         instance = MagicMock()
         instance.edge_ips = tuple(edges)
@@ -1853,7 +1874,15 @@ class EhEnvCheckTestCase(unittest.TestCase):
         if page_error is not None:
             instance.list_galleries = AsyncMock(side_effect=page_error)
         else:
-            instance.list_galleries = AsyncMock(return_value=page or {"count": 25})
+            instance.list_galleries = AsyncMock(return_value=page or self._page())
+        if detail_error is not None:
+            instance.gallery = AsyncMock(side_effect=detail_error)
+        else:
+            instance.gallery = AsyncMock(
+                return_value=detail
+                if detail is not None
+                else {"title": "Some Gallery", "page_links": ["https://e-hentai.org/s/aa/1-1"]}
+            )
         instance.aclose = AsyncMock()
 
         def _make(*_args, **kwargs):
@@ -1961,10 +1990,60 @@ class EhEnvCheckTestCase(unittest.TestCase):
         with patcher:
             results = extra_checks(self._settings())
 
-        self.assertEqual([r.name for r in results], [DEPS_NAME, EDGE_NAME, SITE_NAME])
+        self.assertEqual(
+            [r.name for r in results], [DEPS_NAME, EDGE_NAME, SITE_NAME, DETAIL_NAME]
+        )
         self.assertTrue(all(r.ok for r in results))
-        # 三项都不中止启动：返回的是结论，不是异常。
+        # 四项都不中止启动：返回的是结论，不是异常。
         self.assertTrue(all(hasattr(r, "ok") for r in results))
+
+    def test_detail_check_accepts_a_real_looking_detail(self):
+        from ehviewer.envcheck import _detail_check
+
+        patcher, instance = self._fake_client()
+        with patcher:
+            result = asyncio.run(_detail_check(self._settings()))
+
+        self.assertTrue(result.ok)
+        self.assertIn("2 条", result.detail)
+        # 拿的正是列表页给的那两条。
+        self.assertEqual(instance.gallery.await_count, 2)
+
+    def test_detail_check_reports_when_parse_yields_empty(self):
+        """判据失效时真实画廊会解析成空壳 —— 这一项必须报故障。"""
+        from ehviewer.envcheck import _detail_check
+
+        patcher, _ = self._fake_client(detail={"title": "", "page_links": []})
+        with patcher:
+            result = asyncio.run(_detail_check(self._settings()))
+
+        self.assertFalse(result.ok)
+        self.assertIn("解析成空", result.detail)
+        self.assertIn("4241779", result.detail)
+
+    def test_detail_check_reports_a_stub_404_as_a_fault(self):
+        """真实画廊被判成存根（404）正是要抓的故障，不能被吞掉。"""
+        from ehviewer.envcheck import _detail_check
+
+        patcher, _ = self._fake_client(
+            detail_error=EhNotFoundError("取不到画廊（removed）：Gallery not found.")
+        )
+        with patcher:
+            result = asyncio.run(_detail_check(self._settings()))
+
+        self.assertFalse(result.ok)
+        self.assertIn("详情不可用", result.detail)
+        self.assertIn("骨架判据", result.detail)
+
+    def test_detail_check_says_so_when_the_list_is_empty(self):
+        from ehviewer.envcheck import _detail_check
+
+        patcher, _ = self._fake_client(page={"count": 0, "items": []})
+        with patcher:
+            result = asyncio.run(_detail_check(self._settings()))
+
+        self.assertFalse(result.ok)
+        self.assertIn("无法验详情解析", result.detail)
 
     def test_envcheck_has_no_ech_check(self):
         text = (PROJECT_ROOT / "ehviewer" / "envcheck.py").read_text(encoding="utf-8")

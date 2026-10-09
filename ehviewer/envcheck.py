@@ -1,13 +1,22 @@
 """ehviewer 站点的启动自检。
 
-补本站自己那三样，通过 ``Site.checks`` 挂进框架同一张 ``[环境检查]`` 表：
+补本站自己那四样，通过 ``Site.checks`` 挂进框架同一张 ``[环境检查]`` 表：
 
     ehviewer 依赖   curl_cffi 在不在（编译包，框架 REQUIRED 不含它）
     ehviewer 边缘   借道用的 Cloudflare 边缘有没有可用的（含 TCP 探测）
     ehviewer 站点   e-hentai.org 能不能真的取回一页（这才是整条链路通不通的判据）
+    ehviewer 详情   详情页解析还认不认得出真实页面（守住骨架判据，见下）
 
-三项都**不中止启动**：依赖缺失时启动本身会走 ``deps.bootstrap`` 自动补；网络
+四项都**不中止启动**：依赖缺失时启动本身会走 ``deps.bootstrap`` 自动补；网络
 不通也只是接口返回 502，服务照常起来，方便用户先看到界面再排查。
+
+**为什么「详情」要单独一项。** 上游对取不到的画廊回的是 HTTP 200 + 一句纯文本
+（``Key missing…`` / ``No gallery specified.`` / ``Gallery not found.``），客户端
+靠「页面里有没有 ``#gn`` / ``#gdc`` / ``#gdd`` 骨架」来分辨真假（见
+``ehviewer/parse.py`` 的 ``parse_gallery_error``）。这个判据一旦失效 —— 上游改了
+详情页结构、正则不再命中 —— **真实画廊会被整批误判成存根，全部返回 404**，比
+原来的空壳更难查。``_site_check`` 探的是**列表页**，走另一套解析，证明不了这一点；
+所以这里另外真取几条详情，确认它们仍能解析出标题。
 
 这里**没有 ECH 自检** —— 该站点不用 ECH（封锁是 SNI 字符串 + DNS 投毒，
 ECH 的外层 SNI 恰好是被封的那个，叠上去只会更糟），所以也就没有 ``ech*`` 配置。
@@ -23,15 +32,25 @@ from pixiv_bridge.envcheck import CheckResult
 DEPS_NAME = "ehviewer 依赖"
 EDGE_NAME = "ehviewer 边缘"
 SITE_NAME = "ehviewer 站点"
+DETAIL_NAME = "ehviewer 详情"
 
 # 边缘探测是并发的，给一个总上限即可。
 EDGE_TIMEOUT = 20.0
 # 站点探测要跑完一次真正的 HTTP/3 请求（QUIC 握手比 TCP 慢），给宽一点。
 SITE_TIMEOUT = 30.0
+# 详情探测要取列表 + 若干条详情，同样给宽一点（上面对每条不再单独计时）。
+DETAIL_TIMEOUT = 40.0
+# 取几条详情来验判据。一条就够看出「判据还认不认得真实页面」，取两条是为了
+# 万一第一条恰好是刚被删除/改版的上传，不至于就报故障。
+DETAIL_SAMPLES = 2
 
 _HINT_DEPS = "启动时会自动安装；手动：pip install -r ehviewer/requirements.txt"
 _HINT_EDGE = (
     "HTTP/3（UDP:443）必须能出站；本机若被禁 UDP，可配 .env 里的代理或换网络"
+)
+_HINT_DETAIL = (
+    "多半是上游改了详情页结构，ehviewer/parse.py 的骨架判据"
+    "（#gn / #gdc / #gdd）不再命中 —— 真实画廊会被当成存根"
 )
 
 
@@ -146,8 +165,82 @@ async def _site_check(settings) -> CheckResult:
     return CheckResult(SITE_NAME, True, detail)
 
 
+async def _detail_check(settings) -> CheckResult:
+    """详情页还能不能解析出内容 —— 守住「200 + 存根」的骨架判据。
+
+    取一页列表，再挑头几条去取详情，确认 ``gallery()`` 认得它们（能拿到标题
+    与图链）。**这里刻意不吞掉 ``EhNotFoundError``**：真实画廊被判成存根时
+    抛的正是这个，而那种故障必须报出来，不能跟「这条恰好没了」混为一谈。
+    """
+    try:
+        from .client import EhClient, EhError
+        from .config import as_eh_settings, split_ips
+    except Exception as exc:  # noqa: BLE001 - curl_cffi 缺失时退化
+        return CheckResult(DETAIL_NAME, False, f"跳过（{exc.__class__.__name__}: {exc}）")
+
+    client_settings = as_eh_settings(settings)
+    client = EhClient(
+        http3=client_settings.http3,
+        edge_ips=split_ips(client_settings.edge_ips),
+        edge_attempts=client_settings.edge_attempts,
+        image_attempts=client_settings.image_attempts,
+    )
+
+    async def probe() -> CheckResult:
+        page = await client.list_galleries()
+        items = page.get("items") if isinstance(page, dict) else None
+        if not items:
+            return CheckResult(
+                DETAIL_NAME, False, "列表页没给出画廊，无法验详情解析"
+            )
+        samples = items[:DETAIL_SAMPLES]
+        empty, checked = [], 0
+        for item in samples:
+            detail = await client.gallery(item["gid"], item["token"])
+            checked += 1
+            if not detail.get("title") and not detail.get("page_links"):
+                empty.append(str(item.get("gid", "?")))
+        if empty:
+            return CheckResult(
+                DETAIL_NAME,
+                False,
+                f"{len(empty)}/{checked} 条真实详情解析成空（gid={'、'.join(empty)}）；"
+                f"{_HINT_DETAIL}",
+            )
+        return CheckResult(
+            DETAIL_NAME,
+            True,
+            f"{checked} 条真实详情解析正常（判据仍认得上游页面）",
+        )
+
+    try:
+        return await asyncio.wait_for(probe(), timeout=DETAIL_TIMEOUT)
+    except asyncio.TimeoutError:
+        return CheckResult(
+            DETAIL_NAME, False, f"详情探测超过 {DETAIL_TIMEOUT:.0f} 秒；{_HINT_EDGE}"
+        )
+    except EhError as exc:
+        return CheckResult(
+            DETAIL_NAME,
+            False,
+            f"详情不可用：{exc.message}；{_HINT_DETAIL}",
+        )
+    except Exception as exc:  # noqa: BLE001 - 未知异常也让自检给出结论
+        return CheckResult(
+            DETAIL_NAME,
+            False,
+            f"详情探测失败（{exc.__class__.__name__}: {exc}）",
+        )
+    finally:
+        await client.aclose()
+
+
 async def _async_checks(settings) -> list[CheckResult]:
-    return list(await asyncio.gather(_edge_check(settings), _site_check(settings)))
+    return list(
+        await asyncio.gather(
+            _edge_check(settings), _site_check(settings), _detail_check(settings)
+        )
+    )
 
 
 def extra_checks(settings) -> list[CheckResult]:

@@ -705,3 +705,57 @@ CF 的**控制面与 Pages 托管面在本机可达**（`_scratch/_probe_cf_rela
 - **判据要选不变的东西。** 文案会改，骨架不会；所以先认骨架、文案只作兜底，这样上游换句话说同一件事时不会把正常页判死。
 
 
+## 21. 把骨架判据纳入开机自检（2026-10-09）
+
+### 21.1 动机
+
+§20 修完之后，我按 §20.6 的第一条教训检查了一遍「这条判据现在有人守吗」，答案是**没有**。
+
+`ehviewer/envcheck.py` 原有的三项只探到列表页：`_site_check` 真发一次 `list_galleries()`，而列表页（`parse_galleries`）与详情页（`parse_detail` + `parse_gallery_error`）**走的是两套完全不同的解析**。也就是说 §20 新加的那条「页面骨架」判据即使明天就失效，`--check` 也照样报绿。
+
+失效的后果还不轻：`_DETAIL_MARK_RE` 一旦不再命中真实详情页，`parse_gallery_error` 会把**每一个真实画廊**都判成存根，`gallery()` 全部抛 404。这不是「少个字段」而是「整个详情接口全灭」，而且是静默翻车 —— 列表页还是好的，用户会以为只是详情坏了。
+
+### 21.2 设计
+
+新增第四项 `ehviewer 详情`（`DETAIL_NAME = "ehviewer 详情"`，`DETAIL_TIMEOUT = 40.0`，`DETAIL_SAMPLES = 2`），实现在 `ehviewer/envcheck.py` 的 `_detail_check(settings)`：
+
+1. 先 `page = await client.list_galleries()` 拿真实列表（复用站点项已经证明通的链路）。
+2. 列表为空 → 报「列表页没给出画廊，无法验详情解析」（而不是假装通过）。
+3. 取**头两条**（`DETAIL_SAMPLES = 2`）逐条 `await client.gallery(gid, token)`：一条就够看出判据认不认得真实页面，取两条是防第一条恰好是被删/改版的上传。
+4. `title` 与 `page_links` 同时为空 → 计入 `empty`，明细列出 gid。
+5. 有 `empty` → 失败，消息附 `_HINT_DETAIL`（「多半是上游改了详情页结构，`ehviewer/parse.py` 的骨架判据（#gn / #gdc / #gdd）不再命中 —— 真实画廊会被当成存根」）。
+6. 全部正常 → `f"{checked} 条真实详情解析正常（判据仍认得上游页面）"`。
+
+三个刻意的决定：
+
+- **不吞 `EhNotFoundError`。** 真实画廊被判成存根时抛的正是它；把 `EhNotFoundError` 当成「跳过」就等于把这项自检要抓的故障吞了。它走 `except EhError` 分支报失败。
+- **`DETAIL_SAMPLES` 取两条而不是一条。** 上游某个具体上传被删/改版会误报，两条都不正常才更可信。
+- **沿用「只警告、不中止」。** 与其余三项一致，`extra_checks` 的返回值不影响启动。
+
+`_async_checks` 相应改为三项并发 `asyncio.gather(_edge_check, _site_check, _detail_check)`；`--check` 的顺序由 `extra_checks` 组装成 `[deps, edge, site, detail]`。
+
+### 21.3 先改断言、再交东西
+
+`tests/test_ehviewer.py` 的 `EhEnvCheckTestCase`（原先 `_fake_client(edges, edges_error, page, page_error)`）扩了 `detail` / `detail_error` 两个口子，并新增 `_page(**kw)` 造默认列表页（`{"count": 2, "items": [{"gid": 4241779, "token": "29578e0069"}, {"gid": 4241780, "token": "aabbccddee"}]}`）；`test_extra_checks_runs_deps_first_then_the_network_trio` 的断言改成四项。新增 4 个用例：
+
+| 用例 | 输入 | 断言 |
+| --- | --- | --- |
+| `test_detail_check_accepts_a_real_looking_detail` | 默认 | ok；`instance.gallery.await_count == 2` |
+| `test_detail_check_reports_when_parse_yields_empty` | `detail={"title": "", "page_links": []}` | 不 ok，含「解析成空」与 gid `4241779` |
+| `test_detail_check_reports_a_stub_404_as_a_fault` | `detail_error=EhNotFoundError("取不到画廊（removed）：Gallery not found.")` | 不 ok，含「详情不可用」与「骨架判据」 |
+| `test_detail_check_says_so_when_the_list_is_empty` | `page={"count": 0, "items": []}` | 不 ok，含「无法验详情解析」 |
+
+### 21.4 验证结果
+
+- `tests.test_ehviewer`：**Ran 161 tests … OK**（157 → 161）。
+- 全量：**Ran 873 tests … OK (skipped=1)**，21.4 s（334 + 199 + 134 + **161** + 45）。
+- `check_boundary.py` → 路由数不变（`ehviewer 15 条，自有 9 条`），「边界检查通过」。**自检不是路由**，所以边界检查与分享包清单都不受影响。
+- **真实链路**（`python ehviewer/run.py --check`，`EXIT=0`）：`python OK` / `deps OK` / `files OK` / `port OK 8765 可用` / `ehviewer 依赖 OK curl_cffi 0.16.3 已就绪（含 HTTP/3 / QUIC）` / `ehviewer 边缘 OK 16/16 个候选边缘可建连（示例 104.17.0.1）` / `ehviewer 站点 OK e-hentai.org 可达（HTTP/3 + 借道边缘），首页取回 25 条` / **`ehviewer 详情 OK 2 条真实详情解析正常（判据仍认得上游页面）`** / `[扩展] 已挂载 2 个：novel（5 个路由）、iwara_web（1 个路由）`。
+
+### 21.5 教训
+
+- **自检探到的层，必须是你真正怕坏的那一层。** 原来那项叫「ehviewer 站点」，名字听起来是「整站通不通」，实际只到列表页。**名字比覆盖面宽，是最容易骗过自己的一种绿。**
+- **修完一个缺陷，问的下一句是「同类缺陷还有谁会发现」。** §20 修的是代码，不是「代码错了没人知道」这件事；后者要靠自检补。离线测试按定义就发现不了这类「假设与上游不符」的错，所以**真跑链路的那一项才是最后一道网**。
+- **一条守判据的自检比一条验功能的测试更值。** 验功能的测试在上游改版时会跟着一起错（夹具是我按假设写的）；守判据的自检直接打真实页面，是唯一不受我自己假设影响的一环。
+
+

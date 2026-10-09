@@ -206,15 +206,16 @@ INFO:     Uvicorn running on http://127.0.0.1:8765
 
 这三项也**不在致命清单里**：asmr 依赖缺失或 API 不可达时入口仍能启动，接口失败只返回 502。另外 asmr **没有登录自检**——它公开浏览与播放匿名就够，要登录的端点（标签 / 用户收藏）本站不暴露。
 
-`ehviewer` 入口是 `python ehviewer/run.py --check`，它在同一张表里追加 3 项（**没有 ECH 那一项**——本站不用 ECH，改用「借道边缘 + HTTP/3」）：
+`ehviewer` 入口是 `python ehviewer/run.py --check`，它在同一张表里追加 4 项（**没有 ECH 那一项**——本站不用 ECH，改用「借道边缘 + HTTP/3」）：
 
 | ehviewer 检查项 | 失败影响 | 说明 |
 | --- | --- | --- |
 | `ehviewer 依赖` | 仅警告，不中止 | 真 `import curl_cffi`，并检查有没有 `CurlHttpVersion`（HTTP/3 能力）。缺 HTTP/3 时直接点明「HTTP/3 不可用，站点会连不上」；手动补 `pip install -r ehviewer/requirements.txt` |
 | `ehviewer 边缘` | 仅警告，不中止 | 并发探一遍 16 个候选边缘 IP，只建 TCP（不发 TLS，所以不会被 SNI 判据误伤）。报「N/16 个候选边缘可建连（示例 x.x.x.x）」 |
 | `ehviewer 站点` | 仅警告，不中止 | 真发一次首页 `GET /`（`list_galleries()`），确认整条「借道 Cloudflare 边缘 + 强制 HTTP/3」链路通、能拿回画廊列表。只探 TCP 不够——真正的坎在 HTTP/3 与 SNI |
+| `ehviewer 详情` | 仅警告，不中止 | 从刚取回的列表里挑头两条真取一次详情，确认「页面骨架」判据（`#gn` / `#gdc` / `#gdd`）仍认得上游页面。守的是这条：上游对取不到的画廊回 HTTP 200 + 一句纯文本，判据一旦失效，**真实画廊会被整批误判成存根、全部 404**。列表页走的是另一套解析，证明不了这一点 |
 
-这三项也**不在致命清单里**：ehviewer 依赖缺失或站点不可达时入口仍能启动，接口失败只返回 502。另外 ehviewer **没有登录自检**——公开画廊匿名就能看（exhentai 里站内容会返回 401，本站不碰）。
+这四项也**不在致命清单里**：ehviewer 依赖缺失或站点不可达时入口仍能启动，接口失败只返回 502。另外 ehviewer **没有登录自检**——公开画廊匿名就能看（exhentai 里站内容会返回 401，本站不碰）。
 
 ### 获取 refresh_token（三种方式任选）
 
@@ -383,7 +384,7 @@ pixiv-bridge/
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
-├── tests/                              单元测试（869 项：框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 157 + 打包 45）
+├── tests/                              单元测试（873 项：框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 161 + 打包 45）
 ├── openssl-libs/                       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -885,7 +886,7 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 869 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 157 + 打包 45）
+python -m unittest discover -s tests       # 873 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 161 + 打包 45）
 python scripts/check_boundary.py           # 拆分边界自检
 python scripts/make_share_packages.py --check   # 分享包内容自检（不写 zip）
 ```
