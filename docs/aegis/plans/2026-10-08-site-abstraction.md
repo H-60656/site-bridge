@@ -552,7 +552,7 @@ CF 的**控制面与 Pages 托管面在本机可达**（`_scratch/_probe_cf_rela
 - 全量测试：`.venv\Scripts\python.exe -m unittest discover -s tests` → **Ran 712 tests … OK (skipped=1)**，失败数为 0（`test_bridge` 334 + `test_iwara` 199 + `test_asmr_one` 134 + `test_packaging` 45）。
 - 边界自检：`python scripts/check_boundary.py` → 「边界通过」，路由差集为框架外壳 6 条、pixiv 60（其中站点自己的 54 条）、iwara 16（其中站点自己的 10 条）、asmr_one 13（其中站点自己的 7 条）、novel（扩展，宿于 pixiv）比宿主多 10 条、iwara_web（扩展，宿于 iwara）比宿主多 1 条。
 - 打包自检：`python scripts/make_share_packages.py --check` → 7 个包全部「内容就绪」。
-- `dist/` 重建：`dist/` 下现有 7 个 zip（`pixiv-api.zip` 6108458 / `pixiv-novel.zip` 6170350 / `iwara-api.zip` 159584 / `iwara-iwara_web.zip` 170019 / `asmr-api.zip` 148011 / `novel-extension.zip` 131140 / `iwara_web-extension.zip` 79310），`pornhub-api.zip` 已不存在。
+- `dist/` 重建：`dist/` 下现有 7 个 zip（`pixiv-api.zip` / `pixiv-novel.zip` / `iwara-api.zip` / `iwara-iwara_web.zip` / `asmr-api.zip` / `novel-extension.zip` / `iwara_web-extension.zip`），`pornhub-api.zip` 已不存在。**不记具体字节数**——三份手册（`README.md` / `INSTALL.md` / `DIRECT.md`，见 `scripts/make_share_packages.py:62` 的 `DOC_FILES`）本身会被打进每个包，改一次文档字节数就全变，写死只会立刻过期；要核对的是「7 个包、无 pornhub 残留」（`System.IO.Compression.ZipFile` 逐包扫描条目数与包内手册文本，`pornhub|PORNHUB|Pornhub` 零命中）。
 - 仓库级 grep：除本计划文档（历史记录，刻意保留 §16/§17 的 pornhub 字样）外，全仓无 `pornhub` / `PORNHUB` / `Pornhub` 残留（排除 `.git` / `_scratch` / `dist` / `.venv` / `__pycache__`）。
 
 ### 17.3 保留的教训（不随代码删除）
