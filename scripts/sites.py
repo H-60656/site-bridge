@@ -85,6 +85,17 @@ SITES = (
         requirements="asmr_one/requirements.txt",
         files=("run.py", "requirements.txt"),
     ),
+    SiteInfo(
+        name="ehviewer",
+        directory="ehviewer",
+        title="EHViewer Bridge",
+        # 同样要 libcurl，而且**必须带 HTTP/3**：e-hentai.org 在本机是按 SNI
+        # 字符串封锁的（本地 DNS 答案也被投毒），TCP+TLS 钉哪个 IP 都是 RST，
+        # 只有 QUIC 能过。匿名可用，所以没有登录脚本。
+        extra_modules=("curl_cffi",),
+        requirements="ehviewer/requirements.txt",
+        files=("run.py", "requirements.txt"),
+    ),
 )
 
 SITES_BY_NAME = {site.name: site for site in SITES}
@@ -94,6 +105,7 @@ SITE_ASSETS = {
     "pixiv": ("openssl-libs",),
     "iwara": (),
     "asmr_one": (),
+    "ehviewer": (),
 }
 
 
@@ -184,11 +196,24 @@ ASM_ROUTE_PATHS = frozenset(
     }
 )
 
+EH_ROUTE_PATHS = frozenset(
+    {
+        "/api/eh/auth",
+        "/api/eh/gallery/{gid}/{token}",
+        "/api/eh/images/{gid}/{token}",
+        "/api/eh/list",
+        "/api/eh/metadata",
+        "/api/eh/proxy",
+        "/api/eh/search",
+    }
+)
+
 #: 「站点名 → 该站点自己的路由」：路由隔离检查按这张表逐个站点比对，
 #: 加站点时只要在这里补一条（不写死某个站点名）。
 SITE_ROUTE_PATHS = {
     "iwara": IWARA_ROUTE_PATHS,
     "asmr_one": ASM_ROUTE_PATHS,
+    "ehviewer": EH_ROUTE_PATHS,
 }
 
 #: 顶层包名：项目根下所有「有 __init__.py 的目录」+ 各站点目录。

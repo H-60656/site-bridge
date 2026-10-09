@@ -118,7 +118,7 @@ BASE_NOTES = (
     "所以它直接启动；想显式指定就在 `.env` 里写 `BRIDGE_SITE=<站点目录名>`。",
     "个人数据都在 `data/` 里（登录凭据 / 阅读历史 / 下载记录 / 收藏台账 / 页面配置）；"
     "换机只拷这一个目录。",
-    "各接口项目 `pixiv/` / `iwara/` / `asmr_one/` 是**同级**的：各自一个 `run.py`，"
+    "各接口项目 `pixiv/` / `iwara/` / `asmr_one/` / `ehviewer/` 是**同级**的：各自一个 `run.py`，"
     "互相不挂载，都只用框架 `pixiv_bridge/`。",
 )
 
@@ -148,6 +148,20 @@ ASMR_NOTES = (
     "`/api/asmr/stream?url=...` 代转（`/api/asmr/tracks/{id}` 里给的直链是给本站用的）。",
 )
 
+EH_SETUP = (
+    "ehviewer 不需要登录：画廊浏览、搜索、详情、大图页与图片代转全部匿名可用"
+    "（exhentai 里站内容会返回 401，本站不碰它）。",
+)
+
+EH_NOTES = (
+    "E-Hentai 自己解析出来的那几个边缘 IP 在本机是 IP 级被阻断的，"
+    "所以本站**借道 Cloudflare 别的 anycast IP** 直连 `e-hentai.org`，"
+    "并强制 HTTP/3（`EH_BRIDGE_HTTP3`，默认开）—— 关掉大概率整个站不通。",
+    "换 IP 与 HTTP/3 都要 libcurl，所以本包同样带 `curl_cffi`（首次启动会多装一个编译包）。",
+    "大图字节在 `*.hath.network` 上，浏览器同样到不了 —— 看图要走本站的"
+    "`/api/eh/proxy?url=...` 代转（`/api/eh/images/{gid}/{token}` 里给的是 `/s/` 页地址）。",
+)
+
 def _site_dirs(*names, with_assets=True) -> tuple:
     """组装包里要带的目录：框架 + 指定站点（+ 站点资产 + 公共目录）。"""
     dirs = [FRAMEWORK_PACKAGE]
@@ -162,6 +176,7 @@ def _site_dirs(*names, with_assets=True) -> tuple:
 PIXIV = SITES_BY_NAME["pixiv"]
 IWARA = SITES_BY_NAME["iwara"]
 ASMR = SITES_BY_NAME["asmr_one"]
+EH = SITES_BY_NAME["ehviewer"]
 
 PACKAGES = (
     PackageSpec(
@@ -230,11 +245,36 @@ PACKAGES = (
         setup_lines=BASE_SETUP + ASMR_SETUP,
         notes=(
             "入口是 `asmr_one/run.py`，它**只挂 asmr 的接口** —— Pixiv / iwara 的路由"
-            "都不在本包里（三个接口项目同级，互不挂载）。",
+            "都不在本包里（各接口项目同级，互不挂载）。",
             "启动后浏览器打开 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、"
             "`/api/health` 等入口）。",
         )
         + ASMR_NOTES
+        + BASE_NOTES,
+    ),
+    PackageSpec(
+        key="ehviewer-api",
+        zip_name="ehviewer-api",
+        title="EHViewer 接口包",
+        kind="api",
+        summary="E-Hentai 接口（`/api/eh/list`、搜索、画廊详情、图片页、图片代转）+ `/` 导航页。",
+        dirs=_site_dirs(EH.directory, with_assets=False),
+        files=API_ROOT_FILES,
+        start_commands=(
+            "# Windows",
+            "start.bat",
+            "",
+            "# 其它平台",
+            EH.command(),
+        ),
+        setup_lines=BASE_SETUP + EH_SETUP,
+        notes=(
+            "入口是 `ehviewer/run.py`，它**只挂 E-Hentai 的接口** —— 其余站点的路由"
+            "都不在本包里（各接口项目同级，互不挂载）。",
+            "启动后浏览器打开 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、"
+            "`/api/health` 等入口）。",
+        )
+        + EH_NOTES
         + BASE_NOTES,
     ),
     PackageSpec(

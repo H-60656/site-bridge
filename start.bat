@@ -1,18 +1,20 @@
 @echo off
-rem Pixiv Bridge / Iwara Bridge / ASMR Bridge one-click launcher (Windows)
+rem Pixiv Bridge / Iwara Bridge / ASMR Bridge / EH Bridge one-click launcher (Windows)
 rem
 rem Usage:
 rem   double-click start.bat        open the project navigation, pick one, start it
 rem   start.bat iwara               start that API project directly
 rem   start.bat asmr_one            start that API project directly (no login)
+rem   start.bat ehviewer            start the E-Hentai API project (no login, forces HTTP/3)
 rem   start.bat --port 9000          use another port
 rem   start.bat --host 0.0.0.0       allow other devices on your LAN
 rem   start.bat --check              check environment/login only, do not serve
 rem   set BRIDGE_SITE=iwara          skip the question, always start iwara
 rem
-rem The API projects (pixiv/, iwara/, asmr_one/) are siblings: each one has its
-rem own run.py and none loads another. This launcher does NOT pick one itself;
-rem it hands over to the framework navigation (`python -m pixiv_bridge`), which:
+rem The API projects (pixiv/, iwara/, asmr_one/, ehviewer/) are siblings: each one
+rem has its own run.py and none loads another. This launcher does NOT pick one
+rem itself; it hands over to the framework navigation (`python -m pixiv_bridge`),
+rem which:
 rem   * uses BRIDGE_SITE when set (environment variable, or a BRIDGE_SITE= line
 rem     in .env);
 rem   * starts the only API project straight away when there is just one;
@@ -24,7 +26,7 @@ rem
 rem To add an extension directory (novel / iwara_web) put a line in .env:
 rem   PIXIV_BRIDGE_EXTENSIONS=novel          (for the pixiv project)
 rem   PIXIV_BRIDGE_EXTENSIONS=iwara_web      (for the iwara project)
-rem (asmr_one takes no extension: it is anonymous-only, see INSTALL.md.)
+rem (asmr_one and ehviewer take no extension: both are anonymous-only, see INSTALL.md.)
 rem The launcher finds <extension>/extension.py automatically; extensions have
 rem no entry script of their own (see README, section about extensions).
 rem

@@ -561,3 +561,48 @@ CF 的**控制面与 Pages 托管面在本机可达**（`_scratch/_probe_cf_rela
 - **「缺代理」是结论，不是原因。** 本机 UDP:53 完全正常、`dash.cloudflare.com` / `api.cloudflare.com` / `*.pages.dev` 均可达，被阻断的是**按域名/SNI 定点**的几个主机（`*.workers.dev`、WARP 数据面 `162.159.192.x`）。诊断时先分层定位再归因。
 - **能用 `curl` 拿到的结论，不要写成「环境不行」。** 可复现的硬证据（DoH CNAME 链、CF 官方段表不命中、RDAP AS29789、NS 记录、UDP 端口扫描零回包）能直接判定可行性；反之，「本机对外 TLS 整体被阻断」这种笼统表述会掩盖真实原因（第 15.3 节的原文已因此被订正）。
 
+---
+
+## 18. 后续追加：第四个站点 `ehviewer/`（E-Hentai，2026-10-09）
+
+用户原话（m01084）：「尝试做ehviewer的接口项目」。这是第 13 节之后**第二次用抽象本身做验收**：站点数从三个回到四个，但抽象层（`Site` 契约 / `scripts/sites.py` 登记表 / `check_boundary.py`）**一行没改**——新增只动了「写站点」与「登记一条」两处。
+
+### 18.1 阻塞形态与解题手段（与前三站都不同）
+
+- 目标 `e-hentai.org` **在 Cloudflare 后面**（这次前提是对的），但**它自己解析出来的那几个边缘 IP 在本机被 IP 级阻断**（`172.66.132.196` / `172.66.140.62`：连 TCP 都建不起来，不是 TLS 层被拒）。
+- 解法 = **内置 16 个别的 Cloudflare anycast IP 种子池** + 会话级 `CurlOpt.RESOLVE`（把域名钉到选中的边缘）+ **强制 HTTP/3**（`CurlOpt.HTTP_VERSION = CurlHttpVersion.V3`，`EH_BRIDGE_HTTP3` 默认开）。HTTPS/1.1 与 HTTP/2 会因 SNI 与边缘不符被拒，QUIC 走 UDP:443，不受那个判据限制。
+- 种子池**故意排除** e-hentai 自己解析出的那两个被封地址；`probe_edge()` 用**裸 TCP 建连**探活（不发 TLS，因此不会被 SNI 判据误杀），`next_edge()` 走**轮转游标**而不是死磕同一个 IP。
+- **不走 ECH**：本站的墙按 IP 与 SNI 判，不是按指纹判，所以也不 `impersonate`——只加普通浏览器头。
+- 图片字节在 `*.hath.network` 的 H@H 节点上，**端口随机且会失效**，因此必须由服务端代转（`GET /api/eh/proxy?url=...`），且每次重试都**重新解析 `/s/` 页**拿新节点（`EH_BRIDGE_IMAGE_ATTEMPTS`，默认 4），而不是重试同一个死 URL。
+- 元数据走官方 `api.php` 的 `gdata`（`POST`，body 必须是 `{"method":"gdata","gidlist":[[gid,token],…],"namespace":1}` 的 bytes，`content-type: application/json`）。
+- 匿名可用：没有 `login_check`，也不碰 exhentai（里站内容上游直接 401）。
+
+### 18.2 落盘清单
+
+**新建 `ehviewer/`（10 个文件，与 asmr_one 同构）**：`__init__.py`（惰性 `__getattr__` 导出，不做模块级 `from .app import`，否则会把 curl_cffi 拖进自举）`app.py`（`nav_order=4`，`EH_NAV` 七个 `NavItem`）`client.py`（借道 + 强制 H3 + 裸 TCP 探边缘 + 会话级 RESOLVE + 轮转换边缘 + 图片代转重解析）`config.py`（`EH_BRIDGE_HTTP3` / `_EDGE_IPS` / `_EDGE_ATTEMPTS` / `_IMAGE_ATTEMPTS`，**无 ech 三项**）`envcheck.py`（依赖 / 边缘 / 站点三项，均不中止启动）`parse.py`（列表 / 详情 / 大图页 / 条带解析）`requirements.txt`（`curl_cffi` + `cffi`）`run.py`（`bootstrap` 排在 `from ehviewer.app import SITE` 之前）`routes/__init__.py` `routes/galleries.py`（`/api/eh` 七个端点）。
+
+**改动**：`scripts/sites.py` 加一条 `SiteInfo(name="ehviewer", …)` + `EH_ROUTE_PATHS` frozenset + `SITE_ASSETS`；`scripts/make_share_packages.py` 加 `EH_SETUP` / `EH_NOTES` 与 `PackageSpec(key="ehviewer-api", kind="api", …)`（插在 `asmr-api` 与 `novel-extension` 之间）；`tests/test_bridge.py` 两处站点名单硬编码（全仓仅有的两处）加 `"ehviewer"`；新建 `tests/test_ehviewer.py`（128 项，离线，缺 curl_cffi 时整片跳过）。
+
+**文档**：`README.md`（总述 / 特性表 / 入口列表 / 启动表 / 环境检查三项表 / 目录树 / 环境变量四行 / 扩展章节 / 计数 712→**840** / 分享包 七→**八个** 及 `ehviewer-api` 表行 / 新增「E-Hentai（仅 `ehviewer/run.py` 提供）」整节）、`INSTALL.md`（入口数 / curl_cffi 三站点 / `--check` 清单 / 启动表 / 接口地址 / 分享包 / 排错表四行）、`DIRECT.md`（站点数 / 隔离清单 / 重依赖 / §7 标题改「四个不同站点」并新增 E-Hentai 整列 / 环境变量表四行 / 自检说明段）、`Dockerfile`（`RUN for req in …` 加 `ehviewer/requirements.txt`、`BRIDGE_SITE=ehviewer` 示例）、`start.bat` / `start.sh`、`.env.example`（补 `EH_BRIDGE_*` 四项）。
+
+### 18.3 验证结果
+
+- 全量测试：`.venv\Scripts\python.exe -m unittest discover -s tests` → **Ran 840 tests … OK (skipped=1)**（`test_bridge` 334 + `test_iwara` 199 + `test_asmr_one` 134 + `test_ehviewer` 128 + `test_packaging` 45）。
+- 边界自检：`python scripts/check_boundary.py` → 「边界检查通过」，ehviewer 13 条路由（其中站点自己的 7 条），与 `EH_ROUTE_PATHS` 逐字一致。
+- 打包自检：`python scripts/make_share_packages.py --check` → **8 个包**全部「内容就绪」（pixiv-api 59 / iwara-api 45 / asmr-api 43 / **ehviewer-api 43** / novel-extension 17 / iwara_web-extension 8 / pixiv-novel 72 / iwara-iwara_web 49）。
+- 真实链路：借道 `104.17.0.1` + HTTP/3 实连，`list_galleries()` / 详情 / `/s/` 大图页 / `gdata` 逐字段核对通过；真实 markup 已抄成 `tests/test_ehviewer.py` 的 fixture。
+
+### 18.4 本段揪出并修掉的真缺陷（写测试与探针时暴露）
+
+1. `ehviewer/parse.py` 的 `_nav_href` 只认 `dnext` / `dprev`（列表页详情导航用的 id），而 `/s/` 大图页的翻页锚是**短 id** `next` / `prev`（`<a id="next" onclick="return load_image(4, 'b6062cc00f')" …>`）⇒ 大图页翻页永远为空。修法：加 `_NAV_PATTERNS` 把四组正则按 `which` 分派。
+2. `ehviewer/parse.py` 的 `_COUNT_RE` 只认 `Found about N results`，而首页是 `Found 1,658,228 results`（无 `about`）⇒ 改为 `r"Found\s+(?:about\s+)?([^<]*?)\s*results"`。
+3. `ehviewer/parse.py` 的 `_cursor_of(url)` 把键名写死成 `next`，而上一页 URL 是 `?prev=` ⇒ prev 光标永远空串。修法：加 `key` 参数（`ehviewer/parse.py:118`），调用点 `"prev": _cursor_of(prev_url, "prev")`（L239）。
+4. `ehviewer/client.py` 的 `gdata()` 把 `int(gid)` 放在 `try` **外面**，畸形条目会以 `ValueError` 冒出去变成 500 ⇒ `int()` 挪进 `try` 并把 `ValueError` 加进异常元组，语义改为「畸形项跳过」。
+5. 测试自身两处 bug：`site_items()` 的字段是 `order` 而非 `nav_order`；`envcheck` 测试用 `MagicMock` 造假客户端导致 `client.http3` 恒为真值、走不到「HTTP3 已关」分支（改 `side_effect` 显式赋 `http3`）。
+
+### 18.5 保留的教训
+
+- **「在 Cloudflare 后」不等于「任何一个 CF 边缘都能用」。** 第 16 节的教训是「先判目标在谁的网络上」，本节补上后半句：**在 CF 后面时，还要判「它自己解析到的那个边缘是否可用」**——e-hentai 自己解析出的两个 IP 被封，但同一 anycast 段的别的 IP 完全可用，所以种子池 + 换边缘才是解。
+- **纯 TCP 探活比 TLS 探活更可靠。** SNI 不符时 TLS 会失败，但那不代表 IP 不可达；`probe_edge()` 只建 TCP，避免把「SNI 判据」误当成「IP 不通」（这正是 pornhub 时代探针全灭时踩过的坑的反面）。
+- **换节点要重新解析，不要重试死 URL。** H@H 直链带一次性 `keystamp` 且端口随机，重试同一 URL 必然持续失败；每次重新解析 `/s/` 页才是有效重试。
+

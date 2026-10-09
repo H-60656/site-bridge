@@ -2,7 +2,7 @@
 
 这份文档记录本项目的核心做法：**在目标站点被 DNS 污染 / SNI 阻断 / IP 封锁 / 反爬识别时，怎么让程序直接拿到数据。** 它不是 API 手册（那是 README），而是「遇到连不上时该怎么想、怎么定位、怎么选手段」的方法论。
 
-适用对象：任何被链路中间盒干扰的站点。项目里已经用同一套思路落地了三个站点 —— Pixiv（`pixiv_bridge/`）、iwara.tv（`iwara/`）与 asmr.one（`asmr_one/`），本文最后一节对照它们说明「同方法、不同手段」。
+适用对象：任何被链路中间盒干扰的站点。项目里已经用同一套思路落地了四个站点 —— Pixiv（`pixiv_bridge/`）、iwara.tv（`iwara/`）、asmr.one（`asmr_one/`）与 E-Hentai（`ehviewer/`），本文最后一节对照它们说明「同方法、不同手段」。
 
 ---
 
@@ -191,29 +191,29 @@ else:                   # 普通路径
 
 直连能力是**可选增强**，不能反过来成为负担：
 
-- **站点隔离，单向依赖。** `pixiv_bridge/` 是纯框架，永远不认识 `pixiv/`、`iwara/`、`asmr_one/`、`novel/`、`iwara_web/`；站点与扩展只能 `import pixiv_bridge.*`（各站点之间也互不依赖）。`scripts/check_boundary.py` 用 AST + 子进程探路由来强制这条边界，`scripts/sites.py` 是构建侧的登记表。
+- **站点隔离，单向依赖。** `pixiv_bridge/` 是纯框架，永远不认识 `pixiv/`、`iwara/`、`asmr_one/`、`ehviewer/`、`novel/`、`iwara_web/`；站点与扩展只能 `import pixiv_bridge.*`（各站点之间也互不依赖）。`scripts/check_boundary.py` 用 AST + 子进程探路由来强制这条边界，`scripts/sites.py` 是构建侧的登记表。
 - **挑选站点也只写一次。** 根目录的启动就是**项目导航**：`pixiv_bridge/__main__.py` 发现「有 `run.py` 的目录＝接口项目、只有 `extension.py` 的目录＝扩展」，用 `ast` 从站点自己的文件里读导航用的字面量（标题、简介、`Site.nav_order`），**不 import 也不执行站点代码**，选完才 `runpy.run_path` 交给它的 `run.py`。`start.bat` / `start.sh` 因此只是转发器（在 sh/bat 里各抄一套发现＋排序＋询问必然与 Python 侧漂移，而且 shell 读不到 `nav_order`）。
-- **重依赖不进根清单。** `curl_cffi` 是编译包，只有 iwara 与 asmr.one 需要，所以分别写在 `iwara/requirements.txt`、`asmr_one/requirements.txt` 里，由 `pixiv_bridge/deps.py` 的通用 `ensure_packages(names, requirements)` 按需安装，站点在自己 `run.py` 里先 `bootstrap(partial(ensure_packages, ...))` 再用它。只跑 Pixiv 的用户完全不必碰它。
+- **重依赖不进根清单。** `curl_cffi` 是编译包，只有 iwara、asmr.one 与 E-Hentai 需要，所以分别写在 `iwara/requirements.txt`、`asmr_one/requirements.txt`、`ehviewer/requirements.txt` 里，由 `pixiv_bridge/deps.py` 的通用 `ensure_packages(names, requirements)` 按需安装，站点在自己 `run.py` 里先 `bootstrap(partial(ensure_packages, ...))` 再用它。只跑 Pixiv 的用户完全不必碰它。
 - **可选能力要有回退，且失败要安静。** 登录态失效不该让整站不可用 —— iwara 的 `_prepare_auth`（`iwara/client.py:465-485`）换不出 access token 时只把原因记进 `auth_error` 并退回匿名，因为「iwara 的绝大部分内容匿名就能看，为了一个失效的 token 让整站不可用是本末倒置」。
 - **能力自检要暴露给用户。** `/api/iwara/auth` 匿名时刻意不去打 `/user`（那返回 401，看着像报错），所以它永远 200；只有真拿到 access token 才问一次 `/user` 填 `username_hint` —— 顺带一条教训：token 载荷里**没有**用户名字段（只有 `exp`/`id`/`role`），早期直接读载荷的 `username` 于是恒为 `None`，而当时的测试替身自己往载荷里塞了 `username`，正好把这个 bug 盖住了。
 
 ---
 
-## 7. 同一套方法、三个不同站点
+## 7. 同一套方法、四个不同站点
 
-| | Pixiv 站点（`pixiv/`） | iwara.tv 站点（`iwara/`） | asmr.one 站点（`asmr_one/`） |
-| --- | --- | --- | --- |
-| 阻塞形态 | SNI 阻断 + DNS 污染 | DNS 污染 + Cloudflare 反爬挑战 | Cloudflare 边缘 IP 级阻断（同一批边缘对 Google 也返回 404，本机整段不通） |
-| ① DNS | 默认解析可用；直连模式下走内置 IP 池 | **解析完全不可信**，DoH 也返回污染答案 → 种子 IP 表 | 同样不可信 → 种子 IP 表 + DoH 只作补充候选（排种子之后） |
-| ② IP | 官方源站 IP 池，逐 IP 回退 | 种子池 + 可达性探测 + 单 IP 固定 + 404 换 IP | 种子池 + 可达性探测 + 单 IP 固定 + 换 IP 重试（媒体主机换 IP 有效） |
-| ③ TLS | 无 SNI 握手 **或** ECH（OpenSSL 4.0+） | `curl_cffi` `impersonate="chrome"`，可选再叠 ECH（`IWARA_BRIDGE_ECH=1`） | `curl_cffi` `impersonate="chrome"` + **ECH 默认开**（`ASMR_BRIDGE_ECH` 不写就是开） |
-| ④ 应用 | `X-Client-Time` / `X-Client-Hash` 签名 + OAuth 令牌 | 浏览器头 + `X-Version` 签名（双盐）+ 可选登录 | 只要浏览器头：无签名、无令牌（站点只暴露匿名端点） |
-| 传输层实现 | 自写 `sni_client.py` / `ech_client.py`（复用同一套报文构造） | `curl_cffi.AsyncSession`（因为必须拿浏览器指纹） | `curl_cffi.AsyncSession`（同上） |
-| ECH 走法 | ctypes 调 OpenSSL 4.0+ 的 `SSL_set1_ech_config_list`（要自带 `openssl-libs/`） | `curl_cffi` 的 `CurlOpt.ECH`（libcurl 的 `CURLOPT_ECH`），**不需要动态库** | 同 iwara（`CurlOpt.ECH`，不需要动态库），且**默认就开** |
-| 额外依赖 | 无（ctypes 驱动自带 libssl） | `curl_cffi`（编译包，单独 requirements） | `curl_cffi`（编译包，单独的 `asmr_one/requirements.txt`） |
-| 登录 | 必需（OAuth） | 可选（公开内容匿名可看） | **不需要**（纯匿名，连 `login_check` 都没有） |
+| | Pixiv 站点（`pixiv/`） | iwara.tv 站点（`iwara/`） | asmr.one 站点（`asmr_one/`） | E-Hentai 站点（`ehviewer/`） |
+| --- | --- | --- | --- | --- |
+| 阻塞形态 | SNI 阻断 + DNS 污染 | DNS 污染 + Cloudflare 反爬挑战 | Cloudflare 边缘 IP 级阻断（同一批边缘对 Google 也返回 404，本机整段不通） | 上游自己解析出的那几个边缘 IP 被 IP 级阻断（整段不通，连 TCP 都建不起来） |
+| ① DNS | 默认解析可用；直连模式下走内置 IP 池 | **解析完全不可信**，DoH 也返回污染答案 → 种子 IP 表 | 同样不可信 → 种子 IP 表 + DoH 只作补充候选（排种子之后） | 不可信，且自己解析出的 IP 恰好是被封的那些 → 内置 16 个别的 Cloudflare anycast IP 种子池 |
+| ② IP | 官方源站 IP 池，逐 IP 回退 | 种子池 + 可达性探测 + 单 IP 固定 + 404 换 IP | 种子池 + 可达性探测 + 单 IP 固定 + 换 IP 重试（媒体主机换 IP 有效） | 种子池 + 裸 TCP 探可达（`probe_edge` 只建连不发 TLS，所以不被 SNI 判据拦）+ **轮转游标**换边缘重试 |
+| ③ TLS | 无 SNI 握手 **或** ECH（OpenSSL 4.0+） | `curl_cffi` `impersonate="chrome"`，可选再叠 ECH（`IWARA_BRIDGE_ECH=1`） | `curl_cffi` `impersonate="chrome"` + **ECH 默认开**（`ASMR_BRIDGE_ECH` 不写就是开） | **强制 HTTP/3**（`EH_BRIDGE_HTTP3` 默认开）：HTTPS/1.1 与 HTTP/2 会因 SNI 不符被拒，只有 QUIC（UDP:443）不受这个判据限制 |
+| ④ 应用 | `X-Client-Time` / `X-Client-Hash` 签名 + OAuth 令牌 | 浏览器头 + `X-Version` 签名（双盐）+ 可选登录 | 只要浏览器头：无签名、无令牌（站点只暴露匿名端点） | 只要浏览器头：无签名、无令牌（同样只暴露匿名端点）；元数据走官方 `api.php` 的 `gdata` |
+| 传输层实现 | 自写 `sni_client.py` / `ech_client.py`（复用同一套报文构造） | `curl_cffi.AsyncSession`（因为必须拿浏览器指纹） | `curl_cffi.AsyncSession`（同上） | `curl_cffi.AsyncSession` + 会话级 `CurlOpt.RESOLVE` 把域名钉到选中的边缘 IP（一条 RESOLVE 只认一个 IP，所以一 host 一 IP 一个会话） |
+| ECH 走法 | ctypes 调 OpenSSL 4.0+ 的 `SSL_set1_ech_config_list`（要自带 `openssl-libs/`） | `curl_cffi` 的 `CurlOpt.ECH`（libcurl 的 `CURLOPT_ECH`），**不需要动态库** | 同 iwara（`CurlOpt.ECH`，不需要动态库），且**默认就开** | 不走 ECH —— 这条链路的解法是 HTTP/3，用 `CurlOpt.HTTP_VERSION = CurlHttpVersion.V3` 打开 |
+| 额外依赖 | 无（ctypes 驱动自带 libssl） | `curl_cffi`（编译包，单独 requirements） | `curl_cffi`（编译包，单独的 `asmr_one/requirements.txt`） | `curl_cffi`（编译包，单独的 `ehviewer/requirements.txt`；换边缘 IP 与 HTTP/3 都由它的 libcurl 提供） |
+| 登录 | 必需（OAuth） | 可选（公开内容匿名可看） | **不需要**（纯匿名，连 `login_check` 都没有） | **不需要**（纯匿名，同样没有 `login_check`；exhentai 里站内容会直接返回 401，本项目不碰它） |
 
-**结论**：面对新站点时，先按第 2 节的决策树定位，再到第 3 节挑对应层的手段。三个站点的差异全部集中在**具体手段的选择**上 —— 方法论是一样的。iwara 与 asmr.one 两者尤其像：同一副「种子 IP 池 + 浏览器指纹 + 换 IP 重试」的骨架，差别只在 ECH 的默认开关与登录态。要注意的是**站点之间不许互相 import**（`check_boundary.py` 会拦），所以 `asmr_one/ech.py` 是 `iwara/ech.py` 的**自足副本**，而不是引用。
+**结论**：面对新站点时，先按第 2 节的决策树定位，再到第 3 节挑对应层的手段。四个站点的差异全部集中在**具体手段的选择**上 —— 方法论是一样的。iwara 与 asmr.one 两者尤其像：同一副「种子 IP 池 + 浏览器指纹 + 换 IP 重试」的骨架，差别只在 ECH 的默认开关与登录态；E-Hentai 与它们共用同一副骨架，但把「指纹 + ECH」换成了「浏览器头都不伪造 + 强制 HTTP/3」，理由在第三节：它的墙是按 IP 与 SNI 判的，不是按指纹判的。要注意的是**站点之间不许互相 import**（`check_boundary.py` 会拦），所以 `asmr_one/ech.py` 是 `iwara/ech.py` 的**自足副本**，而不是引用。
 
 ---
 
@@ -247,5 +247,9 @@ else:                   # 普通路径
 | `ASMR_BRIDGE_ECH` | asmr.one 的 ECH（走 `curl_cffi` 的 libcurl，不需要 OpenSSL 动态库）。**与 iwara 相反：不写就是开**，要关必须显式写 `ASMR_BRIDGE_ECH=0` |
 | `ASMR_BRIDGE_ECH_CONFIG` | 手动指定 asmr 的 ECH 配置；留空走 DoH（阿里 → `223.5.5.5`），失败用内置默认值 |
 | `ASMR_BRIDGE_ECH_IPS` | 给 asmr 的 ECH 主机额外追加的入口 IP（排在内置种子之后） |
+| `EH_BRIDGE_HTTP3` | ehviewer（E-Hentai）的 HTTP/3。**默认开**（要关必须显式写 `0`）：它的墙按 IP 与 SNI 判，HTTP/1.1 与 HTTP/2 都会被拒，只有 QUIC 走得通 |
+| `EH_BRIDGE_EDGE_IPS` | 覆盖内置的 16 个 Cloudflare anycast 候选 IP（逗号分隔）。内置表里**故意排除了** e-hentai 自己解析出的那两个被 IP 级阻断的地址 |
+| `EH_BRIDGE_EDGE_ATTEMPTS` | 一次请求最多换几个边缘 IP 重试（默认 `5`） |
+| `EH_BRIDGE_IMAGE_ATTEMPTS` | 图片代转时最多重新解析几次 `/s/` 页拿新 H@H 节点（默认 `4`） |
 
-> 起手先跑 `python pixiv/run.py --check`：自检会逐项报告 python / deps / 项目文件 / 端口 / 网络 / ECH 的状态，把「四道关」的结论直接摊开（`--check` 不监听端口，所以 `port` 只警告不中止）。加了站点之后自检也要跟着长：iwara 入口跑 `python iwara/run.py --check`，会在这张表后面追加 `iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录` 三项，开了 `IWARA_BRIDGE_ECH=1` 再追加 `iwara ECH`（真发一次 `/cdn-cgi/trace` 看回显是不是 `sni=encrypted`）；asmr.one 入口跑 `python asmr_one/run.py --check`，追加 `asmr 依赖`、`asmr 网络`（真发一次 `GET /api/works?page=1`，要整条「借道 IP 池 + impersonate + ECH」链路通才算过）以及 `asmr ECH`（**默认就有**，因为 ECH 默认开；写成 `ASMR_BRIDGE_ECH=0` 关掉后才是 2 项），它没有登录自检。——**新站点照这个套路做**：把「本层的判据」写成一条 `CheckResult`，挂在 `Site` 契约的 `checks`（以及 `login_check` / `network_hint`）上（见 `pixiv_bridge/site.py`），框架的 `pixiv_bridge.cli.main(site=SITE)` 就会把它与通用检查打在同一张表里。另外别忘了在构建侧登记：`scripts/sites.py` 的 `SITES` 加一条，`check_boundary.py` / `make_share_packages.py` 才认这个新站点。
+> 起手先跑 `python pixiv/run.py --check`：自检会逐项报告 python / deps / 项目文件 / 端口 / 网络 / ECH 的状态，把「四道关」的结论直接摊开（`--check` 不监听端口，所以 `port` 只警告不中止）。加了站点之后自检也要跟着长：iwara 入口跑 `python iwara/run.py --check`，会在这张表后面追加 `iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录` 三项，开了 `IWARA_BRIDGE_ECH=1` 再追加 `iwara ECH`（真发一次 `/cdn-cgi/trace` 看回显是不是 `sni=encrypted`）；asmr.one 入口跑 `python asmr_one/run.py --check`，追加 `asmr 依赖`、`asmr 网络`（真发一次 `GET /api/works?page=1`，要整条「借道 IP 池 + impersonate + ECH」链路通才算过）以及 `asmr ECH`（**默认就有**，因为 ECH 默认开；写成 `ASMR_BRIDGE_ECH=0` 关掉后才是 2 项），它没有登录自检；ehviewer 入口跑 `python ehviewer/run.py --check`，追加 `ehviewer 依赖`（真 import `curl_cffi`，并检查有没有 `CurlHttpVersion`——没有就说明这个 curl_cffi 缺 HTTP/3 支持）、`ehviewer 边缘`（并发探 16 个候选 anycast IP，**只建 TCP 不发 TLS**，所以不会被 SNI 判据误杀）、`ehviewer 站点`（真发一次首页 `list_galleries()`，这是整条链路唯一的判据；`EH_BRIDGE_HTTP3` 关掉时会额外提示「取到页面属于侥幸」）——同样没有登录自检。——**新站点照这个套路做**：把「本层的判据」写成一条 `CheckResult`，挂在 `Site` 契约的 `checks`（以及 `login_check` / `network_hint`）上（见 `pixiv_bridge/site.py`），框架的 `pixiv_bridge.cli.main(site=SITE)` 就会把它与通用检查打在同一张表里。另外别忘了在构建侧登记：`scripts/sites.py` 的 `SITES` 加一条，`check_boundary.py` / `make_share_packages.py` 才认这个新站点。

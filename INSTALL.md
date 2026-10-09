@@ -6,7 +6,7 @@
 - 安卓 / Termux（以及其它 Linux）走 [第 2 节](#2-安卓--termux以及-其它-linux)
 - 只想给别的程序调用接口：装好、登录好之后，接口地址是 `http://127.0.0.1:8765/api/...`
 
-> **入口有三个，别搞混**：一键脚本（`start.bat` / `start.sh`）和 `python pixiv/run.py` 跑的是**同一个接口项目**（Pixiv），浏览器打开 `http://127.0.0.1:8765/` 会看到**导航页**（不挂扩展时列出接口文档等自带入口）；要下面第 5 步那个小说阅读器页面，请在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel` 后**还是用原来那个启动方式**（阅读器没有自己的入口脚本了，见「附属项目（扩展）」），阅读器在 `/novel`。另外两个入口 `python iwara\run.py` 与 `python asmr_one\run.py` 是**与 `pixiv/` 同级的另外两个接口项目**：iwara.tv 只提供 `/api/iwara/*`（视频页面 `iwara_web` 是扩展、默认不挂，见第 5 节），asmr.one 只提供 `/api/asmr/*`；它们都不挂任何 Pixiv 路由，也互不挂对方的路由。**一键脚本第一次会先列出项目导航**（接口项目 + 扩展）让你挑：直接回车＝默认的 Pixiv，输入 `2` 或 `iwara` 就起 iwara，输入 `3` 或 `asmr_one` 就起 asmr.one；设了环境变量 `BRIDGE_SITE=iwara` 就跳过询问直接起 iwara。
+> **入口有四个，别搞混**：一键脚本（`start.bat` / `start.sh`）和 `python pixiv/run.py` 跑的是**同一个接口项目**（Pixiv），浏览器打开 `http://127.0.0.1:8765/` 会看到**导航页**（不挂扩展时列出接口文档等自带入口）；要下面第 5 步那个小说阅读器页面，请在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel` 后**还是用原来那个启动方式**（阅读器没有自己的入口脚本了，见「附属项目（扩展）」），阅读器在 `/novel`。另外三个入口 `python iwara\run.py`、`python asmr_one\run.py` 与 `python ehviewer\run.py` 是**与 `pixiv/` 同级的另外三个接口项目**：iwara.tv 只提供 `/api/iwara/*`（视频页面 `iwara_web` 是扩展、默认不挂，见第 5 节），asmr.one 只提供 `/api/asmr/*`，E-Hentai 只提供 `/api/eh/*`；它们都不挂任何 Pixiv 路由，也互不挂对方的路由。**一键脚本第一次会先列出项目导航**（接口项目 + 扩展）让你挑：直接回车＝默认的 Pixiv，输入 `2` 或 `iwara` 就起 iwara，输入 `3` 或 `asmr_one` 就起 asmr.one，输入 `4` 或 `ehviewer` 就起 E-Hentai；设了环境变量 `BRIDGE_SITE=iwara` 就跳过询问直接起 iwara。
 
 ---
 
@@ -19,7 +19,7 @@
 | **refresh_token**（登录凭证） | ✅ 自动 | 运行 `python pixiv/get_token.py` 登录一次，自动保存到 `data\tokens.json` |
 | 能连上 Pixiv 的网络 | ⚠️ 看环境 | 被墙时见第 4 节（ECH / SNI 绕过 / 代理 三选一） |
 | OpenSSL 4.0+（**只有 ECH 模式需要**） | ✅ **项目自带** | `openssl-libs/` 里已带 OpenSSL 4.x 的库，**Windows 与安卓 Termux 都开箱即用**；其它平台没带对应子目录时才需自己装（注意 3.x 全系都没有 ECH，装了也没用） |
-| curl_cffi（**iwara / asmr.one 两个站点需要**） | ✅ 自动下载 | 想用 `iwara/run.py` 或 `asmr_one/run.py` 时第一次启动自动装；只跑 Pixiv 的话完全不需要它。Termux 上要 Python 3.13+ 才是现成轮子（见第 8 节） |
+| curl_cffi（**iwara / asmr.one / E-Hentai 三个站点需要**） | ✅ 自动下载 | 想用 `iwara/run.py`、`asmr_one/run.py` 或 `ehviewer/run.py` 时第一次启动自动装；只跑 Pixiv 的话完全不需要它。Termux 上要 Python 3.13+ 才是现成轮子（见第 8 节） |
 | 完全没网的机器 | ❌ 需要提前准备 | 见 `README.md` 的「完全离线部署」（提前下载 `wheels/` 目录） |
 
 > 除了 Python 解释器，其它 Python 依赖都会自动安装。项目文件夹本身是自包含的。
@@ -48,7 +48,7 @@
 
 **第 3 步：启动**
 
-双击目录里的 **`start.bat`**（就是这个黑色窗口，别关它）——这会打开**项目导航**（列出接口项目与扩展），**直接回车**起的就是 Pixiv 接口那一版（不挂阅读器）；想跑 iwara 就输入 `2` 或 `iwara`，想跑 asmr.one 就输入 `3` 或 `asmr_one`（asmr 匿名可用，不需要登录）。
+双击目录里的 **`start.bat`**（就是这个黑色窗口，别关它）——这会打开**项目导航**（列出接口项目与扩展），**直接回车**起的就是 Pixiv 接口那一版（不挂阅读器）；想跑 iwara 就输入 `2` 或 `iwara`，想跑 asmr.one 就输入 `3` 或 `asmr_one`，想跑 E-Hentai 就输入 `4` 或 `ehviewer`（asmr 与 E-Hentai 都匿名可用，不需要登录）。
 
 > 想直接看小说阅读器页面（本文第 5 步要开的那个网页），**不需要换启动方式**，只要在 `.env` 里加一行再照常用 `start.bat` 启动：
 >
@@ -57,7 +57,7 @@
 > PIXIV_BRIDGE_EXTENSIONS=novel
 > ```
 >
-> `--port` 等参数用法完全不变，各接口项目共用同一套检查表。默认（不写扩展，走 `pixiv/run.py`）时 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、`/api/health` 等自带入口，此时不会有阅读器链接），加了 `PIXIV_BRIDGE_EXTENSIONS=novel` 就多出 `/novel` 阅读器页面（导航页上也会多出指向它的链接）和阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara\run.py` 是**另一个站点**，只提供 `/api/iwara/*`（不挂任何 Pixiv 接口），要 iwara 的视频页面，就在 `.env` 里再加一项 `iwara_web`（`PIXIV_BRIDGE_EXTENSIONS=iwara_web`，多项用逗号分隔；它调 `/api/iwara/*`，所以要配合 `iwara\run.py` 用）；`asmr_one\run.py` 是**第三个站点**，只提供 `/api/asmr/*`，纯匿名不需要登录。它不挂任何 Pixiv 或 iwara 路由。
+> `--port` 等参数用法完全不变，各接口项目共用同一套检查表。默认（不写扩展，走 `pixiv/run.py`）时 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、`/api/health` 等自带入口，此时不会有阅读器链接），加了 `PIXIV_BRIDGE_EXTENSIONS=novel` 就多出 `/novel` 阅读器页面（导航页上也会多出指向它的链接）和阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara\run.py` 是**另一个站点**，只提供 `/api/iwara/*`（不挂任何 Pixiv 接口），要 iwara 的视频页面，就在 `.env` 里再加一项 `iwara_web`（`PIXIV_BRIDGE_EXTENSIONS=iwara_web`，多项用逗号分隔；它调 `/api/iwara/*`，所以要配合 `iwara\run.py` 用）；`asmr_one\run.py` 是**第三个站点**，只提供 `/api/asmr/*`，纯匿名不需要登录；`ehviewer\run.py` 是**第四个站点**，只提供 `/api/eh/*`，同样匿名可用（E-Hentai 公开画廊不需要登录）。它们都不挂任何 Pixiv 或 iwara 路由，也互不挂对方的路由。
 
 - 第一次运行会：自动生成 `.env` 配置文件 → 自动下载依赖（**1~3 分钟，属正常**）→ 打印环境检查结果（框架 4 项 + 本站点自己的检查项）→ 开始监听。
 - 看到类似下面的内容就成功了：
@@ -185,9 +185,10 @@ cd ~/pixiv-bridge && python pixiv/get_token.py
 python pixiv/run.py --check        # 查的是同一套环境，跟挂没挂扩展无关
 python iwara/run.py --check  # 同一套 + 3 项 iwara 专属（依赖 / api.iwara.tv / 登录态）
 python asmr_one/run.py --check  # 同一套 + 3 项 asmr 专属（依赖 / api.asmr.one / ECH，默认就有 ECH）
+python ehviewer/run.py --check  # 同一套 + 3 项 ehviewer 专属（依赖 / Cloudflare 边缘 / e-hentai.org 站点）
 ```
 
-（各入口的 `--check` 查的是同一套环境：Python / 依赖 / 项目文件 / 端口 / 网络 / ECH，其中 `port` 在 `--check` 下只警告不中止——毕竟这条路不监听端口。iwara 入口再追加 3 项：`iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录`（没配 token 就报匿名模式，配了就真刷一次并读用户名）。`asmr_one` 入口追加 3 项：`asmr 依赖`（真 import `curl_cffi`）、`asmr 网络`（真发一次 `GET /api/works?page=1`，要整条「借道 IP 池 + impersonate + ECH」链路通才算过）、`asmr ECH`（真发一次 `/cdn-cgi/trace` 看回显是不是 `sni=encrypted`；`ASMR_BRIDGE_ECH` **默认就开**，所以默认有这一项，写成 `ASMR_BRIDGE_ECH=0` 关掉后才剩 2 项）。这些都只警告、不中止，因为它们失败只影响该站点自己的接口，入口照样能启动；asmr.one 没有登录自检，是纯匿名的。）
+（各入口的 `--check` 查的是同一套环境：Python / 依赖 / 项目文件 / 端口 / 网络 / ECH，其中 `port` 在 `--check` 下只警告不中止——毕竟这条路不监听端口。iwara 入口再追加 3 项：`iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录`（没配 token 就报匿名模式，配了就真刷一次并读用户名）。`asmr_one` 入口追加 3 项：`asmr 依赖`（真 import `curl_cffi`）、`asmr 网络`（真发一次 `GET /api/works?page=1`，要整条「借道 IP 池 + impersonate + ECH」链路通才算过）、`asmr ECH`（真发一次 `/cdn-cgi/trace` 看回显是不是 `sni=encrypted`；`ASMR_BRIDGE_ECH` **默认就开**，所以默认有这一项，写成 `ASMR_BRIDGE_ECH=0` 关掉后才剩 2 项）。`ehviewer` 入口追加 3 项：`ehviewer 依赖`（真 import `curl_cffi` 并检查有没有 `CurlHttpVersion`，HTTP/3 就靠它）、`ehviewer 边缘`（并发探内置的 16 个候选 Cloudflare anycast IP，只建 TCP 不发 TLS，不算站点是否通）、`ehviewer 站点`（真发一次首页 `list_galleries()`，这是整条链路唯一的判据；`EH_BRIDGE_HTTP3` 关掉时会提示「取到页面属于侥幸」）。这些都只警告、不中止，因为它们失败只影响该站点自己的接口，入口照样能启动；asmr.one 与 E-Hentai 都没有登录自检，都是纯匿名的。）
 
 > **为什么有这些通道、各自对付什么**，以及换到别的站点时怎么从头定位，见 **[DIRECT.md](DIRECT.md)**（直连思路）。这里只讲「按现象选哪一条」。
 
@@ -253,18 +254,20 @@ PIXIV_PROXY=http://127.0.0.1:7890
 
 | 平台 | 启动 |
 | --- | --- |
-| Windows | 只需 Pixiv 接口：`start.bat` 然后回车（导航里的默认项就是它）；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `start.bat`；要用 iwara：`start.bat iwara` 或 `python iwara\run.py`（要 iwara 视频页面再加 `iwara_web`）；要用 asmr.one：`start.bat asmr_one` 或 `python asmr_one\run.py` |
-| Termux / Linux | 只需接口：`cd pixiv-bridge && sh start.sh` 然后回车；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `sh start.sh`；要用 iwara 视频：`sh start.sh iwara` 或 `python3 iwara/run.py`（要 iwara 视频页面再加 `iwara_web`）；要用 asmr.one：`sh start.sh asmr_one` 或 `python3 asmr_one/run.py` |
+| Windows | 只需 Pixiv 接口：`start.bat` 然后回车（导航里的默认项就是它）；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `start.bat`；要用 iwara：`start.bat iwara` 或 `python iwara\run.py`（要 iwara 视频页面再加 `iwara_web`）；要用 asmr.one：`start.bat asmr_one` 或 `python asmr_one\run.py`；要用 E-Hentai：`start.bat ehviewer` 或 `python ehviewer\run.py` |
+| Termux / Linux | 只需接口：`cd pixiv-bridge && sh start.sh` 然后回车；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `sh start.sh`；要用 iwara 视频：`sh start.sh iwara` 或 `python3 iwara/run.py`（要 iwara 视频页面再加 `iwara_web`）；要用 asmr.one：`sh start.sh asmr_one` 或 `python3 asmr_one/run.py`；要用 E-Hentai：`sh start.sh ehviewer` 或 `python3 ehviewer/run.py` |
 
-> 差别只在多挂了什么：一键脚本先给一个**项目导航**（直接回车＝默认的 `pixiv/run.py`）——默认只跑 Pixiv 接口、不挂扩展，浏览器打开 `/` 是**导航页**（列出接口文档、健康检查等自带入口）；在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 就在同一个入口上多挂了小说阅读器页面（`http://127.0.0.1:8765/novel`，导航页上也会多一段链接）与阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara/run.py` 提供的是 `/api/iwara/*`（视频浏览、解析直链、代转播放），它的 `/` 也是导航页、额外多一段 iwara 自己的入口；`asmr_one/run.py` 提供的是 `/api/asmr/*`（作品浏览、搜索、详情、音轨树、封面与音频代转），同样是导航页 + 自己那一段，且**匿名即可用**。命令行参数（`--host` / `--port` / `--reload` / `--check`）都一样，`python -m pixiv_bridge --list` 可以只看导航不启动。
+> 差别只在多挂了什么：一键脚本先给一个**项目导航**（直接回车＝默认的 `pixiv/run.py`）——默认只跑 Pixiv 接口、不挂扩展，浏览器打开 `/` 是**导航页**（列出接口文档、健康检查等自带入口）；在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 就在同一个入口上多挂了小说阅读器页面（`http://127.0.0.1:8765/novel`，导航页上也会多一段链接）与阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara/run.py` 提供的是 `/api/iwara/*`（视频浏览、解析直链、代转播放），它的 `/` 也是导航页、额外多一段 iwara 自己的入口；`asmr_one/run.py` 提供的是 `/api/asmr/*`（作品浏览、搜索、详情、音轨树、封面与音频代转），同样是导航页 + 自己那一段，且**匿名即可用**；`ehviewer/run.py` 提供的是 `/api/eh/*`（画廊列表、搜索、详情、图片页、元数据、图片代转），也是导航页 + 自己那一段，同样**不需要登录**。命令行参数（`--host` / `--port` / `--reload` / `--check`）都一样，`python -m pixiv_bridge --list` 可以只看导航不启动。
 
 > **阅读器为什么没有自己的启动命令？** 它现在按「扩展」的方式挂到接口项目上：配置里写目录名（`PIXIV_BRIDGE_EXTENSIONS=novel`），程序自己去找 `novel/extension.py`。这样每个接口项目各留一个入口，阅读器不再需要单独的脚本。写错目录名不会静默降级——启动前会打印一条错误并退出。
 
-> iwara 与 asmr.one 那两条入口第一次启动会额外装一个 `curl_cffi`（比框架依赖慢一点，属正常）。Windows / Linux / macOS 与 **Python 3.13+ 的 Termux** 装的都是官方现成轮子；Termux 上 Python 是 3.12 及以下时没有对应轮子，会退回源码编译（要 Rust + C 工具链），见第 8 节排错表。
+> iwara、asmr.one 与 E-Hentai 那三条入口第一次启动会额外装一个 `curl_cffi`（比框架依赖慢一点，属正常）。Windows / Linux / macOS 与 **Python 3.13+ 的 Termux** 装的都是官方现成轮子；Termux 上 Python 是 3.12 及以下时没有对应轮子，会退回源码编译（要 Rust + C 工具链），见第 8 节排错表。
 >
 > **iwara 登录是可选的**：公开内容（含 R18）匿名就能看、能解析直链、能播。登录只为两件事——「订阅作者的内容」和「自己账号下的私密视频」。想登录就跑一次 `python iwara/get_token.py`（Termux：`python3 iwara/get_token.py`，只收邮箱 + 密码，没有浏览器授权），token 存到 `data/iwara_tokens.json`；`--status` 看当前登录态，`--logout` 删掉。也可以用环境变量 `IWARA_REFRESH_TOKEN` 临时覆盖。token 失效不会拖垮整站：自动退回匿名，接口照常可用。
 >
 > **asmr.one 不需要登录**：浏览、搜索、播放全部匿名可用，所以它没有 `get_token.py`，也没有 `login_check`。它与 iwara 一样走 `curl_cffi`（种子 IP 池 + 浏览器指纹 + DoH 换 IP 重试），但 **ECH 默认是开的**（`ASMR_BRIDGE_ECH` 不写就等于开）；要关掉就显式写 `ASMR_BRIDGE_ECH=0`。
+>
+> **E-Hentai 也不需要登录**：公开画廊匿名可读，所以 `ehviewer/` 同样没有 `get_token.py` 和 `login_check`。它另有一条规矩——**必须强制 HTTP/3**（`EH_BRIDGE_HTTP3` 默认开）：`e-hentai.org` 自己解析出来的那两个边缘 IP 在本机是 IP 级被阻断的，所以要借道别的 Cloudflare anycast IP 并用 HTTP/3 打过去；关掉这个开关大概率连不上。图片字节在 `*.hath.network` 的 H@H 节点上，必须走 `/api/eh/proxy?url=...` 代转。
 
 启动后：
 
@@ -275,6 +278,7 @@ PIXIV_PROXY=http://127.0.0.1:7890
 - iwara 视频页面（**需 `iwara/run.py` 入口 + `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`**）：<http://127.0.0.1:8765/iwara>；用 `pixiv/run.py` 启动、或没挂 `iwara_web` 时是 404，属正常
 - iwara 视频接口（**需 `iwara/run.py` 入口**）：<http://127.0.0.1:8765/api/iwara/videos>；用 `pixiv/run.py` 启动时是 404，属正常
 - asmr.one 接口（**需 `asmr_one/run.py` 入口**）：<http://127.0.0.1:8765/api/asmr/works>（搜索 `/api/asmr/search?query=...`、作品详情 `/api/asmr/work/{id}`、音轨 `/api/asmr/tracks/{id}`、封面 `/api/asmr/cover/{id}`、音频 `/api/asmr/stream?url=...`）；用 `pixiv/run.py` 或 `iwara/run.py` 启动时是 404，属正常
+- E-Hentai 接口（**需 `ehviewer/run.py` 入口**）：<http://127.0.0.1:8765/api/eh/list>（搜索 `/api/eh/search?query=...`、画廊详情 `/api/eh/gallery/{gid}/{token}`、图片页清单 `/api/eh/images/{gid}/{token}`、元数据 `/api/eh/metadata?gid=&token=`、图片代转 `/api/eh/proxy?url=...`）；用别的入口启动时是 404，属正常
 - 给别的程序调用，例如：
 
   ```sh
@@ -285,10 +289,10 @@ PIXIV_PROXY=http://127.0.0.1:7890
 
 **搬机器 / 分享给别人**：整个项目文件夹拷过去即可，但**不要拷** `.env`、`data\` 目录（里面有你的账号凭证 `data\tokens.json`，以及阅读历史、下载记录、收藏台账和页面配置）、`.venv`、`__pycache__`。反过来，如果只是自己换台电脑、想把进度带走，**只拷 `data\` 目录**就够了。详见 `README.md` 的「打包与移植」。
 
-**只分享一部分**：项目现在是三层（框架 + 三个同级接口项目 + 两个扩展），可以按用途单独打包。跑一条命令就能生成七个现成的分享包（Pixiv 接口 / 只有 iwara 的接口 / 只有 asmr.one 的接口 / 两个扩展包 / 两个配好的组合包）：
+**只分享一部分**：项目分三层（框架 + 四个同级接口项目 + 两个扩展），可以按用途单独打包。跑一条命令就能生成八个现成的分享包（Pixiv 接口 / 只有 iwara 的接口 / 只有 asmr.one 的接口 / 只有 E-Hentai 的接口 / 两个扩展包 / 两个配好的组合包）：
 
 ```bash
-python scripts/make_share_packages.py          # 七个包全做，产物在 dist/
+python scripts/make_share_packages.py          # 八个包全做，产物在 dist/
 python scripts/make_share_packages.py --list   # 看看有哪几个
 ```
 
@@ -315,6 +319,10 @@ python scripts/make_share_packages.py --list   # 看看有哪几个
 | `/iwara` 打不开 / 404 | 视频页面现在归 **`iwara_web` 扩展包**：要 `python iwara\run.py` 入口 + `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`，并且 `iwara_web/` 目录要拷过来 |
 | `/api/iwara/...` 全部 404 | 用错入口了：iwara 接口只在 `python iwara\run.py` 下挂载，`pixiv/run.py` 那个站点没有（各站点互不挂对方的路由） |
 | `/api/asmr/...` 全部 404 | 用错入口了：asmr 接口只在 `python asmr_one\run.py` 下挂载，`pixiv/run.py` 与 `iwara/run.py` 都返回 404（各站点互不挂对方的路由；asmr 也不需要登录，404 一定是入口不对） |
+| `/api/eh/...` 全部 404 | 用错入口了：E-Hentai 接口只在 `python ehviewer\run.py` 下挂载，别的入口都返回 404（互不挂对方的路由；ehviewer 也不需要登录，404 一定是入口不对） |
+| ehviewer 入口报缺 `curl_cffi` | 依赖没装上。手动补一次：`pip install -r ehviewer/requirements.txt`（它同时负责 HTTP/3 与换边缘 IP，必需） |
+| ehviewer 全部接口都说「N 个候选边缘全部连不上」 | 内置的 16 个 Cloudflare anycast IP 在这个网络里全不通（`EH_BRIDGE_HTTP3=0` 时更容易出现）。换网络，或把实测可用的 anycast IP 写进 `EH_BRIDGE_EDGE_IPS`（逗号分隔，会**覆盖**内置表） |
+| ehviewer 取到页面但图片代转失败 | 大图在 `*.hath.network` 的 H@H 节点上，节点会失效且端口随机。默认会重新解析 `/s/` 页换节点重试 `EH_BRIDGE_IMAGE_ATTEMPTS`（默认 4）次；老是失败就调大这个值再试 |
 | iwara 入口报缺 `curl_cffi` | 依赖没装上。手动补一次：`pip install -r iwara/requirements.txt`。Termux 上先看 `python3 -V`：**3.13 及以上**能拿到官方安卓轮子（`android_24_arm64_v8a`），装的是现成轮子；**3.12 及以下**没有对应轮子，会退回源码编译（要 Rust + C 工具链），那才是真的装不动——先把 Python 升到 3.13+ 再装，比补底层库管用 |
 | iwara 接口返回 `cloudflare_challenge` | 站点把本机 IP 或 TLS 指纹拦了：换个网络/出口 IP 重试，或确认装的是真正的 `curl_cffi`（不要用别的 HTTP 库顶替） |
 | iwara 视频能解析出直链但播不动 | 该视频某个 CDN 花名主机（或种子 IP）在本机不通。`/api/iwara/resolve` 默认会逐个源探测并返回能用的那个（`chosen`）；`chosen` 为 `null` 时看 `probe_error` 里已尝试过哪些主机 |

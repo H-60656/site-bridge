@@ -4,7 +4,7 @@
 Pixiv 官方 App API（`app-api.pixiv.net`）调用方式（请求签名、OAuth 认证、全部端点），用 Python 重新实现的一个
 **自托管 HTTP 接口服务**。启动后，任何语言的代码通过普通 HTTP 请求即可调用 Pixiv 数据能力，无需处理签名、token 刷新、防盗链等细节。
 
-> 项目分三层：**`pixiv_bridge/`**（**框架**：启动、配置、环境自检、扩展机制、导航页与 `/api/health`；不含任何站点知识）、**`pixiv/`**、**`iwara/`** 与 **`asmr_one/`**（三个**同级的接口项目**，各有一个同构的 `run.py` 入口：分别提供 Pixiv 接口、iwara.tv 接口、asmr.one 接口）、**`novel/`** 与 **`iwara_web/`**（两个**扩展**：小说阅读器与 iwara 视频页面，没有自己的入口，把目录名写进配置就挂到对应站点上）。**新增一个站点** = 建一个与它们同级的目录（`app.py` 里按 `Site` 契约给出站点信息、自带检查（与可选的登录校验），`run.py` 只做三件事：`bootstrap()` → `from <站点>.app import SITE` → `pixiv_bridge.cli.main(site=SITE)`），框架一行都不用改；详见「附属项目（扩展）」与「新增一个接口项目」。
+> 项目分三层：**`pixiv_bridge/`**（**框架**：启动、配置、环境自检、扩展机制、导航页与 `/api/health`；不含任何站点知识）、**`pixiv/`**、**`iwara/`**、**`asmr_one/`** 与 **`ehviewer/`**（四个**同级的接口项目**，各有一个同构的 `run.py` 入口：分别提供 Pixiv 接口、iwara.tv 接口、asmr.one 接口、E-Hentai 接口）、**`novel/`** 与 **`iwara_web/`**（两个**扩展**：小说阅读器与 iwara 视频页面，没有自己的入口，把目录名写进配置就挂到对应站点上）。**新增一个站点** = 建一个与它们同级的目录（`app.py` 里按 `Site` 契约给出站点信息、自带检查（与可选的登录校验），`run.py` 只做三件事：`bootstrap()` → `from <站点>.app import SITE` → `pixiv_bridge.cli.main(site=SITE)`），框架一行都不用改；详见「附属项目（扩展）」与「新增一个接口项目」。
 
 ## 特性
 
@@ -20,6 +20,7 @@ Pixiv 官方 App API（`app-api.pixiv.net`）调用方式（请求签名、OAuth
 - **数据都在 `data/`**：token、阅读历史、下载记录、收藏台账、页面配置统一放在项目下的 `data/` 目录（老版本的 `tokens.json` / `history.jsonl` 首次启动自动搬过去），换机只需拷这一个目录
 - **可选的 iwara.tv 站点**（接口项目 `iwara/`，与 `pixiv/` 同级，用 `python iwara/run.py` 启动）：只提供 iwara 的视频浏览 / 搜索 / 详情 / 直链解析 / 缩略图（`/api/iwara/*`，不挂任何 Pixiv 路由），还自带一个**视频页面**（`http://127.0.0.1:8766/iwara`）：列表 / 搜索 / 筛选、点开详情看简介与标签、看相关视频、`<video>` 直接播（服务端代转字节并透传 `Range`，清晰度可切换）。直链是带签名的 MP4，浏览器里能直接播。用 `pixiv/run.py` 启动时这些地址是 404
 - **可选的 asmr.one 站点**（接口项目 `asmr_one/`，与 `pixiv/` 同级，用 `python asmr_one/run.py` 启动）：只提供 asmr.one 的作品浏览 / 关键词搜索 / 作品详情 / 音轨树 / 音频与封面代转（`/api/asmr/*`，不挂任何 Pixiv 路由），**匿名可用、不需要登录**。封面与音频字节一律由服务端代转（`/api/asmr/cover/{id}`、`/api/asmr/stream?url=...`），因为浏览器所在机器同样到不了那些 Cloudflare 边缘 IP。它和 iwara 一样自带 `curl_cffi` 客户端（种子 IP 池 + ECH），但**ECH 默认是开的**（asmr 的边缘 IP 在本机是 IP 级被阻断，不叠 ECH 基本不通；要关就写 `ASMR_BRIDGE_ECH=0`）。用 `pixiv/run.py` 启动时这些地址是 404
+- **可选的 E-Hentai 站点**（接口项目 `ehviewer/`，与 `pixiv/` 同级，用 `python ehviewer/run.py` 启动）：只提供 E-Hentai / e-hentai.org 的画廊列表 / 关键词搜索 / 画廊详情 / 图片页 / 图片代转（`/api/eh/*`，不挂任何 Pixiv 路由），**匿名可用、不需要登录**（exhentai 里站内容会返回 401，本站不碰）。它自带 `curl_cffi` 客户端并**借道 Cloudflare 别的 anycast IP + 强制 HTTP/3** 直连 `e-hentai.org`——E-Hentai 自己解析出来的边缘 IP 在本机是 IP 级被阻断的，所以 `EH_BRIDGE_HTTP3` 默认开着，关掉大概率整个站不通。大图字节一律由服务端代转（`/api/eh/proxy?url=...`），因为 `*.hath.network` 浏览器同样到不了。用 `pixiv/run.py` 启动时这些地址是 404
 - **OpenAPI 文档**：启动后访问 `http://127.0.0.1:8765/docs` 在线调试
 
 ## 原理
@@ -138,9 +139,12 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 
 # 接口 + asmr.one（多了 `/api/asmr/*` 那几个接口；匿名可用，不需要 token）
 .venv/bin/python asmr_one/run.py
+
+# 接口 + E-Hentai（多了 `/api/eh/*` 那几个接口；匿名可用，不需要 token）
+.venv/bin/python ehviewer/run.py
 ```
 
-项目分成三层，**站点与扩展依赖框架**、单向依赖不反过来（各站点之间也互不依赖）。**每个接口项目各有一个同构的入口脚本**（`pixiv/run.py`、`iwara/run.py` 与 `asmr_one/run.py`）；小说阅读器与 iwara 视频页面都没有专属入口，它们作为扩展挂上去：
+项目分成三层，**站点与扩展依赖框架**、单向依赖不反过来（各站点之间也互不依赖）。**每个接口项目各有一个同构的入口脚本**（`pixiv/run.py`、`iwara/run.py`、`asmr_one/run.py` 与 `ehviewer/run.py`）；小说阅读器与 iwara 视频页面都没有专属入口，它们作为扩展挂上去：
 
 | 启动方式 | 提供什么 |
 | --- | --- |
@@ -150,8 +154,9 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 | `iwara/run.py` | iwara.tv 接口项目（`iwara/`）：**只有**那十个 `/api/iwara/*`（浏览 / 搜索 / 详情 / 相关 / 直链解析 / 代转播放 / 图片 / 缩略图 / 登录态 / 授权），外加 `/` 上的**导航页**；它不挂任何 Pixiv 路由 |
 | `iwara/run.py` + `PIXIV_BRIDGE_EXTENSIONS=iwara_web` | 上面那些，再挂上 iwara 视频页面扩展（`iwara_web`）：`/iwara` 上的播放页（浏览 / 搜索 / 播放 / 相关视频） |
 | `asmr_one/run.py` | asmr.one 接口项目（`asmr_one/`）：**只有**那七个 `/api/asmr/*`（作品列表 / 搜索 / 作品详情 / 音轨树 / 封面代转 / 音频代转 / 登录态），外加 `/` 上的**导航页**；它不挂任何 Pixiv 或 iwara 路由 |
+| `ehviewer/run.py` | E-Hentai 接口项目（`ehviewer/`）：**只有**那七个 `/api/eh/*`（列表 / 搜索 / 画廊详情 / 图片页 / 元数据 / 图片代转 / 匿名态），外加 `/` 上的**导航页**；它不挂任何别的站点的路由 |
 
-各接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3～4 项 iwara 专属自检（开了 `IWARA_BRIDGE_ECH=1` 才多出 ECH 那一项），`asmr_one/run.py` 追加 2～3 项 asmr 专属自检（默认就开 ECH，见「环境检查说明」）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`；要 asmr.one 就拷 `pixiv_bridge/` + `asmr_one/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
+各接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3～4 项 iwara 专属自检（开了 `IWARA_BRIDGE_ECH=1` 才多出 ECH 那一项），`asmr_one/run.py` 追加 2～3 项 asmr 专属自检（默认就开 ECH，见「环境检查说明」），`ehviewer/run.py` 追加 3 项 ehviewer 专属自检（依赖 / 边缘 / 站点）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`；要 asmr.one 就拷 `pixiv_bridge/` + `asmr_one/`，要 E-Hentai 就拷 `pixiv_bridge/` + `ehviewer/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
 
 首次运行输出示例：
 
@@ -200,6 +205,16 @@ INFO:     Uvicorn running on http://127.0.0.1:8765
 | `asmr ECH` | 仅警告，不中止 | **默认就有（`ASMR_BRIDGE_ECH` 默认开）；写成 `ASMR_BRIDGE_ECH=0` 关掉 ECH 后才没有这一项**。真发一次 `GET /cdn-cgi/trace`，看回显里是不是 `sni=encrypted`（明文是 `sni=plaintext`） |
 
 这三项也**不在致命清单里**：asmr 依赖缺失或 API 不可达时入口仍能启动，接口失败只返回 502。另外 asmr **没有登录自检**——它公开浏览与播放匿名就够，要登录的端点（标签 / 用户收藏）本站不暴露。
+
+`ehviewer` 入口是 `python ehviewer/run.py --check`，它在同一张表里追加 3 项（**没有 ECH 那一项**——本站不用 ECH，改用「借道边缘 + HTTP/3」）：
+
+| ehviewer 检查项 | 失败影响 | 说明 |
+| --- | --- | --- |
+| `ehviewer 依赖` | 仅警告，不中止 | 真 `import curl_cffi`，并检查有没有 `CurlHttpVersion`（HTTP/3 能力）。缺 HTTP/3 时直接点明「HTTP/3 不可用，站点会连不上」；手动补 `pip install -r ehviewer/requirements.txt` |
+| `ehviewer 边缘` | 仅警告，不中止 | 并发探一遍 16 个候选边缘 IP，只建 TCP（不发 TLS，所以不会被 SNI 判据误伤）。报「N/16 个候选边缘可建连（示例 x.x.x.x）」 |
+| `ehviewer 站点` | 仅警告，不中止 | 真发一次首页 `GET /`（`list_galleries()`），确认整条「借道 Cloudflare 边缘 + 强制 HTTP/3」链路通、能拿回画廊列表。只探 TCP 不够——真正的坎在 HTTP/3 与 SNI |
+
+这三项也**不在致命清单里**：ehviewer 依赖缺失或站点不可达时入口仍能启动，接口失败只返回 502。另外 ehviewer **没有登录自检**——公开画廊匿名就能看（exhentai 里站内容会返回 401，本站不碰）。
 
 ### 获取 refresh_token（三种方式任选）
 
@@ -316,6 +331,16 @@ pixiv-bridge/
 │   ├── config.py        asmr 的配置：`AsmrSettings(Settings)` 加了 ECH 三个开关（`ASMR_BRIDGE_ECH*`，ECH 默认开）
 │   ├── requirements.txt 本站点额外依赖（curl_cffi + cffi，刻意不放进根清单）
 │   └── routes/         本站点路由（works 接口：`/api/asmr/*`）
+├── ehviewer/                           E-Hentai 接口项目（与 pixiv/ 同级；入口 ehviewer/run.py）
+│   ├── __init__.py     说明本站点依赖框架；对外入口是 app.SITE（惰性导出，避免直接拖入 curl_cffi）
+│   ├── run.py          入口（bootstrap 先装 curl_cffi，再交给框架 cli）
+│   ├── app.py          站点声明：Site 契约 + create_app()，把 EhClient 挂到 app.state（nav_order=4）
+│   ├── client.py       eh 客户端：借道 Cloudflare 边缘 IP + 强制 HTTP/3 + 裸 TCP 探边缘 + 会话级 RESOLVE；无登录态
+│   ├── parse.py        站点页解析（列表 / 画廊详情 / 标签 / 图片页 / 条带封面；纯函数，便于离线测试）
+│   ├── envcheck.py     ehviewer 专属自检（依赖 / 边缘 / 站点），经 Site.checks 追加到入口检查表
+│   ├── config.py       ehviewer 的配置：`EhSettings(Settings)` 加了 HTTP3 / 边缘 IP 池 / 重试次数四项（`EH_BRIDGE_*`）
+│   ├── requirements.txt 本站点额外依赖（curl_cffi + cffi，刻意不放进根清单；必须是带 HTTP/3 的版本）
+│   └── routes/         本站点路由（galleries 接口：`/api/eh/*`）
 ├── novel/                              小说阅读扩展（挂在 pixiv/ 站点上；扩展没有自己的入口）
 │   ├── __init__.py  说明本扩展依赖框架与宿主站点；对外入口是 app.create_app
 │   ├── extension.py    扩展入口（固定文件名）：导出本扩展的路由与状态工厂
@@ -358,7 +383,7 @@ pixiv-bridge/
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
-├── tests/                              单元测试（712 项：框架与站点 334 + iwara 199 + asmr_one 134 + 打包 45）
+├── tests/                              单元测试（840 项：框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 128 + 打包 45）
 ├── openssl-libs/                       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -366,7 +391,7 @@ pixiv-bridge/
 └── scripts/            自检与打包脚本
     ├── sites.py             构建侧的站点/扩展登记表（唯一事实来源：布局、标题、自带资产、扩展宿主）
     ├── check_boundary.py    整理自检（依赖方向 + 出入口布局 + 各站点/扩展的路由差集 + 注册表↔运行时一致性）
-    └── make_share_packages.py  一键生成七个分享包（接口包 / 扩展包 / 组合包）
+    └── make_share_packages.py  一键生成八个分享包（接口包 / 扩展包 / 组合包）
 ```
 
 ## 配置（环境变量 / .env）
@@ -404,10 +429,14 @@ pixiv-bridge/
 | `ASMR_BRIDGE_ECH` | **开** | `0/false/no/off` 给 asmr 关掉 ECH（加密 SNI）。**与 iwara 相反：asmr.one 不写就是开**，因为 `api.asmr.one` 的 Cloudflare 边缘不带 ECH 会被拦；见「asmr.one」 |
 | `ASMR_BRIDGE_ECH_CONFIG` | 空 | 自定义 asmr 用的 ECHConfigList（base64）；留空走 DoH（`dns.alidns.com` → `223.5.5.5`），失败用内置默认值 |
 | `ASMR_BRIDGE_ECH_IPS` | 空 | 逗号分隔，给 asmr 的 ECH 主机额外追加的入口 IP（排在内置种子之后） |
+| `EH_BRIDGE_HTTP3` | **开** | `0/false/no/off` 给 ehviewer 关掉 HTTP/3。**默认开**：`e-hentai.org` 自己解析出来的边缘 IP 在本机是 IP 级被阻断的，必须借道别的 Cloudflare anycast IP 并强制 HTTP/3 才通；关掉大概率整个站不通 |
+| `EH_BRIDGE_EDGE_IPS` | 空 | 逗号分隔，**覆盖**内置的 16 个候选边界 IP（默认已排除 e-hentai 自己解析到的那两个被 RST 的 IP） |
+| `EH_BRIDGE_EDGE_ATTEMPTS` | `5` | 一次页面请求最多换几个边缘 IP 重试 |
+| `EH_BRIDGE_IMAGE_ATTEMPTS` | `4` | 大图代转时最多重新解析 `/s/` 页取几次新图片节点（H@H 节点会失效） |
 
 ## 附属项目（扩展）
 
-项目分三层，但**入口只有三个**（`pixiv/run.py`、`iwara/run.py` 与 `asmr_one/run.py`：三个同级接口项目，命令行完全一样）。小说阅读器（`novel`）与 iwara 视频页面（`iwara_web`）都不带专属入口脚本，它们作为**扩展**挂在各自的宿主站点上：把扩展目录名写进配置，站点启动时自己去该目录找固定名字的入口文件 `extension.py`。
+项目分三层，但**入口只有四个**（`pixiv/run.py`、`iwara/run.py`、`asmr_one/run.py` 与 `ehviewer/run.py`：四个同级接口项目，命令行完全一样）。小说阅读器（`novel`）与 iwara 视频页面（`iwara_web`）都不带专属入口脚本，它们作为**扩展**挂在各自的宿主站点上：把扩展目录名写进配置，站点启动时自己去该目录找固定名字的入口文件 `extension.py`。
 
 ```
 PIXIV_BRIDGE_EXTENSIONS=novel        # 相对路径按项目根算
@@ -445,7 +474,7 @@ PIXIV_BRIDGE_EXTENSIONS=novel        # 相对路径按项目根算
 
 - **框架不认识任何具体扩展或站点**：`pixiv_bridge/server.py` 的 `create_bridge_app()` 只按传入的站点路由与扩展对象组装，不读配置、不 import 任何站点（保证纯接口的行为不随 `.env` 漂移）；读配置加载扩展发生在 `pixiv_bridge/cli.py` 里，即各 `run.py` 走的那条路。
 - **扩展目录名写错不会静默降级**：找不到 `extension.py`、或入口里没定义 `EXTENSION_ROUTERS`，都会在启动前打印一条可读的错误并**以退出码 1 中止**，不会半启动。
-- `iwara` 与 `asmr_one` 不参与这套机制，它们各自保留入口 `iwara/run.py`、`asmr_one/run.py`（原因是都需要多装一个编译依赖 `curl_cffi`，见「iwara.tv」与「asmr.one」两节）。
+- `iwara`、`asmr_one` 与 `ehviewer` 不参与这套机制，它们各自保留入口 `iwara/run.py`、`asmr_one/run.py`、`ehviewer/run.py`（原因是都需要多装一个编译依赖 `curl_cffi`，见「iwara.tv」「asmr.one」与「E-Hentai」三节）。
 - 命令行上用 `--env` 指定别的目录（`python pixiv/run.py --env /path/to/other`）时，扩展相对路径就按那个目录算。
 
 ## 新增一个接口项目
@@ -479,7 +508,7 @@ from mysite.app import SITE        # noqa: E402
 main(site=SITE)
 ```
 
-> 站点自己有额外依赖时（iwara 与 asmr_one 都要 `curl_cffi`），把 `bootstrap()` 换成 `bootstrap(partial(ensure_packages, ("curl_cffi",), HERE / "requirements.txt"))`，并且**必须在 import 站点模块之前**——站点客户端在 import 时就要用那个库。
+> 站点自己有额外依赖时（iwara、asmr_one 与 ehviewer 都要 `curl_cffi`），把 `bootstrap()` 换成 `bootstrap(partial(ensure_packages, ("curl_cffi",), HERE / "requirements.txt"))`，并且**必须在 import 站点模块之前**——站点客户端在 import 时就要用那个库。
 
 `app.py` 里声明一个 `Site`（`pixiv_bridge/site.py`，冻结 dataclass）：
 
@@ -489,7 +518,7 @@ main(site=SITE)
 | `directory` | 站点目录（`Path(__file__).resolve().parent`）；`--check` 用它作为站点必需文件的基准 |
 | `create_app` | `create_app(settings, extensions=()) -> FastAPI`，内部调 `pixiv_bridge.server.create_bridge_app(...)` 组装 |
 | `settings_class` | 站点配置类（默认即框架 `Settings`；Pixiv 用子类 `PixivSettings` 多带 token / ECH 等字段） |
-| `required_files` | 站点目录里必须存在的文件（`pixiv` 是 `("run.py",)`；iwara 与 asmr_one 还带 `requirements.txt`） |
+| `required_files` | 站点目录里必须存在的文件（`pixiv` 是 `("run.py",)`；iwara、asmr_one 与 ehviewer 还带 `requirements.txt`） |
 | `checks` | `checks(settings) -> list[CheckResult]`，站点专属自检项，追加到 `--check` 的同一张表里 |
 | `login_check` | `login_check(settings) -> int`，`--check` 的退出码（校验登录态；允许匿名时可以返回 0） |
 | `network_hint` | `network_hint(results, settings) -> None`，网络项失败时打印的排查提示 |
@@ -735,6 +764,29 @@ asmr.one 是第三个站点，与 Pixiv、iwara 都无关，由独立的接口�
 2. **但 ECH 默认是开的**（和 iwara 正相反）。`asmr_one/config.py` 里 `ASMR_BRIDGE_ECH` 用 `_flag_or_default(..., True)`：**不写这个变量就是开**，要关必须显式写 `ASMR_BRIDGE_ECH=0`（`0/false/no/off`）。原因和 iwara 一样——不带 ECH 的 SNI 在这类网络下会被拦。ECH 三个开关见上面的配置表。
 3. **站点自带一份 `ech.py`**（`iwara/ech.py` 的自足副本）。站点之间**不许互相 import**（框架的边界检查会拦），所以需要同一份逻辑就各留一份，不去依赖别的站点目录。
 
+### E-Hentai（**仅 `ehviewer/run.py` 提供**）
+
+E-Hentai 是第四个站点，与前三个都无关，由独立的接口项目 `ehviewer/` 提供；用别的入口启动时这些地址都返回 **404**。它**不需要登录**：公开画廊一律匿名可读（`exhentai.org` 的里站内容不碰，遇到会返回 401）。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/eh/list?cursor=&query=` | 首页画廊列表（一页 25 条）。分页用**游标**（上游的 `?next=`），不是页码；同时带 `query` 时直接当搜索用 |
+| GET | `/api/eh/search?query=&cursor=` | 关键词搜索（`query` 必填）。走的是与列表同一个上游页面的 `f_search` 参数 |
+| GET | `/api/eh/gallery/{gid}/{token}?page=` | 画廊详情：元信息（分类 / 上传者 / 评分 / 页数 / 标签 / 封面）+ 当页的图片页链接。**`page` 从 1 开始**，换算成上游的 0 基 `?p=` |
+| GET | `/api/eh/images/{gid}/{token}?page=` | 把当页的 20 个 `/s/...` 图片页链接列成带序号的清单（给客户端自己逐个取） |
+| GET | `/api/eh/metadata?gid=&token=` | 走官方 `api.php` 的 `gdata`（批量元数据），返回上游原始 JSON |
+| GET | `/api/eh/proxy?url=` | 图片字节代转。接受 `/s/` 大图页 URL 或 `*.hath.network` 直链；前者会先解析出图片直链再取字节。透传 `Range` / `If-Range` / `If-None-Match` / `If-Modified-Since`，响应头带 `x-eh-image-url` 与 `x-eh-page-url` |
+| GET | `/api/eh/auth` | 链路诊断：`{site, anonymous, http3, impersonate, edge_count, edge_ips, pinned_edge}`。本站只有匿名态，`anonymous` 永远是 `true` |
+
+> **为什么图片必须服务端代转**：大图字节在 `*.hath.network` 的 H@H 节点上（端口随机、节点会失效），浏览器直连拿不到稳定结果，所以统一走 `/api/eh/proxy?url=...`；服务端每次重新解析 `/s/` 页拿新节点，重试 `EH_BRIDGE_IMAGE_ATTEMPTS` 次。
+
+关于 ehviewer 的实现说明（都来自实测）：
+
+1. **e-hentai.org 在 Cloudflare 上，但它自己解析出来的那两个边缘 IP 在本机是 IP 级被阻断的**（`172.66.132.196` / `172.66.140.62`）。所以 `ehviewer/client.py` 内置了一份**别的 Cloudflare anycast IP 种子池**（16 个，已排除那两个），用会话级 `CurlOpt.RESOLVE` 把域名钉到池里某个 IP 上直连。
+2. **必须强制 HTTP/3**（`EH_BRIDGE_HTTP3` 默认开）。用 HTTPS/1.1 或 HTTP/2 打这些 IP 会因 SNI 与目标不符被拒；HTTP/3 走 UDP 不受这个限制。关掉这个开关大概率整个站不通。
+3. **换 IP 与强制 HTTP/3 都要 libcurl，所以本包同样带 `curl_cffi`**；`ehviewer/run.py` 也因此不从框架的通用入口启动（和前两个站点同一个原因）。
+4. **元数据走官方 `api.php`**（`gdata` 方法，body 必须是 `{"method":"gdata","gidlist":[[gid,token],…],"namespace":1}` 的 bytes），比抓 HTML 稳。
+
 ## 调用示例
 
 ### curl
@@ -829,7 +881,7 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 712 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + 打包 45）
+python -m unittest discover -s tests       # 840 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + ehviewer 128 + 打包 45）
 python scripts/check_boundary.py           # 拆分边界自检
 python scripts/make_share_packages.py --check   # 分享包内容自检（不写 zip）
 ```
@@ -838,7 +890,7 @@ python scripts/make_share_packages.py --check   # 分享包内容自检（不写
 
 1. `pixiv_bridge/` 是纯框架：里面没有任何模块 `import pixiv` / `import iwara` / `import asmr_one` / `import novel` / `import iwara_web`——依赖是单向的，框架不认识任何站点与扩展；
 2. 站点只许 import 框架和自己（**各站点互不依赖**，`iwara` 不许 import `pixiv`，`asmr_one` 谁都不许 import）；扩展只许 import 框架、自己和宿主站点；
-3. 出入口布局成立：`pixiv/run.py`、`iwara/run.py` 与 `asmr_one/run.py` 三个接口入口都在且同级，`novel/run.py`、`iwara_web/run.py`、根 `run.py` **都不存在**（两个扩展由扩展机制启用），且 `novel/extension.py`、`iwara_web/extension.py` 两个扩展入口存在；
+3. 出入口布局成立：`pixiv/run.py`、`iwara/run.py`、`asmr_one/run.py` 与 `ehviewer/run.py` 四个接口入口都在且同级，`novel/run.py`、`iwara_web/run.py`、根 `run.py` **都不存在**（两个扩展由扩展机制启用），且 `novel/extension.py`、`iwara_web/extension.py` 两个扩展入口存在；
 4. 路由对账：先建框架外壳（只有 `/api/health` 与导航页），再建各站点应用与「挂上扩展」的应用，断言 —— `iwara` 比外壳多出的恰好是那 10 条 `/api/iwara/*`、`asmr_one` 比外壳多出的恰好是那 7 条 `/api/asmr/*`（多一条少一条都算越界）、各站点的路由**互不相交**（`pixiv` 上没有任何 `/api/iwara` 或 `/api/asmr`，`iwara` / `asmr_one` 上没有任何 Pixiv 接口）、每个扩展比宿主多出的恰好是它声明的那些路径；同时比对 `scripts/sites.py` 的登记与运行时 `SITE` 的 name / title / version / directory / required_files 一致。
 
 改了 imports、挪了路由或动了入口脚本后跑一下它，比等到运行时才 404 省事。测试给 `novel` 那一层的用例统一走 helper（`tests/test_bridge.py`），因为三台账 / 配置 / 书架 / 阅读器页面现在都由扩展挂载，用框架外壳或 `pixiv.app.create_app` 打这些路径会 404。
@@ -853,10 +905,10 @@ python scripts/make_share_packages.py --check   # 分享包内容自检（不写
 
 ### 一键生成分享包（推荐）
 
-项目现在是三层（框架 + 三个同级接口项目 + 两个扩展），按用途拆成七个分享包：
+项目分三层（框架 + 四个同级接口项目 + 两个扩展），按用途拆成八个分享包：
 
 ```bash
-python scripts/make_share_packages.py            # 七个包全做，写进 dist/
+python scripts/make_share_packages.py            # 八个包全做，写进 dist/
 python scripts/make_share_packages.py --list     # 只列有哪些包
 python scripts/make_share_packages.py iwara-api  # 只做一个（按 key 或 zip 名）
 python scripts/make_share_packages.py --check    # 只自检内容、不写 zip
@@ -867,6 +919,7 @@ python scripts/make_share_packages.py --check    # 只自检内容、不写 zip
 | `pixiv-api` | `pixiv-api.zip` | Pixiv 接口项目 + 框架（含 `pixiv/`、`openssl-libs/`、`examples/`、启动脚本） | 解压后在目录里 `python pixiv/run.py` |
 | `iwara-api` | `iwara-api.zip` | 只有 iwara 接口项目 + 框架（`iwara/`，**不带 `pixiv/`、不带 `openssl-libs/`**） | 解压后 `python iwara/run.py`（iwara 的 ECH 走 `curl_cffi` 的 libcurl，不需要那套 OpenSSL 动态库） |
 | `asmr-api` | `asmr-api.zip` | 只有 asmr 接口项目 + 框架（`asmr_one/`，**不带 `pixiv/` / `iwara/`、不带 `openssl-libs/`**） | 解压后 `python asmr_one/run.py`（asmr 的 ECH 同样走 `curl_cffi` 的 libcurl；不需要 token） |
+| `ehviewer-api` | `ehviewer-api.zip` | 只有 E-Hentai 接口项目 + 框架（`ehviewer/`，**不带 `pixiv/` / `iwara/` / `asmr_one/`、不带 `openssl-libs/`**） | 解压后 `python ehviewer/run.py`（借道 Cloudflare anycast IP + 强制 HTTP/3，走 `curl_cffi` 的 libcurl；不需要 token） |
 | `novel-extension` | `novel-extension.zip` | 小说阅读器扩展（`novel/`） | **不能单独启动**：把包内 `novel/` 拷进 Pixiv 接口项目根，`.env` 写 `PIXIV_BRIDGE_EXTENSIONS=novel` |
 | `iwara_web-extension` | `iwara_web-extension.zip` | iwara 视频页面扩展（`iwara_web/`） | **不能单独启动**：把包内 `iwara_web/` 拷进 `iwara-api` 项目根，`.env` 写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`（要配 `iwara/run.py` 入口） |
 | `pixiv-novel` | `pixiv-novel.zip` | Pixiv 接口 + 阅读器，已配好 | 解压后在目录里 `python pixiv/run.py`，`.env` 写 `PIXIV_BRIDGE_EXTENSIONS=novel` |

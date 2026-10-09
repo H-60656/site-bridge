@@ -1,0 +1,13 @@
+# ehviewer 站点的额外依赖。
+#
+# e-hentai.org 在本机是按 SNI 字符串封锁的（本地 DNS 答案也被投毒），TCP+TLS
+# 无论钉哪个 IP 都是 RST —— 只有 HTTP/3（QUIC）能通：QUIC 的 ClientHello 加密、
+# 且不过 GFW 的 TCP 处理路径。
+#
+# 所以这里要的不是普通 HTTP 客户端，而是**自带 HTTP/3 的 curl_cffi**：它的
+# libcurl 编译了 ngtcp2 / nghttp3，系统 curl 没有这个能力。
+#
+# cffi 显式列出：它是 curl_cffi 的运行期依赖，Termux 上曾出现过装好后
+# _cffi_backend 缺失的情况（ABI 不匹配），单独钉一个下限更容易排错。
+curl_cffi>=0.7
+cffi>=1.16
