@@ -933,6 +933,49 @@ class EhClientRequestTestCase(unittest.TestCase):
         params = client.request.await_args.kwargs["params"]
         self.assertEqual(params, {"f_search": "lolicon", "next": "4242034"})
 
+    def test_list_galleries_sends_prev_when_asked_to_go_back(self):
+        # 往回翻必须是另一个键。把 prev 的值当 next 发出去不会报错，
+        # 只会静默拿到错误的一页——这条用例守的就是这个键名分派。
+        client = self._html_client(_FakeResp(200, text=LIST_BODY_PAGE2))
+
+        asyncio.run(client.list_galleries(cursor="4242010", direction="prev"))
+
+        params = client.request.await_args.kwargs["params"]
+        self.assertEqual(params, {"prev": "4242010"})
+        self.assertNotIn("next", params)
+
+    def test_list_galleries_rejects_an_unknown_direction(self):
+        client = self._html_client(_FakeResp(200, text=LIST_BODY))
+
+        with self.assertRaises(EhError) as ctx:
+            asyncio.run(client.list_galleries(cursor="1", direction="sideways"))
+
+        self.assertEqual(ctx.exception.status, 400)
+        client.request.assert_not_awaited()
+
+    def test_list_galleries_reports_the_direction_it_used(self):
+        client = self._html_client(_FakeResp(200, text=LIST_BODY_PAGE2))
+
+        body = asyncio.run(client.list_galleries(cursor="4242010", direction="prev"))
+
+        self.assertEqual(body["direction"], "prev")
+        self.assertEqual(body["cursor"], "4242010")
+
+    def test_list_galleries_keeps_a_default_direction_of_next(self):
+        client = self._html_client(_FakeResp(200, text=LIST_BODY))
+
+        body = asyncio.run(client.list_galleries())
+
+        self.assertEqual(body["direction"], "next")
+
+    def test_search_forwards_the_direction(self):
+        client = self._html_client(_FakeResp(200, text=LIST_BODY_PAGE2))
+
+        asyncio.run(client.search("lolicon", cursor="4242010", direction="prev"))
+
+        params = client.request.await_args.kwargs["params"]
+        self.assertEqual(params, {"f_search": "lolicon", "prev": "4242010"})
+
     def test_search_rejects_an_empty_query_before_any_request(self):
         client = self._html_client(_FakeResp(200, text=LIST_BODY))
 
@@ -1325,17 +1368,19 @@ class _FakeEhClient:
         if self.error is not None:
             raise self.error
 
-    async def list_galleries(self, cursor="", query=""):
-        self.calls.append(("list", cursor, query))
+    async def list_galleries(self, cursor="", query="", direction="next"):
+        self.calls.append(("list", cursor, query, direction))
         self._maybe_fail()
         return {
             "query": query,
             "cursor": cursor,
+            "direction": direction,
             "count": 2,
             "found": "1,658,228",
             "next": "4242034",
             "prev": "",
             "next_url": "https://e-hentai.org/?next=4242034",
+            "prev_url": "",
             "items": [
                 {
                     "gid": 4242037,
@@ -1348,10 +1393,10 @@ class _FakeEhClient:
             ],
         }
 
-    async def search(self, query, cursor=""):
-        self.calls.append(("search", query, cursor))
+    async def search(self, query, cursor="", direction="next"):
+        self.calls.append(("search", query, cursor, direction))
         self._maybe_fail()
-        return await self.list_galleries(cursor=cursor, query=query)
+        return await self.list_galleries(cursor=cursor, query=query, direction=direction)
 
     async def popular(self):
         self.calls.append(("popular",))
@@ -1359,11 +1404,13 @@ class _FakeEhClient:
         return {
             "query": "",
             "cursor": "",
+            "direction": "next",
             "count": 1,
             "found": "",
             "next": "",
             "prev": "",
             "next_url": "",
+            "prev_url": "",
             "items": [{"gid": 4241792, "token": "aabbccddee", "title": "Popular One"}],
         }
 
@@ -1453,14 +1500,14 @@ class EhRouteTestCase(unittest.TestCase):
         self.assertEqual(body["count"], 2)
         self.assertEqual(body["next"], "4242034")
         self.assertEqual(body["items"][0]["gid"], 4242037)
-        self.assertEqual(self.fake.calls[0], ("list", "", ""))
+        self.assertEqual(self.fake.calls[0], ("list", "", "", "next"))
 
     def test_list_passes_the_cursor_through_trimmed(self):
         client = self._client()
 
         client.get("/api/eh/list?cursor=%204242034%20&query=%20cat%20")
 
-        self.assertEqual(self.fake.calls[0], ("list", "4242034", "cat"))
+        self.assertEqual(self.fake.calls[0], ("list", "4242034", "cat", "next"))
 
     def test_search_requires_a_query(self):
         client = self._client()
@@ -1475,7 +1522,31 @@ class EhRouteTestCase(unittest.TestCase):
         body = client.get("/api/eh/search?query=lolicon&cursor=4242034").json()
 
         self.assertEqual(body["query"], "lolicon")
-        self.assertEqual(self.fake.calls[0], ("search", "lolicon", "4242034"))
+        self.assertEqual(self.fake.calls[0], ("search", "lolicon", "4242034", "next"))
+
+    def test_list_forwards_the_prev_direction(self):
+        client = self._client()
+
+        client.get("/api/eh/list?cursor=4242010&direction=prev")
+
+        self.assertEqual(self.fake.calls[0], ("list", "4242010", "", "prev"))
+
+    def test_search_forwards_the_prev_direction(self):
+        client = self._client()
+
+        client.get("/api/eh/search?query=lolicon&cursor=4242010&direction=prev")
+
+        self.assertEqual(self.fake.calls[0], ("search", "lolicon", "4242010", "prev"))
+
+    def test_list_rejects_an_unknown_direction_before_the_client(self):
+        client = self._client()
+
+        # 形状校验在路由层就拦下，别把非法方向透到上游。
+        self.assertEqual(client.get("/api/eh/list?direction=sideways").status_code, 422)
+        self.assertEqual(
+            client.get("/api/eh/search?query=x&direction=sideways").status_code, 422
+        )
+        self.assertEqual(self.fake.calls, [], "非法方向不该打到客户端")
 
     def test_popular_comes_back_in_one_page(self):
         client = self._client()

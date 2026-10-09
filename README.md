@@ -387,7 +387,7 @@ pixiv-bridge/
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
-├── tests/                              单元测试（916 项：框架与站点 339 + iwara 206 + asmr_one 145 + ehviewer 181 + 打包 45）
+├── tests/                              单元测试（924 项：框架与站点 339 + iwara 206 + asmr_one 145 + ehviewer 189 + 打包 45）
 ├── openssl-libs/                       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -774,9 +774,9 @@ E-Hentai 是第四个站点，与前三个都无关，由独立的接口项目 `
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/eh/list?cursor=&query=` | 首页画廊列表（一页 25 条）。分页用**游标**（上游的 `?next=`），不是页码；同时带 `query` 时直接当搜索用 |
+| GET | `/api/eh/list?cursor=&query=&direction=` | 首页画廊列表（一页 25 条）。分页用**游标**（上游的 `?next=` / `?prev=`），不是页码；同时带 `query` 时直接当搜索用。**往回翻要传 `direction=prev`**，不能把 `prev` 的值塞进 `cursor` |
 | GET | `/api/eh/popular` | 上游 `/popular` 热门榜单。**一页给完**（实测约 74 条），`next` 永远为空、`found` 也留空——上游这个页面忽略 `?next=`，确实不能翻页 |
-| GET | `/api/eh/search?query=&cursor=` | 关键词搜索（`query` 必填）。走的是与列表同一个上游页面的 `f_search` 参数 |
+| GET | `/api/eh/search?query=&cursor=&direction=` | 关键词搜索（`query` 必填）。走的是与列表同一个上游页面的 `f_search` 参数。翻页方向同上，且光标必须与 `query` 配对（上游的光标不能跨查询复用） |
 | GET | `/api/eh/gallery/{gid}/{token}?page=` | 画廊详情：元信息（分类 / 上传者 / 评分 / 页数 / 标签 / 封面）+ 当页的图片页链接 + `total_pages` / `next_page` / `has_next`。**`page` 从 1 开始**，换算成上游的 0 基 `?p=` |
 | GET | `/api/eh/images/{gid}/{token}?page=` | 把当页的 20 个 `/s/...` 图片页链接列成带序号的清单（给客户端自己逐个取）。带回 `total_pages` / `next_page` / `has_next`（由详情页的 `showing.total` 算出）；算不出来时这三项是 `null`，别拿它当「下一页是第 1 页」 |
 | GET | `/api/eh/page?url=` | 只解析一个 `/s/` 大图页，返回真实图片直链与尺寸（`image_url` / `filename` / `width` / `height` / `size` / `current` / `total`），**不下载字节**。要字节请走 `/api/eh/proxy` |
@@ -791,10 +791,11 @@ E-Hentai 是第四个站点，与前三个都无关，由独立的接口项目 `
 1. **e-hentai.org 在 Cloudflare 上，但它自己解析出来的那两个边缘 IP 在本机是 IP 级被阻断的**（`172.66.132.196` / `172.66.140.62`）。所以 `ehviewer/client.py` 内置了一份**别的 Cloudflare anycast IP 种子池**（16 个，已排除那两个），用会话级 `CurlOpt.RESOLVE` 把域名钉到池里某个 IP 上直连。
 2. **必须强制 HTTP/3**（`EH_BRIDGE_HTTP3` 默认开）。用 HTTPS/1.1 或 HTTP/2 打这些 IP 会因 SNI 与目标不符被拒；HTTP/3 走 UDP 不受这个限制。关掉这个开关大概率整个站不通。
 3. **换 IP 与强制 HTTP/3 都要 libcurl，所以本包同样带 `curl_cffi`**；`ehviewer/run.py` 也因此不从框架的通用入口启动（和前两个站点同一个原因）。
-4. **元数据走官方 `api.php`**（`gdata` 方法，body 必须是 `{"method":"gdata","gidlist":[[gid,token],…],"namespace":1}` 的 bytes），比抓 HTML 稳——但**「稳」的是格式，不是错误语义**：它同样把「取不到」藏在 HTTP 200 里（见下条第 4 种形态）。
+4. **元数据走官方 `api.php`**（`gdata` 方法，body 必须是 `{"method":"gdata","gidlist":[[gid,token],…],"namespace":1}` 的 bytes），比抓 HTML 稳——但**「稳」的是格式，不是错误语义**：它同样把「取不到」藏在 HTTP 200 里（见下面讲 `gdata` 的那条，即「第 4 种形态」）。
 5. **详情页是页码分页、首页是游标分页**，两者不能混：`/api/eh/list` 与 `/api/eh/search` 认上游的 `?next=` 游标，`/api/eh/gallery` 与 `/api/eh/images` 认 0 基的 `?p=` 页码（对外统一从 `page=1` 起算）。详情页一屏 20 张，页面上印着 `Showing 1-20 of N`，所以总屏数与下一页可以直接算出来（`total_pages` / `next_page` / `has_next`）；首页**不印**这个总数，于是 `/api/eh/list` 只能照抄上游的 `next` 游标。上游 `/popular` 更是连 `?next=` 都忽略（喂同一个游标返回的字节数一模一样），因此 `/api/eh/popular` 老实讲「只有这一页」——`next` 给空串，别拿它循环翻页。
-6. **「取不到」是 HTTP 200 + 一句纯文本，不是 404**。上游对取不到的画廊和无效大图页都回 200：`Key missing, or incorrect key provided.`（39 字节）/ `No gallery specified.`（21 字节）/ `Gallery not found. …`（172 字节）/ `Invalid page.`（13 字节）。只看状态码会把它们当成功页面，解析出一具空壳（标题空、图链空、`showing.total` 为 `null`），客户端只会看到「这个画廊没有图」——比 404 更难查。所以 `ehviewer/parse.py` 用**页面骨架**（详情页的 `#gn`/`#gdc`/`#gdd`、大图页的 `<img id="img">`）当判据：有骨架就是正常页，没有才去看那几句存根文案；两者都判不出就照原样放行。实测 31 张真实详情页（含 `?p=` 后续屏）与全部首页结果都命中骨架，零误判。命中的存根统一转成 **404**（`reason: "not_found"`），消息里保留上游原文与 `key` / `no_gallery` / `removed` / `invalid` 的分类。
-7. **同样的坑在官方 API 上有第 4 种形态**：`api.php` 的 `gdata` 对失效 token / 不存在的 gid 也是 **HTTP 200**，把错误放在**每一条目自己的 `error` 字段**里——`{"gmetadata":[{"gid":1,"error":"Key missing, or incorrect key provided."}]}`；gid 不存在时上游还会把 gid 夹到 `2147483647`，文案换成 `Gallery not found. …`。批量接口里好坏条目**混在同一个 list** 里逐条独立，所以 `gdata()` 照原样返回整批（调用方要自己逐条看 `error`）；而单条的 `/api/eh/metadata` 不能这么「忠实」——`metadata()` 用 `parse.parse_gdata_error()` 判这一条，命中就转 **404**，上游换文案（不认识的 `error`）也一律按错误处理，绝不放过。
+6. **游标分方向：向后是 `?next=`，向前是 `?prev=`，两个键不能混用。** 上游的 `?prev=<下一页第一个 gid>` 确实能用（实测精确取回上一页，25/25 全同）；但把 `prev` 的值当 `?next=` 发出去**不会报错**，只会静默给出错误的一页（实测拿到的是当前页的下一页）。所以 `/api/eh/list` 与 `/api/eh/search` 都带 `direction` 参数：默认 `next`，往回翻必须显式传 `direction=prev`，返回体里也照实回显本次用的是哪个方向。另外上游的游标是**绑在查询上的**（搜索结果页喂首页的光标，拿回来的还是搜索第一页），换关键词时别复用光标。
+7. **「取不到」是 HTTP 200 + 一句纯文本，不是 404**。上游对取不到的画廊和无效大图页都回 200：`Key missing, or incorrect key provided.`（39 字节）/ `No gallery specified.`（21 字节）/ `Gallery not found. …`（172 字节）/ `Invalid page.`（13 字节）。只看状态码会把它们当成功页面，解析出一具空壳（标题空、图链空、`showing.total` 为 `null`），客户端只会看到「这个画廊没有图」——比 404 更难查。所以 `ehviewer/parse.py` 用**页面骨架**（详情页的 `#gn`/`#gdc`/`#gdd`、大图页的 `<img id="img">`）当判据：有骨架就是正常页，没有才去看那几句存根文案；两者都判不出就照原样放行。实测 31 张真实详情页（含 `?p=` 后续屏）与全部首页结果都命中骨架，零误判。命中的存根统一转成 **404**（`reason: "not_found"`），消息里保留上游原文与 `key` / `no_gallery` / `removed` / `invalid` 的分类。
+8. **同样的坑在官方 API 上有第 4 种形态**：`api.php` 的 `gdata` 对失效 token / 不存在的 gid 也是 **HTTP 200**，把错误放在**每一条目自己的 `error` 字段**里——`{"gmetadata":[{"gid":1,"error":"Key missing, or incorrect key provided."}]}`；gid 不存在时上游还会把 gid 夹到 `2147483647`，文案换成 `Gallery not found. …`。批量接口里好坏条目**混在同一个 list** 里逐条独立，所以 `gdata()` 照原样返回整批（调用方要自己逐条看 `error`）；而单条的 `/api/eh/metadata` 不能这么「忠实」——`metadata()` 用 `parse.parse_gdata_error()` 判这一条，命中就转 **404**，上游换文案（不认识的 `error`）也一律按错误处理，绝不放过。
 
 ## 调用示例
 
@@ -890,7 +891,7 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 916 项应全绿（框架与站点 339 + iwara 206 + asmr_one 145 + ehviewer 181 + 打包 45）
+python -m unittest discover -s tests       # 924 项应全绿（框架与站点 339 + iwara 206 + asmr_one 145 + ehviewer 189 + 打包 45）
 python scripts/check_boundary.py           # 拆分边界自检
 python scripts/make_share_packages.py --check   # 分享包内容自检（不写 zip）
 ```

@@ -46,15 +46,24 @@ async def list_galleries(
     request: Request,
     cursor: str = Query("", description="翻页光标：上一页最后一个 gid（首页留空）"),
     query: str = Query("", description="同时做关键词搜索时填这里"),
+    direction: str = Query(
+        "next",
+        pattern="^(next|prev)$",
+        description="翻页方向：next 向后（默认），prev 向前",
+    ),
 ):
     """首页（或带关键词的搜索页）。
 
-    返回里带 ``next`` / ``prev`` 两个光标，下一屏把它们回填到 ``cursor`` 上。
-    注意 ``next_url`` 是上游原始地址，仅供排查。
+    返回里带 ``next`` / ``prev`` 两个光标。**用哪个光标就得配哪个方向**：往回翻要
+    传 ``direction=prev``，不能把 ``prev`` 的值塞进 ``cursor`` 当 next 用——那样
+    上游不会报错，只会静默返回错误的一页。``next_url`` / ``prev_url`` 是上游原始
+    地址，仅供排查。
     """
     client = get_client(request)
     try:
-        return await client.list_galleries(cursor=cursor.strip(), query=query.strip())
+        return await client.list_galleries(
+            cursor=cursor.strip(), query=query.strip(), direction=direction
+        )
     except EhError as exc:
         _raise(exc)
 
@@ -79,11 +88,20 @@ async def search(
     request: Request,
     query: str = Query(..., min_length=1, description="搜索词，支持 E-Hentai 的语法"),
     cursor: str = Query("", description="翻页光标"),
+    direction: str = Query(
+        "next",
+        pattern="^(next|prev)$",
+        description="翻页方向：next 向后（默认），prev 向前",
+    ),
 ):
-    """搜索画廊（``f_search`` 参数，语法与站内搜索框一致）。"""
+    """搜索画廊（``f_search`` 参数，语法与站内搜索框一致）。
+
+    与 ``/list`` 一样，往回翻要传 ``direction=prev``，且光标必须来自**同一个
+    查询**的结果页——上游的光标不能跨查询复用。
+    """
     client = get_client(request)
     try:
-        return await client.search(query, cursor=cursor.strip())
+        return await client.search(query, cursor=cursor.strip(), direction=direction)
     except EhError as exc:
         _raise(exc)
 

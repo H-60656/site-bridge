@@ -377,37 +377,50 @@ class EhClient:
 
     # ---------- 列表 / 搜索 ----------
 
-    async def list_galleries(self, cursor: str = "", query: str = "") -> dict:
+    async def list_galleries(
+        self, cursor: str = "", query: str = "", direction: str = "next"
+    ) -> dict:
         """首页或搜索结果。
 
         注意翻页：E-Hentai **不用页码**，``?page=N`` 会被完全忽略；唯一有效的
         是 ``?next=<上一页最后一个 gid>`` 这个光标，就在列表页的 ``id="dnext"``
         上。所以这一层给的是 ``nav.next`` 而不是页码。
+
+        往回翻用的是另一个键：``?prev=<下一页第一个 gid>``（``id="dprev"``）。
+        两个键**不能混用** —— 把 ``prev`` 的值当 ``next`` 发出去不会报错，只会
+        静默拿到错误的一页（实测拿到的是当前页的下一页）。所以要往回翻必须把
+        ``direction`` 一起传进来，这一层按方向选键名。
         """
+        if direction not in ("next", "prev"):
+            raise EhError(f"翻页方向只能是 next 或 prev，收到 {direction!r}", status=400)
         params: dict = {}
         if query:
             params["f_search"] = query
         if cursor:
-            params["next"] = cursor
+            params[direction] = cursor
         body = await self._get_html(BASE_URL + "/", params=params or None)
         items = _parse.parse_galleries(body)
         nav = _parse.parse_list_nav(body)
         return {
             "query": query,
             "cursor": cursor,
+            "direction": direction,
             "count": len(items),
             "found": nav["found"],
             "next": nav["next"],
             "prev": nav["prev"],
             "next_url": nav["next_url"],
+            "prev_url": nav["prev_url"],
             "items": items,
         }
 
-    async def search(self, query: str, cursor: str = "") -> dict:
+    async def search(
+        self, query: str, cursor: str = "", direction: str = "next"
+    ) -> dict:
         query = (query or "").strip()
         if not query:
             raise EhError("搜索关键词为空", status=400)
-        return await self.list_galleries(cursor=cursor, query=query)
+        return await self.list_galleries(cursor=cursor, query=query, direction=direction)
 
     async def popular(self) -> dict:
         """``/popular`` 热门页（**一次给完，不能翻页**）。
@@ -423,11 +436,13 @@ class EhClient:
         return {
             "query": "",
             "cursor": "",
+            "direction": "next",
             "count": len(items),
             "found": nav["found"],
             "next": "",
             "prev": "",
             "next_url": "",
+            "prev_url": "",
             "items": items,
         }
 

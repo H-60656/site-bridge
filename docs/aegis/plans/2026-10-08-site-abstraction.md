@@ -1153,4 +1153,93 @@ except ValueError as exc:
 - **偶然正确也要写进文档。** ehviewer 之所以正常，不是因为设计得更严谨，而是因为 `gdata()` 恰好手工搭 JSON 又顺手包了 try。**「这个站点为什么没事」如果答不出「因为有意识地做了 X」，那它随时可能变得有事** —— 把偶然写清楚，才能在重构时不把它当噪音删掉。
 
 
+## 27. 第八种形态：解析层是对的，出口没修 —— `prev` 光标是个死字段（2026-10-09）
+
+### 27.1 缘起：一次「本来只想确认没缺陷」的横向对照
+
+§24 的教训是「一个端点的存在与否，本身也是需要验证的假设」，§25 是「同一个查询条件回灌全仓」。这一节把 §24 的查询条件（**横向对照**）用到 ehviewer 的两个分页入口上：`/api/eh/list` 承诺的 `f_search` 与 `?next=` 游标，到底生不生效？
+
+**结论：三项承诺全部属实，无缺陷。** 但取证过程中顺手挖出了本条要记的真缺陷。
+
+| 待验证的承诺 | 实测 | 判定 |
+| --- | --- | --- |
+| `f_search` 真按关键词过滤 | `touhou` 64146B / `pokemon` 66661B / `fate` 66461B 均有真实结果；`zzzzqqxxnotexist` 5362B `No hits found` | ✅ 生效 |
+| 「NoHits」会不会是节流/软拒绝 | 同词连打 6 次全部相同；交替两词各 6/6 稳定；`sleep 20s` 后不变；每词间隔 8s 仍不变 —— **跟着词走，不跟请求序号走** | ✅ 是上游索引里真没这个词 |
+| `?next=` 真翻页 | 第1页 next=4242365 → 第2页首3=[4242364,…]，两页 id 交集 **0 条**；第3页继续推进，交集仍 0 | ✅ 生效 |
+| `?page=N` 被忽略 | `?page=0` 与 `?page=9` 字节数完全相同（62282 == 62282） | ✅ 与 docstring 一致 |
+| 光标能否跨查询复用 | 搜索页喂**首页**的光标 → 返回的仍是搜索第1页（与搜索页相同=True、与首页相同=False） | ✅ 必须与 `f_search` 配对 |
+
+取证手法备忘：搜索页的参数回显要 dump **表单**才看得见（`<input id="f_search" name="f_search" value="lolicon">` ⇒ 参数确实被上游收到），只数结果条数会误判成「没传参」。另外 `lolicon` 这个词本机查不到属于上游索引事实，换 5 个不同边缘 IP 全部 5394B —— **不是边缘缓存问题**。
+
+### 27.2 顺手挖出的真缺陷：`prev` 有解析、没出口
+
+上游列表页翻页有**两个**光标：向后 `?next=<gid>`，向前 `?prev=<gid>`。本仓的解析层做得很细：
+
+- `ehviewer/parse.py:240` 的 `parse_list_nav()` 两个都解析，返回体里 `next` / `prev` / `next_url` / `prev_url` 一应俱全；
+- `ehviewer/parse.py:119` 的 `_cursor_of(url, key="next")` 专门加了 `key` 参数，注释写着「**写死 `next` 会让 `prev` 永远解析成空串（实测踩过）**」——§20 已修过这一处解析。
+
+**解析层完全正确，缺陷在出口：**
+
+- `ehviewer/client.py:380` 的 `list_galleries(cursor="", query="")` 只有 `cursor` 一个入口，体内 `if cursor: params["next"] = cursor` —— **永远发 `?next=`**；
+- `ehviewer/client.py` 的 `search()` 转调它，同样只有 `cursor`；
+- 而 `ehviewer/routes/galleries.py:52` 的 docstring 明确承诺「返回里带 `next` / `prev` 两个光标，**下一屏把它们回填到 `cursor` 上**」。
+
+⇒ `prev` / `prev_url` 是**没有出口的死字段**；照文档承诺回填，不报错，只是**静默拿到错的一页**。
+
+**实测（`_scratch/_probe_eh_prev.py`，决定性）：**
+
+| 动作 | 结果 | 说明 |
+| --- | --- | --- |
+| 第1页 | 首3=[4242400,4242397,4242396] next='4242367' prev='' | 首页无 prev |
+| 第2页（喂 next=4242367） | 首3=[4242366,4242365,4242364] next='4242342' prev='4242366' | prev 已被正确解析出来 |
+| 上游 `?prev=4242366` | 首3=[4242400,4242397,4242396]，**与第1页完全相同=True，重叠 25/25** | 上游 `?prev=` 确实可用 |
+| 对照 A：把 prev 值当 `?next=` 发 | 首3=[4242365,4242364,4242363]，与第2页重叠 **24/25**、与第1页重叠 0/25 | **拿到的是第2页的下一页** |
+| 对照 B：经 `list_galleries(cursor='4242366')` | 同上（与第1页相同=False、与第2页相同=False） | **客户端确实发不出 `?prev=`** |
+
+结论行：`上游 ?prev= 可用: True` / `客户端能发出 ?prev=: False`。
+
+### 27.3 根因：一条「只修了一半」的修复链
+
+§20 修 `prev` 时动的是**解析层**（`_nav_href` 的 `which` 分派 + `_cursor_of` 的 `key` 参数），修完后单测全绿、自检全绿、`prev` 字段也如实回显 —— **所有既有判据都认为这一步已经完成**。但「解析出来」到「对外可用」之间还有一跳（客户端入参 → 构建 query → 路由入参），这一跳**没有任何判据覆盖**：
+
+- 单测覆盖的是 `parse_list_nav(body)` 的输出，不覆盖「调用方能否消费它」；
+- 自检（`ehviewer/envcheck.py`）只探列表页能不能取回，不问翻页方向；
+- 类型系统也拦不住：`prev` 是个普通 `str`，回显出去完全合法。
+
+**这是与陷阱三同族但方向相反的一类缺陷**——陷阱三是「上游的错被本端改写」，本条是「上游的对被本端浪费」。前者在错误路径上，后者在**正常路径**上，所以「拿一个必定失败的路径打一遍」这种最有效的通用手法在这里完全失效。
+
+### 27.4 修法：给出口，而不是删字段
+
+两个候选：删掉 `prev`（承认不支持回退）/ 加 `direction` 让回退真能用。**用户 m05967 选「两者都做」**——加 `direction` 参数，并同时把手册与测试补齐。
+
+- `ehviewer/client.py:380` `list_galleries(self, cursor="", query="", direction="next")`：取值校验 `if direction not in ("next", "prev"): raise EhError(f"翻页方向只能是 next 或 prev，收到 {direction!r}", status=400)`；`if cursor: params[direction] = cursor`（**按方向选键名**）；返回体新增 `"direction": direction` 与 `"prev_url": nav["prev_url"]`。
+- `ehviewer/client.py` `search(self, query, cursor="", direction="next")`：加形参并转传。
+- `ehviewer/client.py` `popular()`：返回体补齐同形（`"direction": "next"` / `"prev_url": ""`），三个入口返回形状一致。
+- `ehviewer/routes/galleries.py`：`/list` 与 `/search` 都加 `direction: str = Query("next", pattern="^(next|prev)$", description="翻页方向：next 向后（默认），prev 向前")` 并透传；两处 docstring 重写，点明「**用哪个光标就得配哪个方向**」；`/list` 原来的错误承诺（「把它们回填到 `cursor` 上」）删除。
+- **保留回显**：返回体里同时给 `direction`（本次实际用的方向）与 `prev_url`，让调用方能自证往哪边翻了，不必靠猜。
+
+### 27.5 回归用例（+8，ehviewer 181 → 189）
+
+- **客户端层 5 条：** `test_list_galleries_sends_prev_when_asked_to_go_back`（断言 `params == {"prev": "4242010"}` 且 `assertNotIn("next", params)`——**两个键互斥是这条的判据**）/ `test_list_galleries_rejects_an_unknown_direction`（400，且 `client.request.assert_not_awaited()` ⇒ 非法值在发请求之前就被拦下）/ `test_list_galleries_reports_the_direction_it_used` / `test_list_galleries_keeps_a_default_direction_of_next` / `test_search_forwards_the_direction`（`params == {"f_search": "lolicon", "prev": "4242010"}`）。
+- **路由层 3 条：** `test_list_forwards_the_prev_direction`（记到 `("list", "4242010", "", "prev")`）/ `test_search_forwards_the_prev_direction`（记到 `("search", "lolicon", "4242010", "prev")`）/ `test_list_rejects_an_unknown_direction_before_the_client`（`?direction=sideways` 在 `/list` 与 `/search` 上都 422，`self.fake.calls == []`）。
+- fake client 的调用记录由 3 元组扩为 4 元组（追加 direction），3 处既有断言同步更新为 `("list", "", "", "next")` / `("list", "4242034", "cat", "next")` / `("search", "lolicon", "4242034", "next")`。
+
+### 27.6 验证
+
+- 真实链路 `_scratch/_probe_eh_prev_fix.py`（EXIT=0）：第1页 → 第2页 → 按 `direction=prev` 回退，**回退页 == 第1页: True / == 第2页: False**；`params 键是 prev: True`；对照（当 next 发）`== 第1页? False`；`verdict: prev 出口已修好 ✓`。
+- 稳定性复验 `_scratch/_probe_eh_prev_stability.py`：同词连发 5 次 `?prev=` **5/5 精确等于第1页**。（首次单跑曾报 `EhUnavailableError … (28) Recv failure: Connection was reset`，重跑即通 ⇒ 瞬时抖动，不是稳定故障。该探针的逐边缘分支没跑通，原因是 `client.session_for` 是 **async**，漏了 `await` 会得到 `AttributeError: 'coroutine' object has no attribute 'get'`——属探针自身 bug，结论已由连发 5 次覆盖。）
+- `tests.test_ehviewer` → **Ran 189 tests … OK**；全量 `-m unittest discover -s tests -t .` → **Ran 924 tests in 18.396s … OK (skipped=1)**（916 → 924）。
+- `scripts/check_boundary.py` → 数字不变（本次不动路由集合），边界检查通过。
+- 手册：`README.md` 两处测试计数 916 → **924**（`ehviewer 181 → 189`）；端点表 `/api/eh/list` 与 `/api/eh/search` 补 `direction=`；新增第 6 条说明「游标分方向」（原第 6/7 条顺延为 7/8，并修掉因插入产生的重复序号与新指代漂移）。
+
+### 27.7 教训
+
+- **解析正确 ≠ 能力可用。** 一个被解析出来、写进文档、甚至专门修过键名的字段，仍然可能在整个代码库里**没有一条路径能把它用出去**。检查动作：每新增一个「从上游解析出来的可选项」，回头确认它有一个**对应的出口参数**。
+- **「修好了」要按链路分段验收。** §20 修完解析层时所有判据都变绿了，因为判据只覆盖解析层。**一条链路上的绿色只证明被覆盖的那些段**——修完上游解析，还要问「下游谁来消费它、有没有人验过那一跳」。
+- **静默错页比报错更贵。** 回填 `prev` 会正常返回 200、正常解析、正常翻页 —— 只是翻错了方向。**不报错的缺陷必须靠端到端对照**（把字段故意用错发一次，与正确用法比对结果）才能看见。
+- **横向对照要覆盖「正常路径」而不只是「异常路径」。** §25 的手法（拿必定失败的路径打一遍）对陷阱三/四是决定性的，但对本条毫无作用 —— 因为缺陷就在成功路径上。补充手法：**把返回体里带回上游语义的字段逐个反向走一遍**（`grep` 返回体 → 问「调用方拿它做什么、有没有对应入参」）。
+- **「上游不支持」也是需要验证的假设。** 直觉会认为「翻页只有 next，prev 大概是摆设」，但实测 `?prev=` 精确取回上一页（25/25 全同）。如果当初按直觉删掉 `prev` 字段，就会把一个**本可实现的能力**当成不存在，并且永远发现不了。
+
+
+
 
