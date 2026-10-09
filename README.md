@@ -4,7 +4,7 @@
 Pixiv 官方 App API（`app-api.pixiv.net`）调用方式（请求签名、OAuth 认证、全部端点），用 Python 重新实现的一个
 **自托管 HTTP 接口服务**。启动后，任何语言的代码通过普通 HTTP 请求即可调用 Pixiv 数据能力，无需处理签名、token 刷新、防盗链等细节。
 
-> 项目分四层：**`pixiv_bridge/`**（**框架**：启动、配置、环境自检、扩展机制、导航页与 `/api/health`；不含任何站点知识）、**`pixiv/`**、**`iwara/`** 与 **`asmr_one/`**（三个**同级的接口项目**，各有一个同构的 `run.py` 入口：分别提供 Pixiv 接口、iwara.tv 接口、asmr.one 接口）、**`novel/`** 与 **`iwara_web/`**（两个**扩展**：小说阅读器与 iwara 视频页面，没有自己的入口，把目录名写进配置就挂到对应站点上）。**新增一个站点** = 建一个与它们同级的目录（`app.py` 里按 `Site` 契约给出站点信息、自带检查与登录校验，`run.py` 只做三件事：`bootstrap()` → `from <站点>.app import SITE` → `pixiv_bridge.cli.main(site=SITE)`），框架一行都不用改；详见「附属项目（扩展）」与「新增一个接口项目」。
+> 项目分四层：**`pixiv_bridge/`**（**框架**：启动、配置、环境自检、扩展机制、导航页与 `/api/health`；不含任何站点知识）、**`pixiv/`**、**`iwara/`**、**`asmr_one/`** 与 **`pornhub/`**（四个**同级的接口项目**，各有一个同构的 `run.py` 入口：分别提供 Pixiv 接口、iwara.tv 接口、asmr.one 接口、pornhub 抓取器）、**`novel/`** 与 **`iwara_web/`**（两个**扩展**：小说阅读器与 iwara 视频页面，没有自己的入口，把目录名写进配置就挂到对应站点上）。**新增一个站点** = 建一个与它们同级的目录（`app.py` 里按 `Site` 契约给出站点信息、自带检查（与可选的登录校验），`run.py` 只做三件事：`bootstrap()` → `from <站点>.app import SITE` → `pixiv_bridge.cli.main(site=SITE)`），框架一行都不用改；详见「附属项目（扩展）」与「新增一个接口项目」。pornhub 没有公开 API，是**抓取器**（拿网页里的 `window.initialState` 解析），匿名即可用，站点改版会让接口回 502，这是已知脆弱性。
 
 ## 特性
 
@@ -20,6 +20,7 @@ Pixiv 官方 App API（`app-api.pixiv.net`）调用方式（请求签名、OAuth
 - **数据都在 `data/`**：token、阅读历史、下载记录、收藏台账、页面配置统一放在项目下的 `data/` 目录（老版本的 `tokens.json` / `history.jsonl` 首次启动自动搬过去），换机只需拷这一个目录
 - **可选的 iwara.tv 站点**（接口项目 `iwara/`，与 `pixiv/` 同级，用 `python iwara/run.py` 启动）：只提供 iwara 的视频浏览 / 搜索 / 详情 / 直链解析 / 缩略图（`/api/iwara/*`，不挂任何 Pixiv 路由），还自带一个**视频页面**（`http://127.0.0.1:8766/iwara`）：列表 / 搜索 / 筛选、点开详情看简介与标签、看相关视频、`<video>` 直接播（服务端代转字节并透传 `Range`，清晰度可切换）。直链是带签名的 MP4，浏览器里能直接播。用 `pixiv/run.py` 启动时这些地址是 404
 - **可选的 asmr.one 站点**（接口项目 `asmr_one/`，与 `pixiv/` 同级，用 `python asmr_one/run.py` 启动）：只提供 asmr.one 的作品浏览 / 关键词搜索 / 作品详情 / 音轨树 / 音频与封面代转（`/api/asmr/*`，不挂任何 Pixiv 路由），**匿名可用、不需要登录**。封面与音频字节一律由服务端代转（`/api/asmr/cover/{id}`、`/api/asmr/stream?url=...`），因为浏览器所在机器同样到不了那些 Cloudflare 边缘 IP。它和 iwara 一样自带 `curl_cffi` 客户端（种子 IP 池 + ECH），但**ECH 默认是开的**（asmr 的边缘 IP 在本机是 IP 级被阻断，不叠 ECH 基本不通；要关就写 `ASMR_BRIDGE_ECH=0`）。用 `pixiv/run.py` 启动时这些地址是 404
+- **可选的 pornhub 站点**（接口项目 `pornhub/`，与 `pixiv/` 同级，用 `python pornhub/run.py` 启动）：Pornhub **没有公开 API**，本站点是个**抓取器**，拿视频页里的 `window.initialState` 解析，给出视频列表 / 搜索 / 详情（含视频直链）/ 播放代转（`/api/pornhub/*`，不挂任何 Pixiv 路由），**匿名可用、不需要登录**。它和 iwara / asmr 一样自带 `curl_cffi` 客户端（Cloudflare 后只认浏览器 TLS 指纹），**ECH 默认也是开的**（要关就写 `PORNHUB_BRIDGE_ECH=0`）。站点改版会让 `initialState` 字段名变掉、接口回 502——这是已知脆弱性，改 `pornhub/client.py` 的解析即可。用 `pixiv/run.py` 启动时这些地址是 404
 - **OpenAPI 文档**：启动后访问 `http://127.0.0.1:8765/docs` 在线调试
 
 ## 原理
@@ -140,7 +141,7 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 .venv/bin/python asmr_one/run.py
 ```
 
-项目分成四层，**站点与扩展依赖框架**、单向依赖不反过来（各站点之间也互不依赖）。**每个接口项目各有一个同构的入口脚本**（`pixiv/run.py`、`iwara/run.py` 与 `asmr_one/run.py`）；小说阅读器与 iwara 视频页面都没有专属入口，它们作为扩展挂上去：
+项目分成四层，**站点与扩展依赖框架**、单向依赖不反过来（各站点之间也互不依赖）。**每个接口项目各有一个同构的入口脚本**（`pixiv/run.py`、`iwara/run.py`、`asmr_one/run.py` 与 `pornhub/run.py`）；小说阅读器与 iwara 视频页面都没有专属入口，它们作为扩展挂上去：
 
 | 启动方式 | 提供什么 |
 | --- | --- |
@@ -150,8 +151,9 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 | `iwara/run.py` | iwara.tv 接口项目（`iwara/`）：**只有**那十个 `/api/iwara/*`（浏览 / 搜索 / 详情 / 相关 / 直链解析 / 代转播放 / 图片 / 缩略图 / 登录态 / 授权），外加 `/` 上的**导航页**；它不挂任何 Pixiv 路由 |
 | `iwara/run.py` + `PIXIV_BRIDGE_EXTENSIONS=iwara_web` | 上面那些，再挂上 iwara 视频页面扩展（`iwara_web`）：`/iwara` 上的播放页（浏览 / 搜索 / 播放 / 相关视频） |
 | `asmr_one/run.py` | asmr.one 接口项目（`asmr_one/`）：**只有**那七个 `/api/asmr/*`（作品列表 / 搜索 / 作品详情 / 音轨树 / 封面代转 / 音频代转 / 登录态），外加 `/` 上的**导航页**；它不挂任何 Pixiv 或 iwara 路由 |
+| `pornhub/run.py` | Pornhub 抓取器（`pornhub/`）：**只有**那五个 `/api/pornhub/*`（视频列表 / 搜索 / 详情含直链 / 播放代转 / 自检），外加 `/` 上的**导航页**；它不挂任何 Pixiv、iwara 或 asmr 路由，且无公开 API、纯靠抓 `window.initialState`，站点改版会回 502（已知脆弱性） |
 
-各接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3～4 项 iwara 专属自检（开了 `IWARA_BRIDGE_ECH=1` 才多出 ECH 那一项），`asmr_one/run.py` 追加 2～3 项 asmr 专属自检（默认就开 ECH，见「环境检查说明」）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`；要 asmr.one 就拷 `pixiv_bridge/` + `asmr_one/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
+各接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3～4 项 iwara 专属自检（开了 `IWARA_BRIDGE_ECH=1` 才多出 ECH 那一项），`asmr_one/run.py` 追加 2～3 项 asmr 专属自检（默认就开 ECH，见「环境检查说明」），`pornhub/run.py` 追加 3 项抓取器专属自检（依赖 / 网络 / ECH，默认就开 ECH）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`；要 asmr.one 就拷 `pixiv_bridge/` + `asmr_one/`；要 pornhub 就拷 `pixiv_bridge/` + `pornhub/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
 
 首次运行输出示例：
 
@@ -330,6 +332,16 @@ pixiv-bridge/
 │   ├── extension.py    扩展入口（固定文件名）：导出页面路由与 EXTENSION_NAV
 │   ├── web.py          页面路由（`/iwara`），靠绝对路径调 /api/iwara/*
 │   └── index.html      内置 Web 页面：视频浏览 / 搜索 / 播放（详情页 + 相关视频 + 清晰度切换）
+├── pornhub/                             pornhub 接口项目（与 pixiv/ 同级；入口 pornhub/run.py）
+│   ├── __init__.py     说明本站点依赖框架；对外入口是 app.SITE（惰性导出，避免直接拖入 curl_cffi）
+│   ├── run.py          入口（bootstrap 先装 curl_cffi，再交给框架 cli）
+│   ├── app.py          站点声明：Site 契约 + create_app()，把 PornhubClient 挂到 app.state（nav_order=4）
+│   ├── client.py       pornhub 抓取器：种子 IP 池 + 浏览器指纹 TLS + ECH + DoH，解析页面里的 window.initialState
+│   ├── envcheck.py      pornhub 专属自检（依赖 / www.pornhub.com / ECH，默认就开 ECH），经 Site.checks 追加到入口检查表
+│   ├── ech.py           pornhub 用的 ECH 配置获取（自足副本：站点间不许互相 import）
+│   ├── config.py        pornhub 的配置：`PornhubSettings(Settings)` 加了 ECH 三个开关（`PORNHUB_BRIDGE_ECH*`，ECH 默认开）
+│   ├── requirements.txt 本站点额外依赖（curl_cffi + cffi，刻意不放进根清单）
+│   └── routes/         本站点路由（videos 接口：`/api/pornhub/*`）
 ├── pixiv_bridge/                       框架（启动 / 配置 / 环境自检 / 扩展机制 / 导航页；不含任何站点知识）
 │   ├── __main__.py     项目导航：列出接口项目与扩展、选一个再启动（`python -m pixiv_bridge` / `--list`）
 │   ├── site.py         Site 契约（站点交给框架的东西：入口工厂、标题、配置类、自检钩子）
@@ -358,7 +370,7 @@ pixiv-bridge/
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
-├── tests/                              单元测试（712 项：框架与站点 334 + iwara 199 + asmr_one 134 + 打包 45）
+├── tests/                              单元测试（843 项：框架与站点 334 + iwara 199 + asmr_one 134 + pornhub 131 + 打包 45）
 ├── openssl-libs/                       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -366,7 +378,7 @@ pixiv-bridge/
 └── scripts/            自检与打包脚本
     ├── sites.py             构建侧的站点/扩展登记表（唯一事实来源：布局、标题、自带资产、扩展宿主）
     ├── check_boundary.py    整理自检（依赖方向 + 出入口布局 + 各站点/扩展的路由差集 + 注册表↔运行时一致性）
-    └── make_share_packages.py  一键生成七个分享包（接口包 / 扩展包 / 组合包）
+    └── make_share_packages.py  一键生成八个分享包（接口包 / 扩展包 / 组合包）
 ```
 
 ## 配置（环境变量 / .env）
@@ -407,7 +419,7 @@ pixiv-bridge/
 
 ## 附属项目（扩展）
 
-项目分四层，但**入口只有三个**（`pixiv/run.py`、`iwara/run.py` 与 `asmr_one/run.py`：三个同级接口项目，命令行完全一样）。小说阅读器（`novel`）与 iwara 视频页面（`iwara_web`）都不带专属入口脚本，它们作为**扩展**挂在各自的宿主站点上：把扩展目录名写进配置，站点启动时自己去该目录找固定名字的入口文件 `extension.py`。
+项目分四层，但**入口只有四个**（`pixiv/run.py`、`iwara/run.py`、`asmr_one/run.py` 与 `pornhub/run.py`：四个同级接口项目，命令行完全一样）。小说阅读器（`novel`）与 iwara 视频页面（`iwara_web`）都不带专属入口脚本，它们作为**扩展**挂在各自的宿主站点上：把扩展目录名写进配置，站点启动时自己去该目录找固定名字的入口文件 `extension.py`。
 
 ```
 PIXIV_BRIDGE_EXTENSIONS=novel        # 相对路径按项目根算
@@ -829,7 +841,7 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 712 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + 打包 45）
+python -m unittest discover -s tests       # 843 项应全绿（框架与站点 334 + iwara 199 + asmr_one 134 + pornhub 131 + 打包 45）
 python scripts/check_boundary.py           # 拆分边界自检
 python scripts/make_share_packages.py --check   # 分享包内容自检（不写 zip）
 ```
@@ -853,10 +865,10 @@ python scripts/make_share_packages.py --check   # 分享包内容自检（不写
 
 ### 一键生成分享包（推荐）
 
-项目现在是四层（框架 + 三个同级接口项目 + 两个扩展），按用途拆成七个分享包：
+项目现在是四层（框架 + 四个同级接口项目 + 两个扩展），按用途拆成八个分享包：
 
 ```bash
-python scripts/make_share_packages.py            # 七个包全做，写进 dist/
+python scripts/make_share_packages.py            # 八个包全做，写进 dist/
 python scripts/make_share_packages.py --list     # 只列有哪些包
 python scripts/make_share_packages.py iwara-api  # 只做一个（按 key 或 zip 名）
 python scripts/make_share_packages.py --check    # 只自检内容、不写 zip
@@ -867,6 +879,7 @@ python scripts/make_share_packages.py --check    # 只自检内容、不写 zip
 | `pixiv-api` | `pixiv-api.zip` | Pixiv 接口项目 + 框架（含 `pixiv/`、`openssl-libs/`、`examples/`、启动脚本） | 解压后在目录里 `python pixiv/run.py` |
 | `iwara-api` | `iwara-api.zip` | 只有 iwara 接口项目 + 框架（`iwara/`，**不带 `pixiv/`、不带 `openssl-libs/`**） | 解压后 `python iwara/run.py`（iwara 的 ECH 走 `curl_cffi` 的 libcurl，不需要那套 OpenSSL 动态库） |
 | `asmr-api` | `asmr-api.zip` | 只有 asmr 接口项目 + 框架（`asmr_one/`，**不带 `pixiv/` / `iwara/`、不带 `openssl-libs/`**） | 解压后 `python asmr_one/run.py`（asmr 的 ECH 同样走 `curl_cffi` 的 libcurl；不需要 token） |
+| `pornhub-api` | `pornhub-api.zip` | 只有 pornhub 接口项目 + 框架（`pornhub/`，**不带 `pixiv/` / `iwara/` / `asmr_one/`、不带 `openssl-libs/`**） | 解压后 `python pornhub/run.py`（pornhub 是抓取器，同样走 `curl_cffi` 的 libcurl；不需要 token） |
 | `novel-extension` | `novel-extension.zip` | 小说阅读器扩展（`novel/`） | **不能单独启动**：把包内 `novel/` 拷进 Pixiv 接口项目根，`.env` 写 `PIXIV_BRIDGE_EXTENSIONS=novel` |
 | `iwara_web-extension` | `iwara_web-extension.zip` | iwara 视频页面扩展（`iwara_web/`） | **不能单独启动**：把包内 `iwara_web/` 拷进 `iwara-api` 项目根，`.env` 写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`（要配 `iwara/run.py` 入口） |
 | `pixiv-novel` | `pixiv-novel.zip` | Pixiv 接口 + 阅读器，已配好 | 解压后在目录里 `python pixiv/run.py`，`.env` 写 `PIXIV_BRIDGE_EXTENSIONS=novel` |

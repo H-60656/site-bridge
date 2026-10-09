@@ -3,7 +3,7 @@
 - 日期：2026-10-08
 - 触发需求（用户原话，m00001）："项目中存在错误布局，两个接口项目应该是同级的，错误修正后更新分享包；现在想抽象两个接口项目，方便后续实现其他接口项目"
 - 用户已确认的方案（m00066）：`depth=A`（彻底分层）+ `iwara_stack=只提供 iwara 接口`
-- 状态：**已完成**（2026-10-08 收尾，35 / 35，见第 7 节尾注与第 8 节实测）。第 12 节是同日追加的「根目录启动＝项目导航」；第 13 节是后续用本抽象落地的第三个站点 `asmr_one/`。
+- 状态：**已完成**（2026-10-08 收尾，35 / 35，见第 7 节尾注与第 8 节实测）。第 12 节是同日追加的「根目录启动＝项目导航」；第 13 节是后续用本抽象落地的第三个站点 `asmr_one/`；第 14 节是第四个站点 `pornhub/`（抓取器）—— 两次加站点都验证了「实现侧零硬编码、只有壳文件与文档要手改」这条抽象承诺。
 
 ## 1. Goal
 
@@ -339,3 +339,32 @@ if __name__ == "__main__":
 - **打包自检**：`python scripts/make_share_packages.py --check` → **七个包**：`pixiv-api` 59、`iwara-api` 45、**`asmr-api` 43**、`novel-extension` 17、`iwara_web-extension` 8、`pixiv-novel` 72、`iwara-iwara_web` 49 → `分享包处理完成`。
 - **文档**：`README.md` / `INSTALL.md` / `DIRECT.md` / `.env.example` 四份同步为三站点（含新增 `ASMR_BRIDGE_ECH` / `ASMR_BRIDGE_ECH_CONFIG` / `ASMR_BRIDGE_ECH_IPS`）。
 - **仍未验证**：asmr.one 的真实取流只做过探活（`/api/tracks/{id}`、`/api/work/{id}`、`/api/works`、`/api/search/works`、`/api/auth/me` 的响应形状已核对并写进 `asmr_one/` 注释），未做长时间播放验证。
+
+## 14. 后续追加：第四个站点 `pornhub/`（抓取器，无公开 API）
+
+需求原文（m03971）："尝试做pornhub接口项目"；m03971 经选择「先搭可运行骨架 + 仅匿名」批准落地。
+
+可行性（web 检索结论）：Pornhub **没有公开 JSON API**（旧 `api.php` 已废）；社区库 `pornhub.js` / `pornhub-api` 都是**抓网页**（HTML + 页面内 `window.initialState`）；站点在 Cloudflare 后只认浏览器 TLS 指纹，抓取器靠 `curl_cffi` 的 `impersonate="chrome"` 清掉，与 iwara / asmr_one 同机制；官方 Hubtraffic / Webmaster API 是联盟流量 API，不能浏览 / 搜索 / 播放——所以本站点是一个**纯匿名抓取器**，无 `login_check`，站点改版会让 `initialState` 字段名变掉、接口回 502（已知脆弱性，改 `pornhub/client.py` 的解析即可）。
+
+### 14.1 新增的站点目录
+
+`pornhub/` 共 10 个文件，结构完全镜像 `asmr_one/`（站点间禁止互相 import，所以 `ech.py` / `client.py` 全都是自足副本）：`__init__.py`、`ech.py`、`config.py`、`client.py`（抓取器，非 API 客户端）、`routes/__init__.py`、`routes/videos.py`、`app.py`、`envcheck.py`、`run.py`（三段式）、`requirements.txt`（`curl_cffi>=0.7` + `cffi>=1.16`）。
+
+- `app.py`：`SITE = Site(name="pornhub", title="Pornhub Bridge", nav_order=4, settings_class=PornhubSettings, checks=extra_checks, ...)`，**没有 `login_check`**（纯匿名抓取）。
+- `routes/videos.py` 五条 `/api/pornhub/*`：`/health`、`/videos`、`/search`、`/video/{viewkey}`、`/stream`。
+- `config.py`：`PORNHUB_BRIDGE_ECH` 用 `_flag_or_default("PORNHUB_BRIDGE_ECH", True)` —— **不写这个变量就是开**（与 asmr 同策略），要关必须显式写 `=0`；另有 `PORNHUB_BRIDGE_ECH_CONFIG` / `PORNHUB_BRIDGE_ECH_IPS`。
+- `client.py`（`PornhubClient`）：`SITE_HOST="www.pornhub.com"`、`MEDIA_HOSTS` 含 `mph.pornhub.com` / `mpthc.phncdn.com` / `phncdn.com` / `pornhub.com`；用 `_STATE_RE` 抠 `window.initialState`，`_video_from_state` / `_videos_from_search_state` 归一化；`request()` 换 IP 重试；`health` / `list_videos` / `search` / `video` / `open_stream` / `aclose`；抛 `PornhubError` / `PornhubChallengeError`（Cloudflare 拦截） / `PornhubParseError`（改版）；`is_ech_host` / `is_media_host`。
+- `envcheck.py`：三项 `pornhub 依赖` / `pornhub 网络` / `pornhub ECH`；`PORNHUB_BRIDGE_ECH=0` 关掉后没有 ECH 那一项。
+- 与 asmr 同骨架：种子 IP 池 + `curl_cffi impersonate="chrome"` + DoH（自带 `ech.py` 的 `resolve_with_doh`），全池轮询换 IP 重试。
+
+### 14.2 抽象承诺在第四站点上的验证
+
+`scripts/sites.py` 是唯一事实来源，加一条 `SiteInfo(name="pornhub", ...)` + `SITE_ROUTE_PATHS["pornhub"]` 即可；`make_share_packages.py` 加 `PH_SETUP` / `PH_NOTES` / `PH` 与 `pornhub-api` 包（`validate_specs()` 的 `len(SITES)` / `len(SITES)+4` 断言自动跟上，无需改数）；`check_boundary.py` 已经遍历 `SITE_ROUTE_PATHS` 与 `site.extra_modules`，不用再动。壳文件（Dockerfile / start.bat / start.sh）里第三站点时已经遍历 `SITES`，但 BRIDGE_SITE 示例与文案要补 pornhub；文档（README / INSTALL / DIRECT / .env.example）同步为四站点 + `PORNHUB_BRIDGE_ECH*` 三个变量。第 13.2 节「四处写死假设」在第四站点上已被验证为**已全部动态化**——唯一仍需手改的是壳文件与文档的措辞/示例（与当初的教训一致：注册表记录不会让壳和文档自动跟上）。
+
+### 14.3 实测（本次落地，Windows / Python 3.13）
+
+- **边界检查**：`python scripts/check_boundary.py` → pixiv 60（自带 54）、iwara 16（自带 10）、asmr_one 13（自带 7）、**pornhub 11（自带 5）**、novel ↗pixiv +10、iwara_web ↗iwara +1 → `边界通过`。
+- **全量测试**：`python -m unittest discover -s tests` → **Ran 843 tests … OK (skipped=1)**，约 16 s。构成为 bridge 334 + iwara 199 + asmr_one 134 + **pornhub 131**（`tests/test_pornhub.py`）+ packaging 45。注意 `tests/test_bridge.py` 的 `NavigationTestCase` 里有两处写死了站点名单，加站点时必须一起改（本次已改为四站点 + `description` 前缀断言）。
+- **打包自检**：`python scripts/make_share_packages.py --check` → **八个包**：`pixiv-api` 59、`iwara-api` 45、`asmr-api` 43、**`pornhub-api` 43**、`novel-extension` 17、`iwara_web-extension` 8、`pixiv-novel` 72、`iwara-iwara_web` 49 → `分享包处理完成`。`pornhub-api.zip` 不含其它站点目录与 `openssl-libs/`。
+- **文档**：`README.md` / `INSTALL.md` / `DIRECT.md` / `.env.example` 四份同步为四站点（含新增 `PORNHUB_BRIDGE_ECH` / `PORNHUB_BRIDGE_ECH_CONFIG` / `PORNHUB_BRIDGE_ECH_IPS`）。
+- **仍未验证**：pornhub 的真实抓取只做过 `client.py` 的解析路径核对与自检（`/api/pornhub/health` 等 5 个接口的响应形状基于 `window.initialState` 结构推断，未连真站跑通）——站点改版会让 `initialState` 字段名变掉、接口回 502，这是已知脆弱性。

@@ -2,7 +2,7 @@
 
 这份文档记录本项目的核心做法：**在目标站点被 DNS 污染 / SNI 阻断 / IP 封锁 / 反爬识别时，怎么让程序直接拿到数据。** 它不是 API 手册（那是 README），而是「遇到连不上时该怎么想、怎么定位、怎么选手段」的方法论。
 
-适用对象：任何被链路中间盒干扰的站点。项目里已经用同一套思路落地了三个站点 —— Pixiv（`pixiv_bridge/`）、iwara.tv（`iwara/`）与 asmr.one（`asmr_one/`），本文最后一节对照它们说明「同方法、不同手段」。
+适用对象：任何被链路中间盒干扰的站点。项目里已经用同一套思路落地了四个站点 —— Pixiv（`pixiv_bridge/`）、iwara.tv（`iwara/`）、asmr.one（`asmr_one/`）与 pornhub（`pornhub/`），本文最后一节对照它们说明「同方法、不同手段」。
 
 ---
 
@@ -191,29 +191,29 @@ else:                   # 普通路径
 
 直连能力是**可选增强**，不能反过来成为负担：
 
-- **站点隔离，单向依赖。** `pixiv_bridge/` 是纯框架，永远不认识 `pixiv/`、`iwara/`、`asmr_one/`、`novel/`、`iwara_web/`；站点与扩展只能 `import pixiv_bridge.*`（各站点之间也互不依赖）。`scripts/check_boundary.py` 用 AST + 子进程探路由来强制这条边界，`scripts/sites.py` 是构建侧的登记表。
+- **站点隔离，单向依赖。** `pixiv_bridge/` 是纯框架，永远不认识 `pixiv/`、`iwara/`、`asmr_one/`、`pornhub/`、`novel/`、`iwara_web/`；站点与扩展只能 `import pixiv_bridge.*`（各站点之间也互不依赖）。`scripts/check_boundary.py` 用 AST + 子进程探路由来强制这条边界，`scripts/sites.py` 是构建侧的登记表。
 - **挑选站点也只写一次。** 根目录的启动就是**项目导航**：`pixiv_bridge/__main__.py` 发现「有 `run.py` 的目录＝接口项目、只有 `extension.py` 的目录＝扩展」，用 `ast` 从站点自己的文件里读导航用的字面量（标题、简介、`Site.nav_order`），**不 import 也不执行站点代码**，选完才 `runpy.run_path` 交给它的 `run.py`。`start.bat` / `start.sh` 因此只是转发器（在 sh/bat 里各抄一套发现＋排序＋询问必然与 Python 侧漂移，而且 shell 读不到 `nav_order`）。
-- **重依赖不进根清单。** `curl_cffi` 是编译包，只有 iwara 与 asmr.one 需要，所以分别写在 `iwara/requirements.txt`、`asmr_one/requirements.txt` 里，由 `pixiv_bridge/deps.py` 的通用 `ensure_packages(names, requirements)` 按需安装，站点在自己 `run.py` 里先 `bootstrap(partial(ensure_packages, ...))` 再用它。只跑 Pixiv 的用户完全不必碰它。
+- **重依赖不进根清单。** `curl_cffi` 是编译包，只有 iwara、asmr.one 与 pornhub 需要，所以分别写在 `iwara/requirements.txt`、`asmr_one/requirements.txt`、`pornhub/requirements.txt` 里，由 `pixiv_bridge/deps.py` 的通用 `ensure_packages(names, requirements)` 按需安装，站点在自己 `run.py` 里先 `bootstrap(partial(ensure_packages, ...))` 再用它。只跑 Pixiv 的用户完全不必碰它。
 - **可选能力要有回退，且失败要安静。** 登录态失效不该让整站不可用 —— iwara 的 `_prepare_auth`（`iwara/client.py:465-485`）换不出 access token 时只把原因记进 `auth_error` 并退回匿名，因为「iwara 的绝大部分内容匿名就能看，为了一个失效的 token 让整站不可用是本末倒置」。
 - **能力自检要暴露给用户。** `/api/iwara/auth` 匿名时刻意不去打 `/user`（那返回 401，看着像报错），所以它永远 200；只有真拿到 access token 才问一次 `/user` 填 `username_hint` —— 顺带一条教训：token 载荷里**没有**用户名字段（只有 `exp`/`id`/`role`），早期直接读载荷的 `username` 于是恒为 `None`，而当时的测试替身自己往载荷里塞了 `username`，正好把这个 bug 盖住了。
 
 ---
 
-## 7. 同一套方法、三个不同站点
+## 7. 同一套方法、四个不同站点
 
-| | Pixiv 站点（`pixiv/`） | iwara.tv 站点（`iwara/`） | asmr.one 站点（`asmr_one/`） |
-| --- | --- | --- | --- |
-| 阻塞形态 | SNI 阻断 + DNS 污染 | DNS 污染 + Cloudflare 反爬挑战 | Cloudflare 边缘 IP 级阻断（同一批边缘对 Google 也返回 404，本机整段不通） |
-| ① DNS | 默认解析可用；直连模式下走内置 IP 池 | **解析完全不可信**，DoH 也返回污染答案 → 种子 IP 表 | 同样不可信 → 种子 IP 表 + DoH 只作补充候选（排种子之后） |
-| ② IP | 官方源站 IP 池，逐 IP 回退 | 种子池 + 可达性探测 + 单 IP 固定 + 404 换 IP | 种子池 + 可达性探测 + 单 IP 固定 + 换 IP 重试（媒体主机换 IP 有效） |
-| ③ TLS | 无 SNI 握手 **或** ECH（OpenSSL 4.0+） | `curl_cffi` `impersonate="chrome"`，可选再叠 ECH（`IWARA_BRIDGE_ECH=1`） | `curl_cffi` `impersonate="chrome"` + **ECH 默认开**（`ASMR_BRIDGE_ECH` 不写就是开） |
-| ④ 应用 | `X-Client-Time` / `X-Client-Hash` 签名 + OAuth 令牌 | 浏览器头 + `X-Version` 签名（双盐）+ 可选登录 | 只要浏览器头：无签名、无令牌（站点只暴露匿名端点） |
-| 传输层实现 | 自写 `sni_client.py` / `ech_client.py`（复用同一套报文构造） | `curl_cffi.AsyncSession`（因为必须拿浏览器指纹） | `curl_cffi.AsyncSession`（同上） |
-| ECH 走法 | ctypes 调 OpenSSL 4.0+ 的 `SSL_set1_ech_config_list`（要自带 `openssl-libs/`） | `curl_cffi` 的 `CurlOpt.ECH`（libcurl 的 `CURLOPT_ECH`），**不需要动态库** | 同 iwara（`CurlOpt.ECH`，不需要动态库），且**默认就开** |
-| 额外依赖 | 无（ctypes 驱动自带 libssl） | `curl_cffi`（编译包，单独 requirements） | `curl_cffi`（编译包，单独的 `asmr_one/requirements.txt`） |
-| 登录 | 必需（OAuth） | 可选（公开内容匿名可看） | **不需要**（纯匿名，连 `login_check` 都没有） |
+| | Pixiv 站点（`pixiv/`） | iwara.tv 站点（`iwara/`） | asmr.one 站点（`asmr_one/`） | pornhub 站点（`pornhub/`） |
+| --- | --- | --- | --- | --- |
+| 阻塞形态 | SNI 阻断 + DNS 污染 | DNS 污染 + Cloudflare 反爬挑战 | Cloudflare 边缘 IP 级阻断（同一批边缘对 Google 也返回 404，本机整段不通） | Cloudflare 反爬挑战（只认浏览器 TLS 指纹） |
+| ① DNS | 默认解析可用；直连模式下走内置 IP 池 | **解析完全不可信**，DoH 也返回污染答案 → 种子 IP 表 | 同样不可信 → 种子 IP 表 + DoH 只作补充候选（排种子之后） | 同 asmr：种子 IP 表 + DoH 只作补充候选 |
+| ② IP | 官方源站 IP 池，逐 IP 回退 | 种子池 + 可达性探测 + 单 IP 固定 + 404 换 IP | 种子池 + 可达性探测 + 单 IP 固定 + 换 IP 重试（媒体主机换 IP 有效） | 同 asmr：种子池 + 固定单 IP + 换 IP 重试 |
+| ③ TLS | 无 SNI 握手 **或** ECH（OpenSSL 4.0+） | `curl_cffi` `impersonate="chrome"`，可选再叠 ECH（`IWARA_BRIDGE_ECH=1`） | `curl_cffi` `impersonate="chrome"` + **ECH 默认开**（`ASMR_BRIDGE_ECH` 不写就是开） | `curl_cffi` `impersonate="chrome"` + **ECH 默认开**（`PORNHUB_BRIDGE_ECH` 不写就是开） |
+| ④ 应用 | `X-Client-Time` / `X-Client-Hash` 签名 + OAuth 令牌 | 浏览器头 + `X-Version` 签名（双盐）+ 可选登录 | 只要浏览器头：无签名、无令牌（站点只暴露匿名端点） | 只要浏览器头：无签名、无令牌；数据靠**抓网页解析 `window.initialState`**（无公开 API） |
+| 传输层实现 | 自写 `sni_client.py` / `ech_client.py`（复用同一套报文构造） | `curl_cffi.AsyncSession`（因为必须拿浏览器指纹） | `curl_cffi.AsyncSession`（同上） | `curl_cffi.AsyncSession`（同上） |
+| ECH 走法 | ctypes 调 OpenSSL 4.0+ 的 `SSL_set1_ech_config_list`（要自带 `openssl-libs/`） | `curl_cffi` 的 `CurlOpt.ECH`（libcurl 的 `CURLOPT_ECH`），**不需要动态库** | 同 iwara（`CurlOpt.ECH`，不需要动态库），且**默认就开** | 同 asmr（`CurlOpt.ECH`，不需要动态库），且**默认就开** |
+| 额外依赖 | 无（ctypes 驱动自带 libssl） | `curl_cffi`（编译包，单独 requirements） | `curl_cffi`（编译包，单独的 `asmr_one/requirements.txt`） | `curl_cffi`（编译包，单独的 `pornhub/requirements.txt`） |
+| 登录 | 必需（OAuth） | 可选（公开内容匿名可看） | **不需要**（纯匿名，连 `login_check` 都没有） | **不需要**（纯匿名，连 `login_check` 都没有） |
 
-**结论**：面对新站点时，先按第 2 节的决策树定位，再到第 3 节挑对应层的手段。三个站点的差异全部集中在**具体手段的选择**上 —— 方法论是一样的。iwara 与 asmr.one 尤其像：同一副「种子 IP 池 + 浏览器指纹 + 换 IP 重试」的骨架，差别只在 ECH 的默认开关与登录态。要注意的是**站点之间不许互相 import**（`check_boundary.py` 会拦），所以 asmr.one 里那份 `ech.py` 是 `iwara/ech.py` 的**自足副本**，而不是引用。
+**结论**：面对新站点时，先按第 2 节的决策树定位，再到第 3 节挑对应层的手段。四个站点的差异全部集中在**具体手段的选择**上 —— 方法论是一样的。iwara / asmr.one / pornhub 三者尤其像：同一副「种子 IP 池 + 浏览器指纹 + 换 IP 重试」的骨架，差别只在 ECH 的默认开关、登录态，以及 pornhub 是**抓取器**（解析网页里的 `window.initialState`，站点改版会让字段名变掉、接口回 502，这是已知脆弱性）。要注意的是**站点之间不许互相 import**（`check_boundary.py` 会拦），所以 asmr.one 与 pornhub 里那两份 `ech.py` 都是 `iwara/ech.py` 的**自足副本**，而不是引用。
 
 ---
 
@@ -247,5 +247,8 @@ else:                   # 普通路径
 | `ASMR_BRIDGE_ECH` | asmr.one 的 ECH（走 `curl_cffi` 的 libcurl，不需要 OpenSSL 动态库）。**与 iwara 相反：不写就是开**，要关必须显式写 `ASMR_BRIDGE_ECH=0` |
 | `ASMR_BRIDGE_ECH_CONFIG` | 手动指定 asmr 的 ECH 配置；留空走 DoH（阿里 → `223.5.5.5`），失败用内置默认值 |
 | `ASMR_BRIDGE_ECH_IPS` | 给 asmr 的 ECH 主机额外追加的入口 IP（排在内置种子之后） |
+| `PORNHUB_BRIDGE_ECH` | pornhub 的 ECH（走 `curl_cffi` 的 libcurl，不需要 OpenSSL 动态库）。**同 asmr：不写就是开**，要关必须显式写 `PORNHUB_BRIDGE_ECH=0` |
+| `PORNHUB_BRIDGE_ECH_CONFIG` | 手动指定 pornhub 的 ECH 配置；留空走 DoH（阿里 → `223.5.5.5`），失败用内置默认值 |
+| `PORNHUB_BRIDGE_ECH_IPS` | 给 pornhub 的 ECH 主机额外追加的入口 IP（排在内置种子之后） |
 
-> 起手先跑 `python pixiv/run.py --check`：自检会逐项报告 python / deps / 项目文件 / 端口 / 网络 / ECH 的状态，把「四道关」的结论直接摊开（`--check` 不监听端口，所以 `port` 只警告不中止）。加了站点之后自检也要跟着长：iwara 入口跑 `python iwara/run.py --check`，会在这张表后面追加 `iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录` 三项，开了 `IWARA_BRIDGE_ECH=1` 再追加 `iwara ECH`（真发一次 `/cdn-cgi/trace` 看回显是不是 `sni=encrypted`）；asmr.one 入口跑 `python asmr_one/run.py --check`，追加 `asmr 依赖`、`asmr 网络`（真发一次 `GET /api/works?page=1`，要整条「借道 IP 池 + impersonate + ECH」链路通才算过）以及 `asmr ECH`（**默认就有**，因为 ECH 默认开；写成 `ASMR_BRIDGE_ECH=0` 关掉后才是 2 项），它没有登录自检。——**新站点照这个套路做**：把「本层的判据」写成一条 `CheckResult`，挂在 `Site` 契约的 `checks`（以及 `login_check` / `network_hint`）上（见 `pixiv_bridge/site.py`），框架的 `pixiv_bridge.cli.main(site=SITE)` 就会把它与通用检查打在同一张表里。另外别忘了在构建侧登记：`scripts/sites.py` 的 `SITES` 加一条，`check_boundary.py` / `make_share_packages.py` 才认这个新站点。
+> 起手先跑 `python pixiv/run.py --check`：自检会逐项报告 python / deps / 项目文件 / 端口 / 网络 / ECH 的状态，把「四道关」的结论直接摊开（`--check` 不监听端口，所以 `port` 只警告不中止）。加了站点之后自检也要跟着长：iwara 入口跑 `python iwara/run.py --check`，会在这张表后面追加 `iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录` 三项，开了 `IWARA_BRIDGE_ECH=1` 再追加 `iwara ECH`（真发一次 `/cdn-cgi/trace` 看回显是不是 `sni=encrypted`）；asmr.one 入口跑 `python asmr_one/run.py --check`，追加 `asmr 依赖`、`asmr 网络`（真发一次 `GET /api/works?page=1`，要整条「借道 IP 池 + impersonate + ECH」链路通才算过）以及 `asmr ECH`（**默认就有**，因为 ECH 默认开；写成 `ASMR_BRIDGE_ECH=0` 关掉后才是 2 项），它没有登录自检；pornhub 入口跑 `python pornhub/run.py --check`，同样追加 `pornhub 依赖`、`pornhub 网络`（真发一次 `GET /`）与 `pornhub ECH`（**默认就有**，`PORNHUB_BRIDGE_ECH=0` 关掉后才是 2 项），也没有登录自检。——**新站点照这个套路做**：把「本层的判据」写成一条 `CheckResult`，挂在 `Site` 契约的 `checks`（以及 `login_check` / `network_hint`）上（见 `pixiv_bridge/site.py`），框架的 `pixiv_bridge.cli.main(site=SITE)` 就会把它与通用检查打在同一张表里。另外别忘了在构建侧登记：`scripts/sites.py` 的 `SITES` 加一条，`check_boundary.py` / `make_share_packages.py` 才认这个新站点。

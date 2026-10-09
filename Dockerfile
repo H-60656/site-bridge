@@ -21,8 +21,8 @@ COPY . .
 
 # 各站点的额外依赖（curl_cffi，编译包）。目录跟着进镜像时才装；没跟进来
 # 也不影响构建，真去跑那个站点时 deps.py 会自己补装。
-# iwara 与 asmr_one 都要 curl_cffi，各有一份 requirements.txt。
-RUN for req in iwara/requirements.txt asmr_one/requirements.txt; do \
+# iwara / asmr_one / pornhub 都要 curl_cffi，各有一份 requirements.txt。
+RUN for req in iwara/requirements.txt asmr_one/requirements.txt pornhub/requirements.txt; do \
         if [ -f "$req" ]; then pip install --no-cache-dir -r "$req"; fi; \
     done
 
@@ -33,6 +33,7 @@ EXPOSE 8765
 # 用；要显式指定就加环境变量：
 #   docker run -e BRIDGE_SITE=iwara ...
 #   docker run -e BRIDGE_SITE=asmr_one ...    （asmr.one 匿名可用，不需要登录）
+#   docker run -e BRIDGE_SITE=pornhub ...    （pornhub 匿名可用，不需要登录）
 # 挂扩展照旧（扩展目录已在镜像里，程序自己去找 <扩展>/extension.py）：
 #   docker run -e PIXIV_BRIDGE_EXTENSIONS=novel ...
 #   docker run -e PIXIV_BRIDGE_EXTENSIONS=iwara_web -e BRIDGE_SITE=iwara ...
