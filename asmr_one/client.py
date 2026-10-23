@@ -487,16 +487,24 @@ class AsmrClient:
 
     # ---------- 业务接口 ----------
 
-    async def list_works(self, page: int = 1) -> dict:
-        """作品列表（默认序，一页 20 条）。
+    async def list_works(
+        self, page: int = 1, order: str = "", sort: str = ""
+    ) -> dict:
+        """作品列表（一页 20 条）。
 
-        上游其实支持排序：``order`` 接受 ``create_date`` / ``release`` /
+        上游支持排序：``order`` 接受 ``create_date`` / ``release`` /
         ``rating`` / ``dl_count`` / ``price`` / ``random`` / ``id``，``sort``
         只接受 ``asc`` / ``desc``；非法值（例如 ``order=desc``）会被 400
-        ``Invalid value`` 拒绝 —— 是拒绝非法值，不是拒绝排序本身。本站目前
-        不对外暴露排序，只给分页。
+        ``Invalid value`` 拒绝 —— 是拒绝非法值，不是拒绝排序本身。
+
+        ``order`` / ``sort`` 留空时不下发这两个参数，走上游默认序。
         """
-        return await self.get_json("/api/works", params={"page": max(1, int(page))})
+        params: dict[str, Any] = {"page": max(1, int(page))}
+        if order:
+            params["order"] = order
+        if sort:
+            params["sort"] = sort
+        return await self.get_json("/api/works", params=params)
 
     async def search(self, keyword: str, page: int = 1) -> dict:
         """关键词搜索。

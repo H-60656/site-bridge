@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from pixiv_bridge import ranges
+
 from ..client import (
     COVER_TYPES,
     AsmrError,
@@ -109,17 +111,14 @@ async def cover(
     """作品封面（``type``: main / sam / 240x240）。
 
     浏览器自己取不到 ``api.asmr.one`` 上的图（同样的 IP 阻断），所以由服务端
-    代转。上游给的是 webp。
+    代转。上游给的是 webp。取封面客户端是缓冲式的，续传由我们自己按入站
+    ``Range`` 切片。
     """
     try:
         content, content_type = await get_client(request).fetch_cover(work_id, type)
     except AsmrError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.message) from exc
-    return StreamingResponse(
-        iter([content]),
-        media_type=content_type,
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
+    return ranges.bytes_response(request, content, content_type)
 
 
 @router.get("/stream")
@@ -133,11 +132,7 @@ async def stream(request: Request, url: str = Query(...)):
     if not is_media_host(host):
         raise HTTPException(status_code=400, detail=f"只允许 asmr 媒体主机：{host}")
 
-    pass_through = {}
-    for name in ("range", "if-range"):
-        value = request.headers.get(name)
-        if value:
-            pass_through[name] = value
+    pass_through = ranges.forwarded_headers(request)
 
     try:
         status, headers, body = await get_client(request).open_stream(url, pass_through)

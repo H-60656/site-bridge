@@ -96,6 +96,15 @@ SITES = (
         requirements="ehviewer/requirements.txt",
         files=("run.py", "requirements.txt"),
     ),
+    SiteInfo(
+        name="github",
+        directory="github",
+        title="GitHub Bridge",
+        # 唯一一个**不需要**额外依赖的站点：api.github.com 在本机直连就通，
+        # 既不要 curl_cffi（没有 Cloudflare 要骗），也不要 ECH / 借道 / HTTP/3。
+        # httpx 已在根 requirements.txt 里，所以没有站点自己的清单，也没有
+        # 登录脚本（token 是可选的，配了只是为了把 60 次/小时提到 5000）。
+    ),
 )
 
 SITES_BY_NAME = {site.name: site for site in SITES}
@@ -106,6 +115,7 @@ SITE_ASSETS = {
     "iwara": (),
     "asmr_one": (),
     "ehviewer": (),
+    "github": (),
 }
 
 
@@ -210,12 +220,29 @@ EH_ROUTE_PATHS = frozenset(
     }
 )
 
+GITHUB_ROUTE_PATHS = frozenset(
+    {
+        "/api/github/auth",
+        "/api/github/commits/{owner}/{repo}",
+        "/api/github/contents/{owner}/{repo}",
+        "/api/github/contents/{owner}/{repo}/{path:path}",
+        "/api/github/issues/{owner}/{repo}",
+        "/api/github/rate_limit",
+        "/api/github/readme/{owner}/{repo}",
+        "/api/github/releases/{owner}/{repo}",
+        "/api/github/repo/{owner}/{repo}",
+        "/api/github/search/repositories",
+        "/api/github/user/{login}",
+    }
+)
+
 #: 「站点名 → 该站点自己的路由」：路由隔离检查按这张表逐个站点比对，
 #: 加站点时只要在这里补一条（不写死某个站点名）。
 SITE_ROUTE_PATHS = {
     "iwara": IWARA_ROUTE_PATHS,
     "asmr_one": ASM_ROUTE_PATHS,
     "ehviewer": EH_ROUTE_PATHS,
+    "github": GITHUB_ROUTE_PATHS,
 }
 
 #: 顶层包名：项目根下所有「有 __init__.py 的目录」+ 各站点目录。

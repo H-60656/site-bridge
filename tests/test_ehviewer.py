@@ -2016,15 +2016,16 @@ class EhEntryPointTestCase(unittest.TestCase):
 
         self.assertEqual(orders, list(range(1, len(orders) + 1)))
 
-    def test_the_nav_page_lists_the_four_sites_in_order(self):
+    def test_the_nav_page_lists_the_sites_in_order(self):
         from pixiv_bridge.__main__ import site_items
 
         items = site_items()
 
         self.assertEqual(
-            [item.name for item in items], ["pixiv", "iwara", "asmr_one", "ehviewer"]
+            [item.name for item in items],
+            ["pixiv", "iwara", "asmr_one", "ehviewer", "github"],
         )
-        eh = items[-1]
+        eh = items[3]
         self.assertEqual(eh.title, "EHViewer Bridge")
         self.assertTrue(eh.description.startswith("ehviewer 接口站点"), eh.description)
 

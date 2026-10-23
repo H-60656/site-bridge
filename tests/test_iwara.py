@@ -1218,6 +1218,29 @@ class IwaraRouteTestCase(unittest.TestCase):
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(ok.headers["content-type"], "image/jpeg")
 
+    def test_image_slices_a_range_locally(self):
+        """取图是缓冲式的（一次性整包），续传只能由我们按入站 Range 切片。"""
+        client = self._client()
+        response = client.get(
+            "/api/iwara/image",
+            params={"url": "https://files.iwara.tv/image/thumbnail/x/thumbnail-00.jpg"},
+            headers={"Range": "bytes=0-2"},
+        )
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.content, b"\xff\xd8\xff")
+        self.assertEqual(response.headers["content-range"], "bytes 0-2/12")
+        self.assertEqual(response.headers["accept-ranges"], "bytes")
+
+    def test_image_rejects_an_out_of_bounds_range(self):
+        client = self._client()
+        response = client.get(
+            "/api/iwara/image",
+            params={"url": "https://files.iwara.tv/image/thumbnail/x/thumbnail-00.jpg"},
+            headers={"Range": "bytes=99-"},
+        )
+        self.assertEqual(response.status_code, 416)
+        self.assertEqual(response.headers["content-range"], "bytes */12")
+
     def test_thumbnail_builds_url_from_video_id(self):
         client = self._client()
         response = client.get("/api/iwara/thumbnail/b0pRCNfo8Igu3p")

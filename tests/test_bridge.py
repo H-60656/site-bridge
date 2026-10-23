@@ -63,6 +63,7 @@ from pixiv.envcheck import ech_transport, network
 from pixiv.config import PixivSettings
 
 from pixiv_bridge import nav as nav_module
+from pixiv_bridge import ranges
 
 
 def app_with_novel(settings, **kwargs):
@@ -1955,6 +1956,38 @@ class ImageProxyTransportTestCase(unittest.IsolatedAsyncioTestCase):
                 await proxy.stream("img/1.jpg")
         await http.aclose()
 
+    async def test_stream_forwards_extra_headers(self):
+        """Range / If-Range 必须能透传到上游，三档传输都是。"""
+        from pixiv import ech_client, sni_client
+
+        settings, http, proxy = self._parts()
+        seen = {}
+
+        async def fake_sni(
+            method,
+            url,
+            *,
+            params=None,
+            data=None,
+            json=None,
+            headers=None,
+            timeout=30.0,
+            ips=None,
+        ):
+            seen.update(headers)
+            return httpx.Response(206, content=b"part", headers={"content-range": "bytes 0-3/10"})
+
+        settings.bypass_sni = True
+        with patch.object(sni_client, "request", AsyncMock(side_effect=fake_sni)), patch.object(
+            ech_client, "request", AsyncMock(side_effect=AssertionError("ECH 未开启"))
+        ):
+            image = await proxy.stream("img/1.jpg", {"range": "bytes=0-3"})
+            self.assertEqual(image.status_code, 206)
+            self.assertEqual(await self._read(image), b"part")
+        self.assertEqual(seen["range"], "bytes=0-3")
+        self.assertEqual(seen["Referer"], settings.image_referer)
+        await http.aclose()
+
     async def test_stream_uses_httpx_when_both_modes_off(self):
         settings, http, proxy = self._parts()
         image = await proxy.stream("img/1.jpg")
@@ -1962,6 +1995,165 @@ class ImageProxyTransportTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self._read(image), b"fake-image")
         await image.aclose()
         await http.aclose()
+
+
+class RangeHelperTestCase(unittest.TestCase):
+    """框架层的 Range 工具：单区间解析与 200/206/416 应答拼装。"""
+
+    def _request(self, **headers):
+        from starlette.requests import Request
+
+        raw = [(name.replace("_", "-").encode(), value.encode()) for name, value in headers.items()]
+        return Request({"type": "http", "method": "GET", "path": "/", "headers": raw})
+
+    def test_parse_range_forms(self):
+        self.assertEqual(ranges.parse_range("bytes=0-99", 1000), (0, 99))
+        self.assertEqual(ranges.parse_range("bytes=900-", 1000), (900, 999))
+        self.assertEqual(ranges.parse_range("bytes=-100", 1000), (900, 999))
+        # 末尾越界截到 size-1（RFC 允许）
+        self.assertEqual(ranges.parse_range("bytes=900-99999", 1000), (900, 999))
+        # 后缀比实体还长：整包
+        self.assertEqual(ranges.parse_range("bytes=-5000", 1000), (0, 999))
+
+    def test_parse_range_ignores_what_it_does_not_support(self):
+        for value in (None, "", "items=0-1", "bytes=abc", "bytes=5-1", "bytes=0-1,5-6", "bytes=-"):
+            self.assertIsNone(ranges.parse_range(value, 1000), value)
+        # 空实体：任何 Range 都没意义
+        self.assertIsNone(ranges.parse_range("bytes=0-1", 0))
+
+    def test_parse_range_out_of_bounds_is_unsatisfiable(self):
+        with self.assertRaises(ranges.RangeNotSatisfiable) as ctx:
+            ranges.parse_range("bytes=1000-", 1000)
+        self.assertEqual(ctx.exception.size, 1000)
+        with self.assertRaises(ranges.RangeNotSatisfiable):
+            ranges.parse_range("bytes=-0", 1000)
+
+    def test_bytes_response_without_range_is_a_plain_200(self):
+        response = ranges.bytes_response(self._request(), b"0123456789", "image/jpeg")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.body, b"0123456789")
+        # 这个头就是让浏览器知道「可以续传」的信号
+        self.assertEqual(response.headers["accept-ranges"], "bytes")
+        self.assertEqual(response.headers["content-type"], "image/jpeg")
+
+    def test_bytes_response_slices_a_single_range(self):
+        response = ranges.bytes_response(
+            self._request(range="bytes=2-5"), b"0123456789", "image/jpeg"
+        )
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.body, b"2345")
+        self.assertEqual(response.headers["content-range"], "bytes 2-5/10")
+
+    def test_bytes_response_rejects_an_out_of_bounds_range(self):
+        response = ranges.bytes_response(
+            self._request(range="bytes=50-60"), b"0123456789", "image/jpeg"
+        )
+        self.assertEqual(response.status_code, 416)
+        self.assertEqual(response.headers["content-range"], "bytes */10")
+        self.assertEqual(response.body, b"")
+
+    def test_bytes_response_ignores_if_range(self):
+        """没有 ETag / Last-Modified 就没法判断「这半截还能不能用」，只能回整包。"""
+        response = ranges.bytes_response(
+            self._request(range="bytes=0-3", if_range='"abc"'), b"0123456789", "image/jpeg"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.body, b"0123456789")
+
+    def test_forwarded_headers_picks_only_resumption_headers(self):
+        request = self._request(range="bytes=0-1", if_range="etag", accept="*/*")
+        self.assertEqual(
+            ranges.forwarded_headers(request), {"range": "bytes=0-1", "if-range": "etag"}
+        )
+        self.assertEqual(
+            ranges.forwarded_headers(request, extra=("accept",)),
+            {"range": "bytes=0-1", "if-range": "etag", "accept": "*/*"},
+        )
+
+    def test_response_headers_picks_resumption_headers(self):
+        upstream = httpx.Headers(
+            {
+                "content-range": "bytes 0-3/10",
+                "accept-ranges": "bytes",
+                "content-length": "4",
+                "etag": '"v1"',
+                "content-type": "image/jpeg",
+            }
+        )
+        self.assertEqual(
+            ranges.response_headers(upstream),
+            {
+                "content-range": "bytes 0-3/10",
+                "accept-ranges": "bytes",
+                "content-length": "4",
+                "etag": '"v1"',
+            },
+        )
+
+
+def _range_handler(request):
+    """上游按 ``Range`` 回 206，好让 `/img` 的透传能被端到端验证。"""
+    if request.url.host != "i.pximg.net":
+        return httpx.Response(200, json={})
+    body = b"0123456789"
+    try:
+        span = ranges.parse_range(request.headers.get("range"), len(body))
+    except ranges.RangeNotSatisfiable as exc:
+        return httpx.Response(
+            416, stream=_AsyncBytes(b""), headers={"content-range": f"bytes */{exc.size}"}
+        )
+    if span is None:
+        return httpx.Response(
+            200,
+            stream=_AsyncBytes(body),
+            headers={
+                "content-type": "image/jpeg",
+                "accept-ranges": "bytes",
+                "content-length": str(len(body)),
+            },
+        )
+    start, end = span
+    return httpx.Response(
+        206,
+        stream=_AsyncBytes(body[start : end + 1]),
+        headers={
+            "content-type": "image/jpeg",
+            "content-range": f"bytes {start}-{end}/{len(body)}",
+            "accept-ranges": "bytes",
+            "content-length": str(end - start + 1),
+        },
+    )
+
+
+class ImageRangeRouteTestCase(unittest.TestCase):
+    """`/img` 代转要透传 Range：浏览器因此能断点续传。"""
+
+    _URL = "/img/c/250x250_80_a2/img-master/img/2023/01/01/00/00/00/1_p0_master1200.jpg"
+
+    def _client(self, handler=_range_handler):
+        settings = make_settings(token="")
+        settings.token_file = SERVER_TOKEN_FILE
+        return TestClient(create_app(settings, transport=httpx.MockTransport(handler)))
+
+    def test_plain_request_still_gets_the_whole_image(self):
+        with self._client() as client:
+            resp = client.get(self._URL)
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.content, b"0123456789")
+            self.assertEqual(resp.headers["accept-ranges"], "bytes")
+            self.assertEqual(resp.headers["content-length"], "10")
+
+    def test_range_request_passes_through_as_206(self):
+        with self._client() as client:
+            resp = client.get(self._URL, headers={"Range": "bytes=2-5"})
+            self.assertEqual(resp.status_code, 206)
+            self.assertEqual(resp.content, b"2345")
+            self.assertEqual(resp.headers["content-range"], "bytes 2-5/10")
+
+    def test_unsatisfiable_range_passes_through_as_416(self):
+        with self._client() as client:
+            resp = client.get(self._URL, headers={"Range": "bytes=50-60"})
+            self.assertEqual(resp.status_code, 416)
 
 
 class EchEnvCheckTestCase(unittest.TestCase):
@@ -3026,16 +3218,19 @@ class NavigationTestCase(unittest.TestCase):
     def test_the_real_project_lists_every_api_project_in_nav_order(self):
         sites = self.nav.site_items()
         self.assertEqual(
-            [item.name for item in sites], ["pixiv", "iwara", "asmr_one", "ehviewer"]
+            [item.name for item in sites],
+            ["pixiv", "iwara", "asmr_one", "ehviewer", "github"],
         )
-        self.assertEqual([item.order for item in sites], [1, 2, 3, 4])
-        self.assertEqual([item.kind for item in sites], ["site"] * 4)
+        self.assertEqual([item.order for item in sites], [1, 2, 3, 4, 5])
+        self.assertEqual([item.kind for item in sites], ["site"] * 5)
         self.assertEqual(sites[0].title, "Pixiv Bridge")
         self.assertEqual(sites[0].entry, PROJECT_ROOT / "pixiv" / "run.py")
         self.assertTrue(sites[0].description.startswith("Pixiv 接口站点"))
         self.assertTrue(sites[1].description.startswith("iwara.tv 接口站点"))
         self.assertTrue(sites[2].description.startswith("asmr.one 接口站点"))
         self.assertTrue(sites[3].description.startswith("ehviewer 接口站点"))
+        self.assertTrue(sites[4].description.startswith("github 接口站点"))
+        self.assertEqual(sites[4].entry, PROJECT_ROOT / "github" / "run.py")
 
     def test_the_real_project_lists_extensions_that_are_not_entries(self):
         extensions = self.nav.extension_items()
@@ -3047,7 +3242,8 @@ class NavigationTestCase(unittest.TestCase):
                 self.assertTrue(item.title)
         # 站点列表跟着 package 的注册表走，不再写死两个。
         self.assertEqual(
-            self.nav.site_names(), ["pixiv", "iwara", "asmr_one", "ehviewer"]
+            self.nav.site_names(),
+            ["pixiv", "iwara", "asmr_one", "ehviewer", "github"],
         )
 
     def test_render_navigation_shows_numbers_extensions_and_hints(self):
@@ -4748,6 +4944,16 @@ class LibraryRouteTestCase(UserDataRouteBase):
             epub_file = client.get("/api/library/file", params={"path": str(epub)})
             self.assertEqual(epub_file.status_code, 200)
             self.assertIn("book.epub", epub_file.headers["content-disposition"])
+
+            # 断点续传：FileResponse 内建 Range 支持，这里锁住它不被换成别的响应类。
+            partial = client.get(
+                "/api/library/file",
+                params={"path": str(epub)},
+                headers={"Range": "bytes=0-3"},
+            )
+            self.assertEqual(partial.status_code, 206)
+            self.assertEqual(partial.content, b"epub")
+            self.assertEqual(partial.headers["content-range"], "bytes 0-3/10")
 
             self.assertEqual(
                 client.get("/api/library/file", params={"path": str(outside)}).status_code,

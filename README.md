@@ -4,7 +4,7 @@
 Pixiv 官方 App API（`app-api.pixiv.net`）调用方式（请求签名、OAuth 认证、全部端点），用 Python 重新实现的一个
 **自托管 HTTP 接口服务**。启动后，任何语言的代码通过普通 HTTP 请求即可调用 Pixiv 数据能力，无需处理签名、token 刷新、防盗链等细节。
 
-> 项目分三层：**`pixiv_bridge/`**（**框架**：启动、配置、环境自检、扩展机制、导航页与 `/api/health`；不含任何站点知识）、**`pixiv/`**、**`iwara/`**、**`asmr_one/`** 与 **`ehviewer/`**（四个**同级的接口项目**，各有一个同构的 `run.py` 入口：分别提供 Pixiv 接口、iwara.tv 接口、asmr.one 接口、E-Hentai 接口）、**`novel/`** 与 **`iwara_web/`**（两个**扩展**：小说阅读器与 iwara 视频页面，没有自己的入口，把目录名写进配置就挂到对应站点上）。**新增一个站点** = 建一个与它们同级的目录（`app.py` 里按 `Site` 契约给出站点信息、自带检查（与可选的登录校验），`run.py` 只做三件事：`bootstrap()` → `from <站点>.app import SITE` → `pixiv_bridge.cli.main(site=SITE)`），框架一行都不用改；详见「附属项目（扩展）」与「新增一个接口项目」。
+> 项目分三层：**`pixiv_bridge/`**（**框架**：启动、配置、环境自检、扩展机制、导航页与 `/api/health`；不含任何站点知识）、**`pixiv/`**、**`iwara/`**、**`asmr_one/`**、**`ehviewer/`** 与 **`github/`**（五个**同级的接口项目**，各有一个同构的 `run.py` 入口：分别提供 Pixiv 接口、iwara.tv 接口、asmr.one 接口、E-Hentai 接口、GitHub 接口）、**`novel/`** 与 **`iwara_web/`**（两个**扩展**：小说阅读器与 iwara 视频页面，没有自己的入口，把目录名写进配置就挂到对应站点上）。**新增一个站点** = 建一个与它们同级的目录（`app.py` 里按 `Site` 契约给出站点信息、自带检查（与可选的登录校验），`run.py` 只做三件事：`bootstrap()` → `from <站点>.app import SITE` → `pixiv_bridge.cli.main(site=SITE)`），框架一行都不用改；详见「附属项目（扩展）」与「新增一个接口项目」。
 
 ## 特性
 
@@ -21,6 +21,7 @@ Pixiv 官方 App API（`app-api.pixiv.net`）调用方式（请求签名、OAuth
 - **可选的 iwara.tv 站点**（接口项目 `iwara/`，与 `pixiv/` 同级，用 `python iwara/run.py` 启动）：只提供 iwara 的视频浏览 / 搜索 / 详情 / 直链解析 / 缩略图（`/api/iwara/*`，不挂任何 Pixiv 路由），还自带一个**视频页面**（`http://127.0.0.1:8766/iwara`）：列表 / 搜索 / 筛选、点开详情看简介与标签、看相关视频、`<video>` 直接播（服务端代转字节并透传 `Range`，清晰度可切换）。直链是带签名的 MP4，浏览器里能直接播。用 `pixiv/run.py` 启动时这些地址是 404
 - **可选的 asmr.one 站点**（接口项目 `asmr_one/`，与 `pixiv/` 同级，用 `python asmr_one/run.py` 启动）：只提供 asmr.one 的作品浏览 / 关键词搜索 / 作品详情 / 音轨树 / 音频与封面代转（`/api/asmr/*`，不挂任何 Pixiv 路由），**匿名可用、不需要登录**。封面与音频字节一律由服务端代转（`/api/asmr/cover/{id}`、`/api/asmr/stream?url=...`），因为浏览器所在机器同样到不了那些 Cloudflare 边缘 IP。它和 iwara 一样自带 `curl_cffi` 客户端（种子 IP 池 + ECH），但**ECH 默认是开的**（asmr 的边缘 IP 在本机是 IP 级被阻断，不叠 ECH 基本不通；要关就写 `ASMR_BRIDGE_ECH=0`）。用 `pixiv/run.py` 启动时这些地址是 404
 - **可选的 E-Hentai 站点**（接口项目 `ehviewer/`，与 `pixiv/` 同级，用 `python ehviewer/run.py` 启动）：只提供 E-Hentai / e-hentai.org 的画廊列表 / 热门榜单 / 关键词搜索 / 画廊详情 / 图片页 / 大图页解析 / 元数据 / 图片代转（`/api/eh/*`，不挂任何 Pixiv 路由），**匿名可用、不需要登录**（exhentai 里站内容会返回 401，本站不碰）。它自带 `curl_cffi` 客户端并**借道 Cloudflare 别的 anycast IP + 强制 HTTP/3** 直连 `e-hentai.org`——E-Hentai 自己解析出来的边缘 IP 在本机是 IP 级被阻断的，所以 `EH_BRIDGE_HTTP3` 默认开着，关掉大概率整个站不通。大图字节一律由服务端代转（`/api/eh/proxy?url=...`），因为 `*.hath.network` 浏览器同样到不了。用 `pixiv/run.py` 启动时这些地址是 404
+- **可选的 GitHub 站点**（接口项目 `github/`，与 `pixiv/` 同级，用 `python github/run.py` 启动）：只提供 GitHub 的只读 JSON 接口——仓库详情 / README / 目录与文件 / 发行版 / issue 与 PR / 提交 / 仓库搜索 / 用户 / 配额账本（`/api/github/*`，不挂任何 Pixiv 路由），**匿名可用**。与其它四个站点不同，它**只用现成的 `httpx`**：`api.github.com` 在本机直连就通，既不需要 `curl_cffi`、不需要借道 IP 池、也不需要 ECH，所以 `github/` 没有自己的 `requirements.txt`，`run.py` 也就是最朴素的 `bootstrap()`。代价是匿名配额只有 **60 次/小时**（search 独立且只有 10 次/小时），所以客户端会盯住响应头里的 `x-ratelimit-*` 记账、配额见底就直接本地拒绝（不白撞上游），并默认**显式不使用任何代理**（`trust_env=False`——实测走本机代理出口反而更容易撞上别人的限额）。配一个 `GITHUB_TOKEN` 可以提到 5000 次/小时。用 `pixiv/run.py` 启动时这些地址是 404
 - **OpenAPI 文档**：启动后访问 `http://127.0.0.1:8765/docs` 在线调试
 
 ## 原理
@@ -142,9 +143,12 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 
 # 接口 + E-Hentai（多了 `/api/eh/*` 那几个接口；匿名可用，不需要 token）
 .venv/bin/python ehviewer/run.py
+
+# 接口 + GitHub（多了 `/api/github/*` 那几个接口；匿名可用，不需要 token）
+.venv/bin/python github/run.py
 ```
 
-项目分成三层，**站点与扩展依赖框架**、单向依赖不反过来（各站点之间也互不依赖）。**每个接口项目各有一个同构的入口脚本**（`pixiv/run.py`、`iwara/run.py`、`asmr_one/run.py` 与 `ehviewer/run.py`）；小说阅读器与 iwara 视频页面都没有专属入口，它们作为扩展挂上去：
+项目分成三层，**站点与扩展依赖框架**、单向依赖不反过来（各站点之间也互不依赖）。**每个接口项目各有一个同构的入口脚本**（`pixiv/run.py`、`iwara/run.py`、`asmr_one/run.py`、`ehviewer/run.py` 与 `github/run.py`）；小说阅读器与 iwara 视频页面都没有专属入口，它们作为扩展挂上去：
 
 | 启动方式 | 提供什么 |
 | --- | --- |
@@ -155,8 +159,9 @@ python3 -m venv .venv                                   # 可选，但推荐（W
 | `iwara/run.py` + `PIXIV_BRIDGE_EXTENSIONS=iwara_web` | 上面那些，再挂上 iwara 视频页面扩展（`iwara_web`）：`/iwara` 上的播放页（浏览 / 搜索 / 播放 / 相关视频） |
 | `asmr_one/run.py` | asmr.one 接口项目（`asmr_one/`）：**只有**那七个 `/api/asmr/*`（作品列表 / 搜索 / 作品详情 / 音轨树 / 封面代转 / 音频代转 / 登录态），外加 `/` 上的**导航页**；它不挂任何 Pixiv 或 iwara 路由 |
 | `ehviewer/run.py` | E-Hentai 接口项目（`ehviewer/`）：**只有**那九个 `/api/eh/*`（列表 / 热门画廊 / 搜索 / 画廊详情 / 图片页 / 大图页解析 / 元数据 / 图片代转 / 匿名态），外加 `/` 上的**导航页**；它不挂任何别的站点的路由 |
+| `github/run.py` | GitHub 接口项目（`github/`）：**只有**那十个 `/api/github/*`（仓库详情 / README / 目录与文件 / 发行版 / issue 与 PR / 提交 / 仓库搜索 / 用户 / 配额账本 / 认证态），外加 `/` 上的**导航页**；它不挂任何别的站点的路由 |
 
-各接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3～4 项 iwara 专属自检（开了 `IWARA_BRIDGE_ECH=1` 才多出 ECH 那一项），`asmr_one/run.py` 追加 3～4 项 asmr 专属自检（默认就开 ECH，所以默认 4 项，见「环境检查说明」），`ehviewer/run.py` 追加 6 项 ehviewer 专属自检（依赖 / 边缘 / 站点 / 详情 / 榜单 / 大图）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`；要 asmr.one 就拷 `pixiv_bridge/` + `asmr_one/`，要 E-Hentai 就拷 `pixiv_bridge/` + `ehviewer/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
+各接口项目**同级**，入口脚本同构、命令行完全一样（`--host` / `--port` / `--reload` / `--check` / `--env`），共用框架的同一套环境检查——`iwara/run.py` 会在这套检查后面追加 3～4 项 iwara 专属自检（开了 `IWARA_BRIDGE_ECH=1` 才多出 ECH 那一项），`asmr_one/run.py` 追加 3～4 项 asmr 专属自检（默认就开 ECH，所以默认 4 项，见「环境检查说明」），`ehviewer/run.py` 追加 6 项 ehviewer 专属自检（依赖 / 边缘 / 站点 / 详情 / 榜单 / 大图），`github/run.py` 追加 3 项（依赖 / 接口 / 搜索）。**不记得该跑哪个就跑根目录**：`python -m pixiv_bridge`（或双击 `start.bat`、`sh start.sh`）会列出接口项目与扩展让你挑，挑选逻辑只有这一份（`start.bat` / `start.sh` 只把参数转发给它）。只要 Pixiv 接口就拷 `pixiv_bridge/` + `pixiv/` 两个包；要阅读器再连 `novel/` 一起拷（并在配置里启用扩展）；要 iwara 就拷 `pixiv_bridge/` + `iwara/`，要 iwara 的视频页面就再加 `iwara_web/`；要 asmr.one 就拷 `pixiv_bridge/` + `asmr_one/`，要 E-Hentai 就拷 `pixiv_bridge/` + `ehviewer/`，要 GitHub 就拷 `pixiv_bridge/` + `github/`（站点通过 `import pixiv_bridge.*` 用框架，框架不认识它们）。
 
 首次运行输出示例：
 
@@ -219,6 +224,16 @@ INFO:     Uvicorn running on http://127.0.0.1:8765
 | `ehviewer 大图` | 仅警告，不中止 | 串完整条链：列表 → 取一条详情的图片页链接 → 真解一次那个 `/s/` 页面，确认图片直链判据（`id="img"` 的 `src`）与存根判据仍认得上游页面。守的是这条：判据一旦失效，`/api/eh/proxy` 拿不到直链，**真实大图页会整批 502**，而列表与详情都还是绿的 |
 
 这六项也**不在致命清单里**：ehviewer 依赖缺失或站点不可达时入口仍能启动，接口失败只返回 502。另外 ehviewer **没有登录自检**——公开画廊匿名就能看（exhentai 里站内容会返回 401，本站不碰）。
+
+`github` 入口是 `python github/run.py --check`，它在同一张表里追加 3 项：
+
+| github 检查项 | 失败影响 | 说明 |
+| --- | --- | --- |
+| `github 依赖` | 仅警告，不中止 | 真 `import httpx`。这一项几乎不会红——httpx 就在根 `requirements.txt` 里，`github/` 没有自己的依赖清单 |
+| `github 接口` | 仅警告，不中止 | 真发一次 `GET /rate_limit`，报告配额余额（例如「api.github.com 通，未认证，core 配额 41/60（配 GITHUB_TOKEN 可提到 5000）」）。守的是这条：**这个接口会消耗配额**，而匿名只有 60 次/小时，红了通常不是站点挂了而是配额用完了 |
+| `github 搜索` | 仅警告，不中止 | **拿两个词横向对照**：必定查不到的 `zzzzqqxxnotexist9999` 必须回 `total_count == 0`，已知有结果的 `requests` 必须不是 0。守的是「查询参数到底有没有生效」——与 asmr 那条同一个道理，而且 search 的配额是**另一本账**（匿名只有 10 次/小时），所以这一项只发两次请求 |
+
+这三项也**不在致命清单里**。另外 github **没有登录自检**——`GITHUB_TOKEN` 是可选的配额增强，不是门槛；没配也照样匿名可用（60 次/小时）。
 
 ### 获取 refresh_token（三种方式任选）
 
@@ -345,6 +360,14 @@ pixiv-bridge/
 │   ├── config.py       ehviewer 的配置：`EhSettings(Settings)` 加了 HTTP3 / 边缘 IP 池 / 重试次数四项（`EH_BRIDGE_*`）
 │   ├── requirements.txt 本站点额外依赖（curl_cffi + cffi，刻意不放进根清单；必须是带 HTTP/3 的版本）
 │   └── routes/         本站点路由（galleries 接口：`/api/eh/*`）
+├── github/                             GitHub 接口项目（与 pixiv/ 同级；入口 github/run.py）
+│   ├── __init__.py     说明本站点依赖框架；对外入口是 app.SITE
+│   ├── run.py          入口（三段式：bootstrap → import SITE → cli.main(site=SITE)；没有额外依赖）
+│   ├── app.py          站点声明：Site 契约 + create_app()，把 GithubClient 挂到 app.state（nav_order=5）
+│   ├── client.py       github 客户端：httpx 直连 api.github.com + 配额账本（trust_env=False，不走任何代理）；无登录态
+│   ├── envcheck.py     github 专属自检（依赖 / 接口 / 搜索），经 Site.checks 追加到入口检查表
+│   ├── config.py       github 的配置：`GithubSettings(Settings)` 加了 token / api_url / per_page 三项（`GITHUB_*`）
+│   └── routes/         本站点路由（repos 接口：`/api/github/*`）
 ├── novel/                              小说阅读扩展（挂在 pixiv/ 站点上；扩展没有自己的入口）
 │   ├── __init__.py  说明本扩展依赖框架与宿主站点；对外入口是 app.create_app
 │   ├── extension.py    扩展入口（固定文件名）：导出本扩展的路由与状态工厂
@@ -372,6 +395,7 @@ pixiv-bridge/
 │   ├── nav.py          导航页渲染（自带入口 + 站点/扩展声明的页面 + 配置里的其它入口）
 │   ├── rate_limit.py   令牌桶限流
 │   ├── jsonl.py        通用 JSON Lines 存取（追加写 + 读时折叠 + 超限压缩，各台账共用）
+│   ├── ranges.py       HTTP Range（断点续传）：续传头挑选、单区间解析、按 Range 拼 200/206/416
 │   ├── userdata.py     data 目录 / 旧数据迁移 / 用户配置 / 本地书架文件扫描
 │   ├── compat.py       pydantic 大版本兼容（v2 的 model_dump / v1 的 dict）
 │   └── routes/         框架自带路由
@@ -387,7 +411,9 @@ pixiv-bridge/
 ├── requirements-termux.txt             Termux 专用：纯 Python 的 pydantic 1.x（无需 Rust 编译）
 ├── INSTALL.md                          傻瓜版安装配置说明（Windows / 安卓 Termux）
 ├── DIRECT.md                           直连思路（分层定位方法与各层手段，换了网络/加了站点时先看这份）
-├── tests/                              单元测试（929 项：框架与站点 339 + iwara 211 + asmr_one 145 + ehviewer 189 + 打包 45）
+├── docs/                               架构与计划记录（Aegis 工作流产物，不影响运行）
+│   └── aegis/plans/                    实施计划正文（站点抽象、HTTP Range 断点续传等）
+├── tests/                              单元测试（1043 项：框架与站点 352 + iwara 212 + asmr_one 147 + ehviewer 189 + github 98 + 打包 45）
 ├── openssl-libs/                       项目自带的 OpenSSL 4.x 动态库（按 平台-架构 分目录，供 ECH 模式优先加载）
 │   ├── win32-amd64/    Windows 版（4.0.2）
 │   └── android-arm64/  安卓 / Termux 版（4.0.3）
@@ -437,10 +463,15 @@ pixiv-bridge/
 | `EH_BRIDGE_EDGE_IPS` | 空 | 逗号分隔，**覆盖**内置的 16 个候选边界 IP（默认已排除 e-hentai 自己解析到的那两个被 RST 的 IP） |
 | `EH_BRIDGE_EDGE_ATTEMPTS` | `5` | 一次页面请求最多换几个边缘 IP 重试 |
 | `EH_BRIDGE_IMAGE_ATTEMPTS` | `4` | 大图代转时最多重新解析 `/s/` 页取几次新图片节点（H@H 节点会失效） |
+| `GITHUB_TOKEN` | 空 | **可选**，只用来抬高配额：匿名 60 次/小时、search 10 次/小时；配上后 5000 次/小时。写的是个人访问令牌（`ghp_...` / `github_pat_...`），客户端会加 `Authorization: Bearer`。**不是登录门槛**，不写照样匿名可用 |
+| `GITHUB_API_URL` | `https://api.github.com` | 上游地址，改它可以把本服务指向 GitHub Enterprise（会自动去掉末尾斜杠） |
+| `GITHUB_PER_PAGE` | `30` | 列表接口的默认每页条数，夹在 1..100（100 是 GitHub 的硬上限，超了上游回 422）。真的会被读：路由的 `per_page` 留空就用它 |
+
+> github 站点**显式不使用代理**：客户端建 `httpx.AsyncClient` 时写了 `trust_env=False`。这既是按需（`api.github.com` 在本机直连就通），也是实测结论——同一台机器上走本机代理出口反而更容易撞上别人的限额（同一个 `/rate_limit` 直连剩 56 次、经代理剩 0 次）。
 
 ## 附属项目（扩展）
 
-项目分三层，但**入口只有四个**（`pixiv/run.py`、`iwara/run.py`、`asmr_one/run.py` 与 `ehviewer/run.py`：四个同级接口项目，命令行完全一样）。小说阅读器（`novel`）与 iwara 视频页面（`iwara_web`）都不带专属入口脚本，它们作为**扩展**挂在各自的宿主站点上：把扩展目录名写进配置，站点启动时自己去该目录找固定名字的入口文件 `extension.py`。
+项目分三层，但**入口只有五个**（`pixiv/run.py`、`iwara/run.py`、`asmr_one/run.py`、`ehviewer/run.py` 与 `github/run.py`：五个同级接口项目，命令行完全一样）。小说阅读器（`novel`）与 iwara 视频页面（`iwara_web`）都不带专属入口脚本，它们作为**扩展**挂在各自的宿主站点上：把扩展目录名写进配置，站点启动时自己去该目录找固定名字的入口文件 `extension.py`。
 
 ```
 PIXIV_BRIDGE_EXTENSIONS=novel        # 相对路径按项目根算
@@ -478,12 +509,12 @@ PIXIV_BRIDGE_EXTENSIONS=novel        # 相对路径按项目根算
 
 - **框架不认识任何具体扩展或站点**：`pixiv_bridge/server.py` 的 `create_bridge_app()` 只按传入的站点路由与扩展对象组装，不读配置、不 import 任何站点（保证纯接口的行为不随 `.env` 漂移）；读配置加载扩展发生在 `pixiv_bridge/cli.py` 里，即各 `run.py` 走的那条路。
 - **扩展目录名写错不会静默降级**：找不到 `extension.py`、或入口里没定义 `EXTENSION_ROUTERS`，都会在启动前打印一条可读的错误并**以退出码 1 中止**，不会半启动。
-- `iwara`、`asmr_one` 与 `ehviewer` 不参与这套机制，它们各自保留入口 `iwara/run.py`、`asmr_one/run.py`、`ehviewer/run.py`（原因是都需要多装一个编译依赖 `curl_cffi`，见「iwara.tv」「asmr.one」与「E-Hentai」三节）。
+- `iwara`、`asmr_one`、`ehviewer` 与 `github` 不参与这套机制，它们各自保留入口 `iwara/run.py`、`asmr_one/run.py`、`ehviewer/run.py`、`github/run.py`（前三个是因为都需要多装一个编译依赖 `curl_cffi`，见「iwara.tv」「asmr.one」与「E-Hentai」三节；`github` 是刻意反过来——它没有额外依赖，保留独立入口只是为了与其它站点同构）。
 - 命令行上用 `--env` 指定别的目录（`python pixiv/run.py --env /path/to/other`）时，扩展相对路径就按那个目录算。
 
 ## 新增一个接口项目
 
-`pixiv/`、`iwara/` 与 `asmr_one/` 就是三个现成实例，照着抄即可。框架只提供「启动 + 配置 + 环境自检 + 扩展机制 + 导航页 + `/api/health`」，路由和站点常量都由站点自己提供；**框架里没有一行代码知道站点叫什么**。
+`pixiv/`、`iwara/`、`asmr_one/`、`ehviewer/` 与 `github/` 就是五个现成实例，照着抄即可。框架只提供「启动 + 配置 + 环境自检 + 扩展机制 + 导航页 + `/api/health`」，路由和站点常量都由站点自己提供；**框架里没有一行代码知道站点叫什么**。
 
 一个站点目录最少三样东西：
 
@@ -677,7 +708,7 @@ main(site=SITE)
 | GET | `/api/watchlist/novel` / `/api/watchlist/manga` | 追更列表 |
 | POST | `/api/watchlist/novel\|manga/add\|delete?series_id=` | 追更/取消 |
 | GET | `/api/next?url=` | 通用翻页（传任意列表接口返回的 next_url） |
-| GET | `/img?url=完整图片URL` 或 `/img/{path}` | 图片代理 |
+| GET | `/img?url=完整图片URL` 或 `/img/{path}` | 图片代理（支持断点续传：透传 `Range` / `If-Range`，原样回上游的 206 / 416 与 `Content-Range`） |
 
 ### 台账与书架（**仅启用 `novel` 扩展后提供**）
 
@@ -697,7 +728,7 @@ main(site=SITE)
 | PUT | `/api/config` | 改项目配置（`{"library_dirs": ["D:\\books"], "merge_series": true, "skip_downloaded": true, "scan_depth": 3, "max_files": 1000}`，字段都可选；非法值 400，原子写；写不动时 500 并带上文件路径与系统原因——只读位、短暂占用、跨文件系统都会先自动处理） |
 | GET | `/api/library` | 扫描本地书架目录：`{dirs,missing,files:[{name,path,dir,rel,ext,kind,size,mtime,at}],count,truncated,errors,scanned_at}` |
 | GET | `/api/library/preview?path=` | 读本地 `.txt` 的文本（最多 2 MB，超长 `truncated: true`；只允许配置目录里的 `.txt`） |
-| GET | `/api/library/file?path=` | 下载/打开本地 `.txt` / `.epub`（`Content-Disposition` 带原文件名） |
+| GET | `/api/library/file?path=` | 下载/打开本地 `.txt` / `.epub`（`Content-Disposition` 带原文件名；文件响应自带 `Accept-Ranges: bytes`，断点续传由 `FileResponse` 直接支持，可以带 `Range` 取一部分） |
 
 ### iwara.tv（**仅 `iwara/run.py` 提供**）
 
@@ -712,8 +743,8 @@ iwara 是另一个站点，与 Pixiv 无关，由独立的接口项目 `iwara/` 
 | GET | `/api/iwara/related/{video_id}?page=&limit=` | 相关视频；形状同 `/videos`（同样补缩略图）。上游固定只给 12 条且不接受分页参数，`page`/`limit` 是本地裁剪；裁剪后 `count`/`limit`/`page` 会跟着重算（`count` 是裁后本页条数），`total` 是上游整页条数 |
 | GET | `/api/iwara/resolve/{video_id}?probe=true` | 解析可播放的直链：返回各清晰度 `sources`，`probe=true` 时真发一次 Range 请求，把结果放在 `chosen`（`{name,mime,url,host,content_range,verified}`）。`salt_used` 说明用了哪版签名盐 |
 | GET | `/api/iwara/stream?url=` | 代转视频字节并透传 `Range`（原样转发客户端的 `Range` / `If-Range`，返回上游的 206 与 `Content-Range`）。只允许 iwara CDN 主机 |
-| GET | `/api/iwara/thumbnail/{video_id}?index=&original=` | 按视频 id 直接取缩略图，省得前端自己拼 `file.id` |
-| GET | `/api/iwara/image?url=` | 代转任意 iwara 图片地址（只允许 iwara CDN 主机） |
+| GET | `/api/iwara/thumbnail/{video_id}?index=&original=` | 按视频 id 直接取缩略图，省得前端自己拼 `file.id`（图片本身是缓冲式取回的，续传由服务端按入站 `Range` 本地切片，回 206 与 `Content-Range`） |
+| GET | `/api/iwara/image?url=` | 代转任意 iwara 图片地址（只允许 iwara CDN 主机；同样支持 `Range` 本地切片） |
 | GET | `/api/iwara/me` | 当前登录用户；未登录返回 401 |
 | GET | `/api/iwara/auth` | 只看登录态：`{configured, authenticated, anonymous, error, token_file}`，登录成功后再补 `expires_at` 与 `username_hint`。**匿名时刻意不去打 `/user`**（那返回 401，看着像报错），所以它永远 200；一旦拿到 access token 就会问一次 `/user` —— 因为 token 的载荷里只有 `exp`/`id`/`role`，没有用户名 |
 
@@ -756,7 +787,7 @@ asmr.one 是第三个站点，与 Pixiv、iwara 都无关，由独立的接口�
 | GET | `/api/asmr/search?query=&page=` | 关键词搜索。走的是上游 `GET /api/search/{关键词}`（关键词在**路径**里，不在查询参数里），**真的按关键词区分结果**：`癒し` → 9743 条、`DLsite` → 62626 条、查不到的词 → 诚实的 0 条 |
 | GET | `/api/asmr/work/{work_id}` | 作品详情（上游 36 个键原样透传，另给封面补上代转地址） |
 | GET | `/api/asmr/tracks/{work_id}?flat=` | 音轨（文件）列表。上游是嵌套树（folder 套 folder，叶子是 audio），默认**展平**成一列文件并保留每个文件的文件夹路径；`flat=false` 时按 `{hash, folders}` 的形状原样返回叶子 |
-| GET | `/api/asmr/cover/{work_id}?type=` | 作品封面代转（`type`: `main` / `sam` / `240x240`，上游给的是 webp） |
+| GET | `/api/asmr/cover/{work_id}?type=` | 作品封面代转（`type`: `main` / `sam` / `240x240`，上游给的是 webp；支持 `Range` 本地切片） |
 | GET | `/api/asmr/stream?url=` | 代转音频字节并透传 `Range`（原样转发 `Range` / `If-Range`，返回上游的 206 与 `Content-Range`）。只允许 asmr 媒体主机（`raw.kiko-play-niptan.one`） |
 | GET | `/api/asmr/auth` | 登录态诊断：`{configured, authenticated, anonymous, ech, error}`。本入口只报匿名可用与链路是否通，`anonymous` 永远是 `true` |
 
@@ -796,6 +827,36 @@ E-Hentai 是第四个站点，与前三个都无关，由独立的接口项目 `
 6. **游标分方向：向后是 `?next=`，向前是 `?prev=`，两个键不能混用。** 上游的 `?prev=<下一页第一个 gid>` 确实能用（实测精确取回上一页，25/25 全同）；但把 `prev` 的值当 `?next=` 发出去**不会报错**，只会静默给出错误的一页（实测拿到的是当前页的下一页）。所以 `/api/eh/list` 与 `/api/eh/search` 都带 `direction` 参数：默认 `next`，往回翻必须显式传 `direction=prev`，返回体里也照实回显本次用的是哪个方向。另外上游的游标是**绑在查询上的**（搜索结果页喂首页的光标，拿回来的还是搜索第一页），换关键词时别复用光标。
 7. **「取不到」是 HTTP 200 + 一句纯文本，不是 404**。上游对取不到的画廊和无效大图页都回 200：`Key missing, or incorrect key provided.`（39 字节）/ `No gallery specified.`（21 字节）/ `Gallery not found. …`（172 字节）/ `Invalid page.`（13 字节）。只看状态码会把它们当成功页面，解析出一具空壳（标题空、图链空、`showing.total` 为 `null`），客户端只会看到「这个画廊没有图」——比 404 更难查。所以 `ehviewer/parse.py` 用**页面骨架**（详情页的 `#gn`/`#gdc`/`#gdd`、大图页的 `<img id="img">`）当判据：有骨架就是正常页，没有才去看那几句存根文案；两者都判不出就照原样放行。实测 31 张真实详情页（含 `?p=` 后续屏）与全部首页结果都命中骨架，零误判。命中的存根统一转成 **404**（`reason: "not_found"`），消息里保留上游原文与 `key` / `no_gallery` / `removed` / `invalid` 的分类。
 8. **同样的坑在官方 API 上有第 4 种形态**：`api.php` 的 `gdata` 对失效 token / 不存在的 gid 也是 **HTTP 200**，把错误放在**每一条目自己的 `error` 字段**里——`{"gmetadata":[{"gid":1,"error":"Key missing, or incorrect key provided."}]}`；gid 不存在时上游还会把 gid 夹到 `2147483647`，文案换成 `Gallery not found. …`。批量接口里好坏条目**混在同一个 list** 里逐条独立，所以 `gdata()` 照原样返回整批（调用方要自己逐条看 `error`）；而单条的 `/api/eh/metadata` 不能这么「忠实」——`metadata()` 用 `parse.parse_gdata_error()` 判这一条，命中就转 **404**，上游换文案（不认识的 `error`）也一律按错误处理，绝不放过。
+
+### GitHub（**仅 `github/run.py` 提供**）
+
+GitHub 是第五个站点，与前面四个都无关，由独立的接口项目 `github/` 提供；用别的入口启动时这些地址都返回 **404**。它**不需要登录**：`GITHUB_TOKEN` 只是可选的配额增强（匿名 60 次/小时 → 配了 5000 次/小时），不是门槛。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/github/repo/{owner}/{repo}` | 仓库主档：`full_name` / `description` / `stars` / `forks` / `watchers` / `open_issues` / `language` / `topics` / `default_branch` / `size_kb` / `license{spdx_id,name}` / `owner{login,html_url,avatar_url}` / 时间戳 |
+| GET | `/api/github/readme/{owner}/{repo}?ref=` | README 正文。**上游给的是 base64**，这里解码成文本返回（`{path, name, ref, size, encoding:"text", content, html_url}`）；`ref` 留空用默认分支 |
+| GET | `/api/github/contents/{owner}/{repo}/{path}?ref=` | 目录或单文件。上游同一个接口**返两种形状**（目录返 list、文件返对象），这里统一：目录 → `{type:"dir", count, items:[…]}`，文件 → `{type:"file", count:1, name, path, size, …}`（单条直接摊在顶层，没有 `items`）。`path` 可留空（等价于 `/contents/{owner}/{repo}`，根目录）；含 `..` 或 `?` / `#` 的路径回 **400 `invalid_path`**（见下第 7 条） |
+| GET | `/api/github/releases/{owner}/{repo}?per_page=&page=` | 发行版列表（含 `assets[{name,size,download_count,content_type,browser_download_url}]`） |
+| GET | `/api/github/issues/{owner}/{repo}?state=&per_page=&page=` | issue 列表。**GitHub 把 PR 混在这个端点里**，所以每条带 `is_pull_request`（布尔）让客户端自己筛；`state` 只接受 `open` / `closed` / `all` |
+| GET | `/api/github/commits/{owner}/{repo}?sha=&per_page=&page=` | 提交列表（`sha` / `summary`（message 首行）/ `author{login,name,avatar_url}` / `date` / `html_url`） |
+| GET | `/api/github/search/repositories?q=&per_page=&page=&sort=&order=` | 仓库搜索。`q` 必填，支持 GitHub 搜索语法（`language:python stars:>1000`）；`sort` 只接受 `""` / `stars` / `forks` / `help-wanted-issues` / `updated`。**search 是另一本配额账，匿名只有 10 次/小时** |
+| GET | `/api/github/user/{login}` | 用户 / 组织主档（`login` / `name` / `type` / `company` / `blog` / `location` / `public_repos` / `followers` / `following` / `avatar_url`） |
+| GET | `/api/github/rate_limit` | 官方配额账本原样返回（`resources.core` / `.search` / `.graphql` …），并额外补一个 `client` 键（本进程自己记的账：`client.resources[桶名]` 逐桶给出 `limit/remaining/used/reset/reset_at/seconds_until_reset`，同时外层保留 `remaining` 等扁平键指向 `core` 桶以兼容旧调用）。**配额见底时这个端点照样能查**（上游不计费），上游不通时也返回本地账本 + `upstream_error`，不抛错 |
+| GET | `/api/github/auth` | 认证态 —— **不发起任何上游请求**，只回 `{authenticated, api_url, budget, note}` |
+
+关于 github 的实现说明（都来自实测）：
+
+1. **只用 `httpx`，不借道、不 ECH、不要 `curl_cffi`**。`api.github.com` 在本机直连就通，所以 `github/` 没有自己的 `requirements.txt`，`run.py` 是最朴素的 `bootstrap()`（只装根清单里的三件套）。这一点和前面三个站点相反，也是它**唯一不依赖编译包**的原因。
+2. **匿名配额很紧：core 60 次/小时、search 10 次/小时，而且这是两本独立的账**。所以 `GithubClient` 每次请求都把响应头里的 `x-ratelimit-limit` / `-remaining` / `-used` / `-reset` 连同 **`x-ratelimit-resource`** 一起记账——账本按 resource 分桶（`budget()["resources"]`，桶名就是响应头那个值，缺省落 `core`），`_refuse_when_exhausted(resource)` 只检查**本次请求所属**的那个桶：一旦该桶 `remaining == 0` 且 `reset` 还没到，就**本地直接抛 429**（`reason: "rate_limited"`，消息里点名是哪个桶），根本不发请求——白撞一次上游只会更慢、也不会让配额变多。分桶不是洁癖：早前用一本扁平账，结果 search 的 10 次见底会把 core 的 55 次一起锁死，报错信息还说成「10 次/小时」，与真实状况完全不符。
+3. **必须显式 `trust_env=False`**。httpx 默认会读系统代理（`HTTP_PROXY` / `HTTPS_PROXY` / Windows 注册表），而实测同一台机器上**走代理出口反而撞在别人的额度上**：同一个 `/rate_limit`，直连剩 56 次、经代理剩 0 次，耗时还是 1.5 秒 vs 5.1 秒。所以客户端建 `httpx.AsyncClient` 时写死 `trust_env=False`，`GithubSettings` 也**刻意不读 `settings.proxy`**。副作用是它同时关掉了 `SSL_CERT_FILE` / `.netrc` 的自动读取（这个站点本来也不需要）。
+4. **`RateLimiter` 按分钟限流，不按小时摊薄**。一开始想「60 次/小时 → 每 60 秒放一次」，结果一个冒烟测试跑了两分钟还没跑完。「配额见底」这件事交给上面第 2 条做硬闸是对的，用限流器去模拟小时预算只会把正常请求也拖死；所以这里就用框架那个令牌桶（默认 `PIXIV_RATE_LIMIT_RPM=100`）。
+5. **上游的「取不到」这次是真的 404**（不像 E-Hentai 藏在 200 里）。`_unwrap()` 按状态码翻译：404 → `not_found`、401 → `auth_required`、422 → `invalid_params`、5xx → `github_upstream`（对外统一 502）；**403 最麻烦**——它既可能是「配额用完」也可能是「真没权限」，所以用**该请求所属资源桶**的 `remaining == 0` 或 `"rate limit" in message` 区分（前者翻 429 `rate_limited`、后者保留 403 `forbidden`）。此外 `owner` / `repo` 在路由层就按 `^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$` 挡掉畸形名字，畸形输入直接被 FastAPI 回 **422**、一次上游都不打。
+6. **`owner` / `repo` 的字符集比想象中窄**：GitHub 允许 `A-Za-z0-9._-`、不允许 `/`，也不允许首字符是 `.` `_` `-`。这里提前挡住既是为了干净，也是为了省配额（一个畸形名字本来也要占一次 404 往返）。
+7. **`contents` 的 `path` 必须在客户端挡穿越**。`/api/github/contents/{owner}/{repo}/{path:path}` 用的是 `path` 转换器，斜杠会被整段吞进参数里，路由层的 `pattern` 管不到；而 `path` 是直接拼进上游 URL 的，`..` 能一路爬出 `/repos/{owner}/{repo}/contents` 前缀——实测 `../../../../../rate_limit` 会打到上游的 `/rate_limit`、`../../../../../user/emails` 会打到 `/user/emails`，配了 `GITHUB_TOKEN` 时等于让别人借服务端的令牌访问别的端点。**路由层挡不住**：Starlette 会先解码 percent-encoding，`%2e%2e/` 与 `..%2f` 两种写法都能穿过去。所以校验放在 `github/client.py:clean_repo_path()`：拒绝含 `?` / `#` / `\` 的路径（`?` `#` 在拼 URL 时会被 httpx 当成查询串/片段分隔符，实测能把 `?q=injected` 注进上游 URL），按 `/` 切段后遇 `..` 直接抛 `GithubError(400, reason="invalid_path")`，普通深路径（`src/requests/sessions.py`）照常通过。
+8. **`GITHUB_PER_PAGE` 是真会生效的**。四处列表路由的 `per_page` 参数默认值是 `None`，函数体把它交给客户端解析（`None` → `settings.per_page`，并夹到 `1..100`），不是硬编码 30——否则改配置毫无反应、文档成了空话，那比不宣传更糟。
+9. **`/rate_limit` 与 `/auth` 是排障通道，刻意不被自己的硬闸拦住**。上游那个 `/rate_limit` **不计费**（实测连打两次 `used` 不变），所以 `GithubClient._request(..., free=True)` 让它跳过 `_refuse_when_exhausted`——否则配额见底时用户去查「还剩多少 / 什么时候重置」，会拿到和普通请求一样的 429，等于把唯一的出路也关掉。更进一步，`/api/github/rate_limit` 路由在上游本身不通（断网 / `GITHUB_API_URL` 配错）时也**不抛错**：照旧返回本进程自己记的账，另加一个 `upstream_error` 字段——「查不到官方账本」不该连「本地还剩多少」一起赔进去。
+10. **没有写操作**（不建 issue、不 star、不发 PR），所以不需要 CSRF / 二次确认那一套；除 `/auth` 外每个端点都真的会打上游。
 
 ## 调用示例
 
@@ -854,11 +915,30 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 
 代理会自动附加 `Referer: https://app-api.pixiv.net/`，并做 24 小时缓存。只允许代理 `i.pximg.net`。
 
+## 断点续传（HTTP Range）
+
+所有会往客户端吐字节的接口都支持 `Range`，中断的下载 / 播放可以从断点接着走，不用从头再来。一共八处（`/img` 的两个入口共用同一段逻辑，算一处），分两种做法：
+
+| 接口 | 做法 |
+| --- | --- |
+| `/img`、`/img/{path}` | **透传**：把入站的 `Range` / `If-Range` 转给上游，上游的 `206` / `416` 与 `Content-Range` / `Accept-Ranges` 原样转回 |
+| `/api/iwara/stream`、`/api/asmr/stream`、`/api/eh/proxy` | **透传**：同上（这几个本来就是这样，这次只是把挑选逻辑收到框架里） |
+| `/api/iwara/image`、`/api/iwara/thumbnail/{id}`、`/api/asmr/cover/{id}` | **本地切片**：上游取图是缓冲式的一次性整包，字节已在内存，由服务端按入站 `Range` 切 200 / 206 / 416 |
+| `/api/library/file` | **框架自带**：走 Starlette 的 `FileResponse`，Range / 多区间 / `If-Range` 校验都是它内建的 |
+
+三条约定（都由 `pixiv_bridge/ranges.py` 一个地方定，各站点不再各写一份）：
+
+1. **只认单区间**。`bytes=0-199`、`bytes=200-`、`bytes=-200` 都行；`bytes=0-1,5-6` 这种多区间按 RFC 9110 允许服务端忽略，直接回整包 200，不做 `multipart/byteranges`。
+2. **不发校验器**。本地切片的三条不发 `ETag` / `Last-Modified`，所以也没法判断 `If-Range` 里的校验器是否还有效 —— 带 `If-Range` 的请求一律回整包 200，这是 RFC 在服务端无法判定时规定的走法。透传的四条则完全听上游的。
+3. **不带 `Range` 时行为不变**：还是 200 + 整包，只多一个 `Accept-Ranges: bytes`。
+
 ## 错误处理
 
 | HTTP 状态码 | 含义 |
 | --- | --- |
 | `200` | 成功，返回 Pixiv 原始 JSON |
+| `206` | 部分内容：只有图片代理 `/img`（以及 pixiv / iwara / asmr_one / ehviewer 四个站点的字节接口）带 `Range` 请求时才会出现，同时带 `Content-Range`；GitHub 站点是纯 JSON，没有字节接口 |
+| `416` | 请求的区间超出实体范围：`Content-Range` 形如 `bytes */<总字节>`，客户端应回退到从头下载 |
 | `400` | 参数错误 / next_url 主机不合法 |
 | `401` | 未认证或 refresh token 失效（需重新获取 token） |
 | `404` | 上游找不到资源（作品已删除 / id 不是小说而是系列 / R-18 未确认年龄等），`message` 为上游原文 |
@@ -885,13 +965,13 @@ curl -s -o sample.jpg "http://127.0.0.1:8765/img/c/250x250_80_a2/img-master/img/
 - `GET /api/config` 多返回两个字段：`warnings`（上面那些提示）与 `writable`（真写一个探针文件判断数据目录能不能写，`{"ok": bool, "dir": "...", "reason": "..."}`），页面在保存前就能提示；
 - 跨文件系统的 `os.replace`（安卓 `/sdcard` 的 FUSE 就会这样，报 `EXDEV`）不再白等重试，直接退回「原地覆盖写」。
 
-还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，框架与站点的用例应全绿（iwara 的 211 项会跳过，见下）。
+还有一个**只在 Termux 上才踩得到**的原因：那里装的是 **pydantic 1.x**（`requirements-termux.txt` 故意钉的，因为 pydantic 2 的 `pydantic-core` 要 Rust 编译，普通用户装不动）。pydantic 2 取模型字段用 `model.model_dump()`，1.x 只有 `model.dict()`；代码里直接调 `model_dump()` 时，Termux 上「保存配置」会稳定报 `500`，`detail` 是 `AttributeError: 'ConfigPatch' object has no attribute 'model_dump'`（`POST /api/history`、`/api/downloads`、`/api/bookmarks` 也一样）。现在所有取字段的地方都统一走 `pixiv_bridge/compat.py` 的 `dump_model()`（2.x 用 `model_dump()`，1.x 退回 `dict()`），两个大版本都能跑。要自己复核可以装一套 v1 依赖后跑测试：`pip install -r requirements-termux.txt` 再 `python -m unittest discover -s tests`，框架与站点的用例应全绿（iwara 的 213 项会跳过，见下）。
 > **安卓 / Termux**：请把项目放在 Termux 家目录里（例如 `~/pixiv-bridge`），不要把数据目录指到 `/sdcard` 下的路径。Termux 上依赖会自动换成纯 Python 的 `requirements-termux.txt`（见 INSTALL.md，pydantic 1.x 与 2.x 都支持），与这条路径限制无关。
 
 ## 开发自检（测试与边界检查）
 
 ```bash
-python -m unittest discover -s tests       # 929 项应全绿（框架与站点 339 + iwara 211 + asmr_one 145 + ehviewer 189 + 打包 45）
+python -m unittest discover -s tests       # 1043 项应全绿（框架与站点 352 + iwara 212 + asmr_one 147 + ehviewer 189 + github 98 + 打包 45）
 python scripts/check_boundary.py           # 拆分边界自检
 python scripts/make_share_packages.py --check   # 分享包内容自检（不写 zip）
 ```
@@ -905,7 +985,7 @@ python scripts/make_share_packages.py --check   # 分享包内容自检（不写
 
 改了 imports、挪了路由或动了入口脚本后跑一下它，比等到运行时才 404 省事。测试给 `novel` 那一层的用例统一走 helper（`tests/test_bridge.py`），因为三台账 / 配置 / 书架 / 阅读器页面现在都由扩展挂载，用框架外壳或 `pixiv.app.create_app` 打这些路径会 404。
 
-`iwara` 的用例在 `tests/test_iwara.py`（211 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求（`--check` 那几项也是把 `IwaraClient` 整个换掉再断言）。换 token 那一层也不例外：把真正发请求的 `_call_with_ip_retry` 换成「按队列吐假响应」，就能让 `refresh_access()` 的请求形状（POST `/user/token`、空 body、refresh token 放 `authorization` 头）和 `request()` 收到 403 后的那次强制重放真实跑一遍，不需要账号。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 211 项会**整片跳过**（显示 `OK (skipped=211)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
+`iwara` 的用例在 `tests/test_iwara.py`（213 项），全部离线：纯函数直接断言，路由用一个假客户端顶替 `app.state.iwara_client`，不打真实请求（`--check` 那几项也是把 `IwaraClient` 整个换掉再断言）。换 token 那一层也不例外：把真正发请求的 `_call_with_ip_retry` 换成「按队列吐假响应」，就能让 `refresh_access()` 的请求形状（POST `/user/token`、空 body、refresh token 放 `authorization` 头）和 `request()` 收到 403 后的那次强制重放真实跑一遍，不需要账号。因为 `iwara/client.py` 顶层 `import curl_cffi` 而它只写在 `iwara/requirements.txt` 里，新克隆的仓库还没装那个包时，这 213 项会**整片跳过**（显示 `OK (skipped=213)`）而不是报错；装上 `pip install -r iwara/requirements.txt` 后就会真正跑起来。
 
 分享包脚本的用例在 `tests/test_packaging.py`（45 项），同样全部离线、且**不写真实 `dist/`**（用 `patch.object(packaging, "DIST_DIR", 临时目录)` 顶掉）。它盯四类回归：包清单本身（**包数跟着 `scripts/sites.py` 的登记表走**、key 与 zip 名唯一、**每个包里声明的每条目录/文件都真的在盘上**——目录被改名时测试先炸，而不是等打出来的包缺东西）、`validate_specs()` 的结构约束（接口包必须带框架与**恰好一个**站点、扩展包不带站点、组合包的扩展宿主必须也在包里、包清单恰好覆盖所有站点与扩展）、铺包逻辑（扩展包只带自己、自动跳过 `__pycache__` / `.pyc` / `data/`、缺内容时报 `SystemExit` 并指名道姓）、以及 zip 回读（条目都在同名根文件夹下、根有 `README.md`、包内 `<站点>/run.py` 存在、`inspect_zip` 能认出字节码与私密数据）。脚本不在任何包里（`scripts/` 没有 `__init__.py`），所以测试用 `importlib` 按路径加载；注意脚本头有 `from __future__ import annotations`，加载时必须**先**把模块登记进 `sys.modules` 再 `exec_module`，否则 dataclasses 解析字符串注解时会去 `sys.modules` 里找一个还不存在的模块，报 `AttributeError: 'NoneType' object has no attribute '__dict__'`。
 
@@ -915,10 +995,10 @@ python scripts/make_share_packages.py --check   # 分享包内容自检（不写
 
 ### 一键生成分享包（推荐）
 
-项目分三层（框架 + 四个同级接口项目 + 两个扩展），按用途拆成八个分享包：
+项目分三层（框架 + 五个同级接口项目 + 两个扩展），按用途拆成九个分享包：
 
 ```bash
-python scripts/make_share_packages.py            # 八个包全做，写进 dist/
+python scripts/make_share_packages.py            # 九个包全做，写进 dist/
 python scripts/make_share_packages.py --list     # 只列有哪些包
 python scripts/make_share_packages.py iwara-api  # 只做一个（按 key 或 zip 名）
 python scripts/make_share_packages.py --check    # 只自检内容、不写 zip
@@ -930,6 +1010,7 @@ python scripts/make_share_packages.py --check    # 只自检内容、不写 zip
 | `iwara-api` | `iwara-api.zip` | 只有 iwara 接口项目 + 框架（`iwara/`，**不带 `pixiv/`、不带 `openssl-libs/`**） | 解压后 `python iwara/run.py`（iwara 的 ECH 走 `curl_cffi` 的 libcurl，不需要那套 OpenSSL 动态库） |
 | `asmr-api` | `asmr-api.zip` | 只有 asmr 接口项目 + 框架（`asmr_one/`，**不带 `pixiv/` / `iwara/`、不带 `openssl-libs/`**） | 解压后 `python asmr_one/run.py`（asmr 的 ECH 同样走 `curl_cffi` 的 libcurl；不需要 token） |
 | `ehviewer-api` | `ehviewer-api.zip` | 只有 E-Hentai 接口项目 + 框架（`ehviewer/`，**不带 `pixiv/` / `iwara/` / `asmr_one/`、不带 `openssl-libs/`**） | 解压后 `python ehviewer/run.py`（借道 Cloudflare anycast IP + 强制 HTTP/3，走 `curl_cffi` 的 libcurl；不需要 token） |
+| `github-api` | `github-api.zip` | 只有 GitHub 接口项目 + 框架（`github/`，**不带其它站点、不带 `openssl-libs/`**） | 解压后 `python github/run.py`（`api.github.com` 直连，只用根清单里的 `httpx`，**没有额外依赖要装**；不需要 token） |
 | `novel-extension` | `novel-extension.zip` | 小说阅读器扩展（`novel/`） | **不能单独启动**：把包内 `novel/` 拷进 Pixiv 接口项目根，`.env` 写 `PIXIV_BRIDGE_EXTENSIONS=novel` |
 | `iwara_web-extension` | `iwara_web-extension.zip` | iwara 视频页面扩展（`iwara_web/`） | **不能单独启动**：把包内 `iwara_web/` 拷进 `iwara-api` 项目根，`.env` 写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`（要配 `iwara/run.py` 入口） |
 | `pixiv-novel` | `pixiv-novel.zip` | Pixiv 接口 + 阅读器，已配好 | 解压后在目录里 `python pixiv/run.py`，`.env` 写 `PIXIV_BRIDGE_EXTENSIONS=novel` |
@@ -947,6 +1028,8 @@ python scripts/make_share_packages.py --check    # 只自检内容、不写 zip
 | `novel/`（含 `novel/extension.py`）、`novel/web/index.html` | **要阅读器就必须拷** | 小说阅读扩展（挂在 `pixiv/` 站点上）；漏拷时 `/novel` 直接 404、书架那几个接口不可用。拷过去后在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 启用 |
 | `iwara/`、`iwara/requirements.txt` | **要 iwara 就必须拷** | iwara 接口项目（视频接口）；漏拷时 `/api/iwara/*` 全部 404。首次启动会自动补装 `curl_cffi` |
 | `iwara_web/` | **要 iwara 视频页面就必须拷** | iwara 的播放页扩展（含 `iwara_web/index.html`）；漏拷时 `/iwara` 是 404（`/api/iwara/*` 不受影响）。拷过去后在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web` 启用（它调 iwara 的接口，所以 `iwara/` 也得在） |
+| `ehviewer/`、`ehviewer/requirements.txt` | **要 E-Hentai 就必须拷** | E-Hentai 接口项目；漏拷时 `/api/eh/*` 全部 404。首次启动会自动补装 `curl_cffi` |
+| `github/` | **要 GitHub 就必须拷** | GitHub 接口项目；漏拷时 `/api/github/*` 全部 404。**不用额外依赖**（只用根清单里的 `httpx`），也没有 `requirements.txt` |
 | `start.bat`、`start.sh`、`pixiv/get_token.py`、`iwara/get_token.py`、`INSTALL.md`、`DIRECT.md`、`requirements-termux.txt` | **建议拷** | 一键启动脚本、两个登录助手、傻瓜版说明、直连思路文档、Termux 专用依赖清单 |
 | `.env.example` | **必须拷** | 配置模板 |
 | `openssl-libs/` | **要 ECH 就必须拷** | 项目自带的 OpenSSL 4.x 动态库（`win32-amd64` + `android-arm64`，按 `平台-架构` 分子目录，约 16 MB）；拷过去即可用 ECH，无需在目标机器安装 OpenSSL。不用 ECH 时可以不拷 |

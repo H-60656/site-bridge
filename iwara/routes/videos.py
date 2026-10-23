@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from pixiv_bridge import ranges
+
 from .. import tokens
 from ..client import (
     IwaraError,
@@ -207,11 +209,7 @@ async def stream(request: Request, url: str = Query(...)):
     if not is_cdn_host(host):
         raise HTTPException(status_code=400, detail="只允许 iwara CDN 主机")
 
-    pass_through = {}
-    for name in ("range", "if-range"):
-        value = request.headers.get(name)
-        if value:
-            pass_through[name] = value
+    pass_through = ranges.forwarded_headers(request)
 
     try:
         status, headers, body = await get_client(request).open_stream(url, pass_through)
@@ -232,18 +230,17 @@ async def stream(request: Request, url: str = Query(...)):
 
 @router.get("/image")
 async def image(request: Request, url: str = Query(...)):
-    """代转缩略图 / 原图（浏览器自己加载不了 files.iwara.tv）。"""
+    """代转缩略图 / 原图（浏览器自己加载不了 files.iwara.tv）。
+
+    取图客户端是缓冲式的（一次读完整包），所以续传由我们自己按入站 ``Range`` 切片。
+    """
     if not is_cdn_host(urlparse(url).hostname or ""):
         raise HTTPException(status_code=400, detail="只允许 iwara CDN 主机")
     try:
         content, content_type = await get_client(request).fetch_image(url)
     except IwaraError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.message) from exc
-    return StreamingResponse(
-        iter([content]),
-        media_type=content_type,
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
+    return ranges.bytes_response(request, content, content_type)
 
 
 @router.get("/thumbnail/{video_id}")
@@ -270,11 +267,7 @@ async def thumbnail(
         content, content_type = await client.fetch_image(url)
     except IwaraError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.message) from exc
-    return StreamingResponse(
-        iter([content]),
-        media_type=content_type,
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
+    return ranges.bytes_response(request, content, content_type)
 
 
 @router.get("/me")

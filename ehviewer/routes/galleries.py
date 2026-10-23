@@ -19,22 +19,16 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from pixiv_bridge import ranges
+
 from ..client import EhError, is_allowed_proxy, is_image_page
 from . import get_client
 
 router = APIRouter(prefix="/api/eh", tags=["eh"])
 
-#: 代转时透传给上游的请求头（Range 必须留下，否则浏览器没法断点续传）。
-_FORWARD_HEADERS = ("range", "if-range", "if-none-match", "if-modified-since")
-
-
-def _pick_forward_headers(request: Request) -> dict:
-    headers = {}
-    for name in _FORWARD_HEADERS:
-        value = request.headers.get(name)
-        if value:
-            headers[name] = value
-    return headers
+#: 除 Range / If-Range（续传）之外，eh 还要这两个条件请求头：
+#: 把它们转给上游，上游回 304 时代转层才能原样转回「没变」。
+_EXTRA_FORWARD_HEADERS = ("if-none-match", "if-modified-since")
 
 
 def _raise(exc: EhError):
@@ -219,7 +213,7 @@ async def proxy(
     client = get_client(request)
     try:
         status, headers, body = await client.open_proxy(
-            url, _pick_forward_headers(request)
+            url, ranges.forwarded_headers(request, extra=_EXTRA_FORWARD_HEADERS)
         )
     except EhError as exc:
         _raise(exc)

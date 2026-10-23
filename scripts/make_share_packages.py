@@ -118,8 +118,8 @@ BASE_NOTES = (
     "所以它直接启动；想显式指定就在 `.env` 里写 `BRIDGE_SITE=<站点目录名>`。",
     "个人数据都在 `data/` 里（登录凭据 / 阅读历史 / 下载记录 / 收藏台账 / 页面配置）；"
     "换机只拷这一个目录。",
-    "各接口项目 `pixiv/` / `iwara/` / `asmr_one/` / `ehviewer/` 是**同级**的：各自一个 `run.py`，"
-    "互相不挂载，都只用框架 `pixiv_bridge/`。",
+    "各接口项目 `pixiv/` / `iwara/` / `asmr_one/` / `ehviewer/` / `github/` 是**同级**的："
+    "各自一个 `run.py`，互相不挂载，都只用框架 `pixiv_bridge/`。",
 )
 
 PIXIV_NOTES = (
@@ -162,6 +162,21 @@ EH_NOTES = (
     "`/api/eh/proxy?url=...` 代转（`/api/eh/images/{gid}/{token}` 里给的是 `/s/` 页地址）。",
 )
 
+GITHUB_SETUP = (
+    "github 不需要登录：仓库、README、目录、发行版、issue、提交、搜索、用户全部匿名可读。"
+    "**但匿名只有 60 次/小时**（search 独立算，10 次/小时）：想要 5000 次/小时就在 `.env` 里"
+    "填一个 `GITHUB_TOKEN`（个人访问令牌，只读 scope 就够）。",
+)
+
+GITHUB_NOTES = (
+    "本包是唯一**不需要额外依赖**的接口包：`api.github.com` 直连就通，"
+    "不需要 `curl_cffi`、不需要 ECH、不需要 HTTP/3（用户明确要求不使用代理）。",
+    "配额是对**整个出口 IP** 计的，不是对本进程。看见 403 且正文提到 rate limit 时，"
+    "打 `/api/github/auth` 看还剩几次、几分钟后重置 —— 不要当成没权限。",
+    "`/api/github/rate_limit` 报的是上游账本；`/api/github/auth` 报的是本进程视角"
+    "（是否带 token、预算多少），后者不打上游，配额见底时也能看。",
+)
+
 def _site_dirs(*names, with_assets=True) -> tuple:
     """组装包里要带的目录：框架 + 指定站点（+ 站点资产 + 公共目录）。"""
     dirs = [FRAMEWORK_PACKAGE]
@@ -177,6 +192,7 @@ PIXIV = SITES_BY_NAME["pixiv"]
 IWARA = SITES_BY_NAME["iwara"]
 ASMR = SITES_BY_NAME["asmr_one"]
 EH = SITES_BY_NAME["ehviewer"]
+GITHUB = SITES_BY_NAME["github"]
 
 PACKAGES = (
     PackageSpec(
@@ -275,6 +291,31 @@ PACKAGES = (
             "`/api/health` 等入口）。",
         )
         + EH_NOTES
+        + BASE_NOTES,
+    ),
+    PackageSpec(
+        key="github-api",
+        zip_name="github-api",
+        title="GitHub 接口包",
+        kind="api",
+        summary="GitHub 只读接口（`/api/github/repo`、README、目录、发行版、issue、提交、搜索、用户、配额）+ `/` 导航页。",
+        dirs=_site_dirs(GITHUB.directory, with_assets=False),
+        files=API_ROOT_FILES,
+        start_commands=(
+            "# Windows",
+            "start.bat",
+            "",
+            "# 其它平台",
+            GITHUB.command(),
+        ),
+        setup_lines=BASE_SETUP + GITHUB_SETUP,
+        notes=(
+            "入口是 `github/run.py`，它**只挂 GitHub 的接口** —— 其余站点的路由"
+            "都不在本包里（各接口项目同级，互不挂载）。",
+            "启动后浏览器打开 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、"
+            "`/api/health` 等入口）。",
+        )
+        + GITHUB_NOTES
         + BASE_NOTES,
     ),
     PackageSpec(

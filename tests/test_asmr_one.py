@@ -1453,6 +1453,25 @@ class AsmrRouteTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "取封面失败")
 
+    def test_cover_slices_a_range_locally(self):
+        """取封面是缓冲式的，续传由我们按入站 Range 切片。"""
+        client = self._client()
+
+        response = client.get("/api/asmr/cover/1669340", headers={"Range": "bytes=0-3"})
+
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.content, b"RIFF")
+        self.assertEqual(response.headers["content-range"], "bytes 0-3/8")
+        self.assertEqual(response.headers["accept-ranges"], "bytes")
+
+    def test_cover_rejects_an_out_of_bounds_range(self):
+        client = self._client()
+
+        response = client.get("/api/asmr/cover/1669340", headers={"Range": "bytes=99-"})
+
+        self.assertEqual(response.status_code, 416)
+        self.assertEqual(response.headers["content-range"], "bytes */8")
+
     # ---------- 字节代转 ----------
 
     def test_stream_forwards_range_and_marks_private(self):
