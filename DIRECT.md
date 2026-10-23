@@ -2,7 +2,7 @@
 
 这份文档记录本项目的核心做法：**在目标站点被 DNS 污染 / SNI 阻断 / IP 封锁 / 反爬识别时，怎么让程序直接拿到数据。** 它不是 API 手册（那是 README），而是「遇到连不上时该怎么想、怎么定位、怎么选手段」的方法论。
 
-适用对象：任何被链路中间盒干扰的站点。项目里已经用同一套思路落地了五个站点 —— Pixiv（`pixiv_bridge/`）、iwara.tv（`iwara/`）、asmr.one（`asmr_one/`）、E-Hentai（`ehviewer/`）与 GitHub（`github/`），本文最后一节对照它们说明「同方法、不同手段」。
+适用对象：任何被链路中间盒干扰的站点。项目里已经用同一套思路落地了五个站点 —— Pixiv（`pixiv/`，框架在 `site_bridge/`）、iwara.tv（`iwara/`）、asmr.one（`asmr_one/`）、E-Hentai（`ehviewer/`）与 GitHub（`github/`），本文最后一节对照它们说明「同方法、不同手段」。
 
 ---
 
@@ -104,18 +104,18 @@ iwara 更进一步，用一张**实测可用的边缘 IP 表**（`iwara/client.p
 
 **陷阱三：前面五条都在问「上游怎么回错」，还有第六条 ——「上游错了之后，本端会不会把它改写得面目全非」。** 前五条的判据在上游；这一条的判据在**你自己的路由与错误处理**里，量起来也最简单：拿一个**必定失败**的路径打一次自己的接口，看返回的状态码和响应体。iwara 与 asmr 就栽在这上面 —— `/api/iwara/video/{id}` 与 `/api/asmr/work/{id}` 上游明明回 **404**，对外却是 **500 `Internal Server Error`**（`text/plain`），**状态码被改写、上游原文整段丢失**。
 
-根因是两层叠加，缺一不可：① **路由层没兜** —— `iwara/routes/videos.py` 的 `/videos` `/search` `/video/{video_id}`、`asmr_one/routes/works.py` 的 `/works` `/search` `/work/{work_id}` 没有 `try/except`；② **站点没声明 `error_types`** —— `pixiv_bridge/errors.py` 的 `install_error_handlers()` 只给**传入的类型**（四个站点里只有 `pixiv/app.py` 传了）与 `httpx.HTTPError` 注册处理器，所以没有第二道网，异常一路逃逸到 FastAPI 默认处理器被改写成 500。
+根因是两层叠加，缺一不可：① **路由层没兜** —— `iwara/routes/videos.py` 的 `/videos` `/search` `/video/{video_id}`、`asmr_one/routes/works.py` 的 `/works` `/search` `/work/{work_id}` 没有 `try/except`；② **站点没声明 `error_types`** —— `site_bridge/errors.py` 的 `install_error_handlers()` 只给**传入的类型**（当时四个站点里只有 `pixiv/app.py` 传了）与 `httpx.HTTPError` 注册处理器，所以没有第二道网，异常一路逃逸到 FastAPI 默认处理器被改写成 500。
 
 这条陷阱有两点值得单独记住：
 
 - **同站内不一致比全站一致更危险。** 如果 `videos.py` 一条都没兜，读代码的人会警觉；正因为 `/related` `/resolve` `/stream` 都兜得很漂亮，那三条裸路由反而像是「本来就返回不了错误」。**样式统一会掩盖遗漏** —— 任何一条自带 `try/except` 的文件，都值得问一句「是不是每条都有」。
 - **状态码是契约的一部分，丢它比丢形状严重。** 丢形状只影响人类的读法；丢状态码会让程序走错分支（404 变 500 就是「不存在」被说成「服务器炸了」）。
 
-**顺带一条「数字也要横着看」：** 自检里报出的数字，先问它到底是不是它声称的那个东西。`iwara/envcheck.py` 曾把上游 `/videos` 顶层的 `count` 当总数报出去，而那个 `count` 实测**恒等于 `page*limit+n+1`**（20 组 `page × limit` 组合全部成立），于是自检煞有介事地报「共 2 个视频」。**同仓横向对照一眼就能看出**：同样是「报条数」，`asmr_one/envcheck.py` 分得清本页（`len(works)`）与真总数（`pagination.totalCount`），`ehviewer/envcheck.py` 只报条数 —— 四个站点里只有 iwara 混了。这类缺陷不会让任何测试变红，**一个看起来精确的数字，比一句「可达」更容易骗过自检。**
+**顺带一条「数字也要横着看」：** 自检里报出的数字，先问它到底是不是它声称的那个东西。`iwara/envcheck.py` 曾把上游 `/videos` 顶层的 `count` 当总数报出去，而那个 `count` 实测**恒等于 `page*limit+n+1`**（20 组 `page × limit` 组合全部成立），于是自检煞有介事地报「共 2 个视频」。**同仓横向对照一眼就能看出**：同样是「报条数」，`asmr_one/envcheck.py` 分得清本页（`len(works)`）与真总数（`pagination.totalCount`），`ehviewer/envcheck.py` 只报条数 —— 当时四个站点里只有 iwara 混了。这类缺陷不会让任何测试变红，**一个看起来精确的数字，比一句「可达」更容易骗过自检。**
 
 **陷阱四：前面六条都在问「200 里的错误长什么样」，还有第七条 ——「200 里甚至没有一个能解析的 body」。** 这是比「空壳」更彻底的一层：网关/Cloudflare 拦截页、上游改版、反代回静态页，都会给出 **HTTP 200 + `text/html`**。这时问题不再是「判据认不认得出错误」，而是**连解析都做不到**。
 
-具体机制：`resp.json()` 在 body 不是 JSON 时抛 `json.JSONDecodeError`，而它是 `ValueError` 的子类 —— **不属于任何站点的错误类型**（`PixivApiError` / `IwaraError` / `AsmrError` / `EhError` / `GithubError`），也躲过了 `pixiv_bridge/errors.py` 的 `install_error_handlers()`（它只认传入的 `error_types` 与 `httpx.HTTPError`）。于是异常一路逃到 FastAPI 默认处理器，对外变成 **裸 500 `text/plain Internal Server Error`** —— 形状没了，状态码也被改写成「服务器炸了」，而真相是「上游被拦了」。
+具体机制：`resp.json()` 在 body 不是 JSON 时抛 `json.JSONDecodeError`，而它是 `ValueError` 的子类 —— **不属于任何站点的错误类型**（`PixivApiError` / `IwaraError` / `AsmrError` / `EhError` / `GithubError`），也躲过了 `site_bridge/errors.py` 的 `install_error_handlers()`（它只认传入的 `error_types` 与 `httpx.HTTPError`）。于是异常一路逃到 FastAPI 默认处理器，对外变成 **裸 500 `text/plain Internal Server Error`** —— 形状没了，状态码也被改写成「服务器炸了」，而真相是「上游被拦了」。
 
 五个站点里，**只有 ehviewer 一开始就兜住了**（`ehviewer/client.py:gdata` 把解析包在 `try/except Exception` 里，翻成 `EhError 502`），原因很偶然：它的 `gdata` 本来就是手工搭 JSON 请求的一段代码，顺手包了个 try；后来新增的 `github/` 一落地就照这个口径做（`github/client.py:_unwrap` 把非 JSON 响应翻成 `GithubError` 502 `github_upstream`）。这也正是这条陷阱最容易漏的地方 —— **它和「有没有写 try」无关，和「写在哪一层」有关**：路由层兜异常（陷阱三修的那层）永远兜不住解析层抛出的 `ValueError`。
 
@@ -271,9 +271,9 @@ else:                   # 普通路径
 
 直连能力是**可选增强**，不能反过来成为负担：
 
-- **站点隔离，单向依赖。** `pixiv_bridge/` 是纯框架，永远不认识 `pixiv/`、`iwara/`、`asmr_one/`、`ehviewer/`、`github/`、`novel/`、`iwara_web/`；站点与扩展只能 `import pixiv_bridge.*`（各站点之间也互不依赖）。`scripts/check_boundary.py` 用 AST + 子进程探路由来强制这条边界，`scripts/sites.py` 是构建侧的登记表。
-- **挑选站点也只写一次。** 根目录的启动就是**项目导航**：`pixiv_bridge/__main__.py` 发现「有 `run.py` 的目录＝接口项目、只有 `extension.py` 的目录＝扩展」，用 `ast` 从站点自己的文件里读导航用的字面量（标题、简介、`Site.nav_order`），**不 import 也不执行站点代码**，选完才 `runpy.run_path` 交给它的 `run.py`。`start.bat` / `start.sh` 因此只是转发器（在 sh/bat 里各抄一套发现＋排序＋询问必然与 Python 侧漂移，而且 shell 读不到 `nav_order`）。
-- **重依赖不进根清单。** `curl_cffi` 是编译包，只有 iwara、asmr.one 与 E-Hentai 需要，所以分别写在 `iwara/requirements.txt`、`asmr_one/requirements.txt`、`ehviewer/requirements.txt` 里，由 `pixiv_bridge/deps.py` 的通用 `ensure_packages(names, requirements)` 按需安装，站点在自己 `run.py` 里先 `bootstrap(partial(ensure_packages, ...))` 再用它。只跑 Pixiv 的用户完全不必碰它。**github 是这条规则的对照组**：它没有任何重依赖（只用根清单里的 `httpx`），所以它既没有 `requirements.txt`、`run.py` 也只是最朴素的 `bootstrap()` —— 反过来说，「某站点有自己的 `requirements.txt`」在这个项目里**等于**「它需要编译包」。
+- **站点隔离，单向依赖。** `site_bridge/` 是纯框架，永远不认识 `pixiv/`、`iwara/`、`asmr_one/`、`ehviewer/`、`github/`、`novel/`、`iwara_web/`；站点与扩展只能 `import site_bridge.*`（各站点之间也互不依赖）。`scripts/check_boundary.py` 用 AST + 子进程探路由来强制这条边界，`scripts/sites.py` 是构建侧的登记表。
+- **挑选站点也只写一次。** 根目录的启动就是**项目导航**：`site_bridge/__main__.py` 发现「有 `run.py` 的目录＝接口项目、只有 `extension.py` 的目录＝扩展」，用 `ast` 从站点自己的文件里读导航用的字面量（标题、简介、`Site.nav_order`），**不 import 也不执行站点代码**，选完才 `runpy.run_path` 交给它的 `run.py`。`start.bat` / `start.sh` 因此只是转发器（在 sh/bat 里各抄一套发现＋排序＋询问必然与 Python 侧漂移，而且 shell 读不到 `nav_order`）。
+- **重依赖不进根清单。** `curl_cffi` 是编译包，只有 iwara、asmr.one 与 E-Hentai 需要，所以分别写在 `iwara/requirements.txt`、`asmr_one/requirements.txt`、`ehviewer/requirements.txt` 里，由 `site_bridge/deps.py` 的通用 `ensure_packages(names, requirements)` 按需安装，站点在自己 `run.py` 里先 `bootstrap(partial(ensure_packages, ...))` 再用它。只跑 Pixiv 的用户完全不必碰它。**github 是这条规则的对照组**：它没有任何重依赖（只用根清单里的 `httpx`），所以它既没有 `requirements.txt`、`run.py` 也只是最朴素的 `bootstrap()` —— 反过来说，「某站点有自己的 `requirements.txt`」在这个项目里**等于**「它需要编译包」。
 - **可选能力要有回退，且失败要安静。** 登录态失效不该让整站不可用 —— iwara 的 `_prepare_auth`（`iwara/client.py:465-485`）换不出 access token 时只把原因记进 `auth_error` 并退回匿名，因为「iwara 的绝大部分内容匿名就能看，为了一个失效的 token 让整站不可用是本末倒置」。
 - **能力自检要暴露给用户。** `/api/iwara/auth` 匿名时刻意不去打 `/user`（那返回 401，看着像报错），所以它永远 200；只有真拿到 access token 才问一次 `/user` 填 `username_hint` —— 顺带一条教训：token 载荷里**没有**用户名字段（只有 `exp`/`id`/`role`），早期直接读载荷的 `username` 于是恒为 `None`，而当时的测试替身自己往载荷里塞了 `username`，正好把这个 bug 盖住了。
 - **「不走代理」也要显式写。** github 站点的结论是「直连就通、绝不经代理」，但 httpx 默认会读 `HTTP_PROXY` / `HTTPS_PROXY` / Windows 注册表**静默接入系统代理**，所以必须在建 `httpx.AsyncClient` 时写死 `trust_env=False`（实测同一台机器：同一个 `/rate_limit` 直连剩 56 次、经代理剩 0 次，耗时 1.5s vs 5.1s）。**「没配代理」不等于「不会走代理」** —— 在装了系统代理的机器上，不写这一句就等于把流量交给一个你从没声明过的出口。
@@ -320,13 +320,13 @@ else:                   # 普通路径
 
 | 变量 | 作用 |
 | --- | --- |
-| `PIXIV_BRIDGE_BYPASS_SNI=1` | 无 SNI 直连模式（复刻 PixEz） |
-| `PIXIV_BRIDGE_ECH=1` | ECH 模式（与上面只需开一个，ECH 优先） |
-| `PIXIV_BRIDGE_ECH_CONFIG` | 手动指定 ECH 配置；留空则自动 DoH 获取 |
-| `PIXIV_BRIDGE_ECH_IPS` | ECH 入口 IP 池；留空用内置 Cloudflare anycast 池 |
-| `PIXIV_BRIDGE_API_IPS` / `_OAUTH_IPS` / `_IMAGE_IPS` | 覆盖各域名的 IP 池（逗号分隔） |
-| `PIXIV_BRIDGE_OPENSSL_DIR` | 指定带 ECH 的 OpenSSL 4.0+ 目录；留空优先用项目自带的 `openssl-libs/` |
-| `PIXIV_PROXY` | 代理通道，**优先级高于以上所有直连手段** |
+| `PIXIV_BYPASS_SNI=1` | 无 SNI 直连模式（复刻 PixEz） |
+| `PIXIV_ECH=1` | ECH 模式（与上面只需开一个，ECH 优先） |
+| `PIXIV_ECH_CONFIG` | 手动指定 ECH 配置；留空则自动 DoH 获取 |
+| `PIXIV_ECH_IPS` | ECH 入口 IP 池；留空用内置 Cloudflare anycast 池 |
+| `PIXIV_API_IPS` / `_OAUTH_IPS` / `_IMAGE_IPS` | 覆盖各域名的 IP 池（逗号分隔） |
+| `PIXIV_OPENSSL_DIR` | 指定带 ECH 的 OpenSSL 4.0+ 目录；留空优先用项目自带的 `openssl-libs/` |
+| `SITE_PROXY` | 代理通道，**优先级高于以上所有直连手段** |
 | `IWARA_BRIDGE_ECH=1` | iwara 的 ECH（走 `curl_cffi` 的 libcurl，不需要 OpenSSL 动态库；只对 Cloudflare 后的 `api` / `www` 生效） |
 | `IWARA_BRIDGE_ECH_CONFIG` | 手动指定 iwara 的 ECH 配置；留空走 DoH（阿里 → `223.5.5.5`） |
 | `IWARA_BRIDGE_ECH_IPS` | 给 ECH 主机额外追加的入口 IP（排在内置种子之后） |
@@ -344,4 +344,4 @@ else:                   # 普通路径
 
 > github **没有代理变量**：它的客户端写死 `trust_env=False`，系统里配了 `HTTP_PROXY` / `HTTPS_PROXY` 也不影响它（理由见第 6 节最后一条）。
 
-> 起手先跑 `python pixiv/run.py --check`：自检会逐项报告 python / deps / 项目文件 / 端口 / 网络 / ECH 的状态，把「四道关」的结论直接摊开（`--check` 不监听端口，所以 `port` 只警告不中止）。加了站点之后自检也要跟着长：iwara 入口跑 `python iwara/run.py --check`，会在这张表后面追加 `iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录` 三项，开了 `IWARA_BRIDGE_ECH=1` 再追加 `iwara ECH`（真发一次 `/cdn-cgi/trace` 看回显是不是 `sni=encrypted`）；asmr.one 入口跑 `python asmr_one/run.py --check`，追加 `asmr 依赖`、`asmr 网络`（真发一次 `GET /api/works?page=1`，要整条「借道 IP 池 + impersonate + ECH」链路通才算过）、`asmr 搜索`（拿必定查不到的 `zzzzqqxxnotexist` 与已知有结果的 `癒し` 横向对照——守的是「参数到底有没有生效」：本站曾经把不存在的 `/api/search/works` 当搜索端点，任何查询都恒回同一批 117 条，HTTP 200、形状标准、`asmr 网络` 照样全绿）以及 `asmr ECH`（**默认就有**，因为 ECH 默认开；写成 `ASMR_BRIDGE_ECH=0` 关掉后才是 3 项），它没有登录自检；ehviewer 入口跑 `python ehviewer/run.py --check`，追加 `ehviewer 依赖`（真 import `curl_cffi`，并检查有没有 `CurlHttpVersion`——没有就说明这个 curl_cffi 缺 HTTP/3 支持）、`ehviewer 边缘`（并发探 16 个候选 anycast IP，**只建 TCP 不发 TLS**，所以不会被 SNI 判据误杀）、`ehviewer 站点`（真发一次首页 `list_galleries()`，这是整条链路唯一的判据；`EH_BRIDGE_HTTP3` 关掉时会额外提示「取到页面属于侥幸」）、`ehviewer 详情`（挑头两条真取一次详情，确认「页面骨架」判据还认得上游页面——上游对取不到的画廊回 HTTP 200 + 一句纯文本，判据失效会让真实画廊整批 404）、`ehviewer 榜单`（真发一次 `GET /popular`，确认这个独立入口还在）、`ehviewer 大图`（列表 → 详情图片页链接 → 真解一次 `/s/` 页，确认图片直链判据仍命中）——同样没有登录自检；github 入口跑 `python github/run.py --check`，追加 `github 依赖`（真 import `httpx`，几乎不会红）、`github 接口`（真发一次 `GET /rate_limit` 并报配额余额——**红了通常不是站点挂了，而是匿名那 60 次/小时用完了**）、`github 搜索`（同样横向对照：必定查不到的 `zzzzqqxxnotexist9999` 必须回 `total_count == 0`、已知有结果的 `requests` 必须不是 0；search 是另一本配额账，匿名只有 10 次/小时，所以这一项只发两次请求），也没有登录自检（`GITHUB_TOKEN` 可选）。——**新站点照这个套路做**：把「本层的判据」写成一条 `CheckResult`，挂在 `Site` 契约的 `checks`（以及 `login_check` / `network_hint`）上（见 `pixiv_bridge/site.py`），框架的 `pixiv_bridge.cli.main(site=SITE)` 就会把它与通用检查打在同一张表里。另外别忘了在构建侧登记：`scripts/sites.py` 的 `SITES` 加一条，`check_boundary.py` / `make_share_packages.py` 才认这个新站点。
+> 起手先跑 `python pixiv/run.py --check`：自检会逐项报告 python / deps / 项目文件 / 端口 / 网络 / ECH 的状态，把「四道关」的结论直接摊开（`--check` 不监听端口，所以 `port` 只警告不中止）。加了站点之后自检也要跟着长：iwara 入口跑 `python iwara/run.py --check`，会在这张表后面追加 `iwara 依赖`（真 import `curl_cffi`）、`iwara 网络`（真发一次 `GET /videos?limit=1`）、`iwara 登录` 三项，开了 `IWARA_BRIDGE_ECH=1` 再追加 `iwara ECH`（真发一次 `/cdn-cgi/trace` 看回显是不是 `sni=encrypted`）；asmr.one 入口跑 `python asmr_one/run.py --check`，追加 `asmr 依赖`、`asmr 网络`（真发一次 `GET /api/works?page=1`，要整条「借道 IP 池 + impersonate + ECH」链路通才算过）、`asmr 搜索`（拿必定查不到的 `zzzzqqxxnotexist` 与已知有结果的 `癒し` 横向对照——守的是「参数到底有没有生效」：本站曾经把不存在的 `/api/search/works` 当搜索端点，任何查询都恒回同一批 117 条，HTTP 200、形状标准、`asmr 网络` 照样全绿）以及 `asmr ECH`（**默认就有**，因为 ECH 默认开；写成 `ASMR_BRIDGE_ECH=0` 关掉后才是 3 项），它没有登录自检；ehviewer 入口跑 `python ehviewer/run.py --check`，追加 `ehviewer 依赖`（真 import `curl_cffi`，并检查有没有 `CurlHttpVersion`——没有就说明这个 curl_cffi 缺 HTTP/3 支持）、`ehviewer 边缘`（并发探 16 个候选 anycast IP，**只建 TCP 不发 TLS**，所以不会被 SNI 判据误杀）、`ehviewer 站点`（真发一次首页 `list_galleries()`，这是整条链路唯一的判据；`EH_BRIDGE_HTTP3` 关掉时会额外提示「取到页面属于侥幸」）、`ehviewer 详情`（挑头两条真取一次详情，确认「页面骨架」判据还认得上游页面——上游对取不到的画廊回 HTTP 200 + 一句纯文本，判据失效会让真实画廊整批 404）、`ehviewer 榜单`（真发一次 `GET /popular`，确认这个独立入口还在）、`ehviewer 大图`（列表 → 详情图片页链接 → 真解一次 `/s/` 页，确认图片直链判据仍命中）——同样没有登录自检；github 入口跑 `python github/run.py --check`，追加 `github 依赖`（真 import `httpx`，几乎不会红）、`github 接口`（真发一次 `GET /rate_limit` 并报配额余额——**红了通常不是站点挂了，而是匿名那 60 次/小时用完了**）、`github 搜索`（同样横向对照：必定查不到的 `zzzzqqxxnotexist9999` 必须回 `total_count == 0`、已知有结果的 `requests` 必须不是 0；search 是另一本配额账，匿名只有 10 次/小时，所以这一项只发两次请求），也没有登录自检（`GITHUB_TOKEN` 可选）。——**新站点照这个套路做**：把「本层的判据」写成一条 `CheckResult`，挂在 `Site` 契约的 `checks`（以及 `login_check` / `network_hint`）上（见 `site_bridge/site.py`），框架的 `site_bridge.cli.main(site=SITE)` 就会把它与通用检查打在同一张表里。另外别忘了在构建侧登记：`scripts/sites.py` 的 `SITES` 加一条，`check_boundary.py` / `make_share_packages.py` 才认这个新站点。

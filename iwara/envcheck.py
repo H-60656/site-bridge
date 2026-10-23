@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import os
 
-from pixiv_bridge.envcheck import CheckResult
+from site_bridge.envcheck import CheckResult
 
 # 与主项目那五项并列，前缀统一成 iwara，一眼能看出是哪来的。
 DEPS_NAME = "iwara 依赖"
@@ -32,7 +32,7 @@ NETWORK_TIMEOUT = 25.0
 ECH_TIMEOUT = 15.0
 
 _HINT_DEPS = "启动时会自动安装；手动：pip install -r iwara/requirements.txt"
-_HINT_ECH = "关掉：.env 里 IWARA_BRIDGE_ECH=0；或配代理 PIXIV_PROXY=..."
+_HINT_ECH = "关掉：.env 里 IWARA_BRIDGE_ECH=0；或配代理 SITE_PROXY=..."
 
 
 def deps_check() -> CheckResult:

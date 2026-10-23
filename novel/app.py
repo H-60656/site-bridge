@@ -1,10 +1,10 @@
 """把小说阅读子项目挂到 Pixiv 接口站点（`pixiv/`）的应用上。
 
-依赖关系：本模块只 import 框架（`pixiv_bridge`）、Pixiv 站点（`pixiv`）与本
+依赖关系：本模块只 import 框架（`site_bridge`）、Pixiv 站点（`pixiv`）与本
 子项目的模块；框架不认识 `novel`，Pixiv 站点也不认识它，单向依赖不会倒过来。
 
 命令行上的启用方式是**扩展机制**（配置驱动）：扩展目录里放一个固定的
-`extension.py`（本目录已有），配置里写 `PIXIV_BRIDGE_EXTENSIONS=novel`，
+`extension.py`（本目录已有），配置里写 `SITE_BRIDGE_EXTENSIONS=novel`，
 Pixiv 站点就会执行它并把阅读器挂上去 —— 不需要专属入口脚本。
 
 本模块提供两条等价的路：
@@ -27,7 +27,7 @@ Pixiv 站点就会执行它并把阅读器挂上去 —— 不需要专属入口
 """
 
 from pixiv.app import create_app as _create_pixiv_app
-from pixiv_bridge.userdata import LocalLibrary, UserConfig
+from site_bridge.userdata import LocalLibrary, UserConfig
 
 from .bookmarks import BookmarkStore
 from .downloads import DownloadStore
@@ -68,8 +68,8 @@ def create_app(settings=None, transport=None):
     """Pixiv 接口 + 小说阅读的完整服务（显式组装路径，主要给测试与脚本用）。
 
     命令行启动不走这里 —— 阅读器作为**扩展**挂在 Pixiv 站点上：把 `novel/`
-    放进项目目录，配置里写 `PIXIV_BRIDGE_EXTENSIONS=novel`，由
-    `pixiv_bridge.extensions` 执行 `novel/extension.py` 完成挂载（见该文件）。
+    放进项目目录，配置里写 `SITE_BRIDGE_EXTENSIONS=novel`，由
+    `site_bridge.extensions` 执行 `novel/extension.py` 完成挂载（见该文件）。
     本函数保留原名与语义，与扩展共用同一套 `NOVEL_ROUTERS` /
     `novel_state_factory`，两条路挂出来的应用是同一个。
     """

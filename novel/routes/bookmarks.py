@@ -11,8 +11,8 @@ pixiv 的 app-api 只有收藏的「写」接口，没有「列出我收藏的�
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from pixiv_bridge.compat import dump_model
-from pixiv_bridge.jsonl import DEFAULT_LIMIT
+from site_bridge.compat import dump_model
+from site_bridge.jsonl import DEFAULT_LIMIT
 from ..bookmarks import normalize_bookmark
 from . import get_api, get_bookmarks
 

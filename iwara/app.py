@@ -1,6 +1,6 @@
 """iwara 接口站点：视频接口、运行时对象装配、应用工厂与站点描述符 ``SITE``。
 
-依赖方向：本模块只 import 框架（``pixiv_bridge``）与本站点自己的模块，框架不
+依赖方向：本模块只 import 框架（``site_bridge``）与本站点自己的模块，框架不
 认识 ``iwara``，单向依赖不会倒过来。
 
 与 ``pixiv/`` 站点的区别在传输层：iwara 用不了框架默认那个 httpx 客户端
@@ -11,7 +11,7 @@ await 这个钩子）。
 
 本入口**只提供 iwara 接口**（``/api/iwara/*``）：Pixiv 的路由属于 ``pixiv/``
 站点，各接口项目同级、互不挂载。人看的视频页面（``/iwara``）是独立的扩展包
-``iwara_web``，按配置挂上去（``PIXIV_BRIDGE_EXTENSIONS=iwara_web``）—— 这样
+``iwara_web``，按配置挂上去（``SITE_BRIDGE_EXTENSIONS=iwara_web``）—— 这样
 「接口」与「页面」可以分开分发，装了接口包也不必带上页面。
 """
 
@@ -19,9 +19,9 @@ import inspect
 import os
 from pathlib import Path
 
-from pixiv_bridge.nav import NavItem, NavSection
-from pixiv_bridge.server import create_bridge_app
-from pixiv_bridge.site import Site
+from site_bridge.nav import NavItem, NavSection
+from site_bridge.server import create_bridge_app
+from site_bridge.site import Site
 
 from . import tokens
 from .client import IwaraClient
@@ -89,7 +89,7 @@ async def iwara_shutdown(app):
 def create_app(settings=None, extensions=(), state_factory=None, extra_routers=()):
     """建 iwara 接口应用。
 
-    - ``extensions``：按 ``PIXIV_BRIDGE_EXTENSIONS`` 加载好的扩展（典型是
+    - ``extensions``：按 ``SITE_BRIDGE_EXTENSIONS`` 加载好的扩展（典型是
       ``iwara_web``，人看的视频页面）；入口脚本走这条路。
     - ``state_factory`` / ``extra_routers``：代码驱动的显式组装（与
       ``pixiv.create_app`` 同形，便于脚本与测试再加一层）。

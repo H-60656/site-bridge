@@ -1,12 +1,13 @@
-# Pixiv Bridge 安装与配置（傻瓜版）
+# Site Bridge 安装与配置（傻瓜版）
 
 从零到能用，只需要 5 步：**装 Python → 解压 → 运行启动脚本 → 登录一次 → 打开网页**。
+（Pixiv 是默认站点；要跑 iwara / asmr.one / E-Hentai / GitHub，看开头这段「入口有五个」与第 5 节的启动表。）
 
 - Windows 走 [第 1 节](#1-windows1011最简单)
 - 安卓 / Termux（以及其它 Linux）走 [第 2 节](#2-安卓--termux以及-其它-linux)
 - 只想给别的程序调用接口：装好、登录好之后，接口地址是 `http://127.0.0.1:8765/api/...`
 
-> **入口有五个，别搞混**：一键脚本（`start.bat` / `start.sh`）和 `python pixiv/run.py` 跑的是**同一个接口项目**（Pixiv），浏览器打开 `http://127.0.0.1:8765/` 会看到**导航页**（不挂扩展时列出接口文档等自带入口）；要下面第 5 步那个小说阅读器页面，请在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel` 后**还是用原来那个启动方式**（阅读器没有自己的入口脚本了，见「附属项目（扩展）」），阅读器在 `/novel`。另外四个入口 `python iwara\run.py`、`python asmr_one\run.py`、`python ehviewer\run.py` 与 `python github\run.py` 是**与 `pixiv/` 同级的另外四个接口项目**：iwara.tv 只提供 `/api/iwara/*`（视频页面 `iwara_web` 是扩展、默认不挂，见第 5 节），asmr.one 只提供 `/api/asmr/*`，E-Hentai 只提供 `/api/eh/*`，GitHub 只提供 `/api/github/*`；它们都不挂任何 Pixiv 路由，也互不挂对方的路由。**一键脚本第一次会先列出项目导航**（接口项目 + 扩展）让你挑：直接回车＝默认的 Pixiv，输入 `2` 或 `iwara` 就起 iwara，输入 `3` 或 `asmr_one` 就起 asmr.one，输入 `4` 或 `ehviewer` 就起 E-Hentai，输入 `5` 或 `github` 就起 GitHub；设了环境变量 `BRIDGE_SITE=iwara` 就跳过询问直接起 iwara。
+> **入口有五个，别搞混**：一键脚本（`start.bat` / `start.sh`）和 `python pixiv/run.py` 跑的是**同一个接口项目**（Pixiv），浏览器打开 `http://127.0.0.1:8765/` 会看到**导航页**（不挂扩展时列出接口文档等自带入口）；要下面第 5 步那个小说阅读器页面，请在 `.env` 里加一行 `SITE_BRIDGE_EXTENSIONS=novel` 后**还是用原来那个启动方式**（阅读器没有自己的入口脚本了，见「附属项目（扩展）」），阅读器在 `/novel`。另外四个入口 `python iwara\run.py`、`python asmr_one\run.py`、`python ehviewer\run.py` 与 `python github\run.py` 是**与 `pixiv/` 同级的另外四个接口项目**：iwara.tv 只提供 `/api/iwara/*`（视频页面 `iwara_web` 是扩展、默认不挂，见第 5 节），asmr.one 只提供 `/api/asmr/*`，E-Hentai 只提供 `/api/eh/*`，GitHub 只提供 `/api/github/*`；它们都不挂任何 Pixiv 路由，也互不挂对方的路由。**一键脚本第一次会先列出项目导航**（接口项目 + 扩展）让你挑：直接回车＝默认的 Pixiv，输入 `2` 或 `iwara` 就起 iwara，输入 `3` 或 `asmr_one` 就起 asmr.one，输入 `4` 或 `ehviewer` 就起 E-Hentai，输入 `5` 或 `github` 就起 GitHub；设了环境变量 `BRIDGE_SITE=iwara` 就跳过询问直接起 iwara。
 
 ---
 
@@ -19,7 +20,7 @@
 | **refresh_token**（登录凭证） | ✅ 自动 | 运行 `python pixiv/get_token.py` 登录一次，自动保存到 `data\tokens.json` |
 | 能连上 Pixiv 的网络 | ⚠️ 看环境 | 被墙时见第 4 节（ECH / SNI 绕过 / 代理 三选一） |
 | OpenSSL 4.0+（**只有 ECH 模式需要**） | ✅ **项目自带** | `openssl-libs/` 里已带 OpenSSL 4.x 的库，**Windows 与安卓 Termux 都开箱即用**；其它平台没带对应子目录时才需自己装（注意 3.x 全系都没有 ECH，装了也没用） |
-| curl_cffi（**iwara / asmr.one / E-Hentai 三个站点需要**） | ✅ 自动下载 | 想用 `iwara/run.py`、`asmr_one/run.py` 或 `ehviewer/run.py` 时第一次启动自动装；只跑 Pixiv 的话完全不需要它。Termux 上要 Python 3.13+ 才是现成轮子（见第 8 节）。**GitHub 站点不需要它**——`github/` 只用根清单里的 `httpx` |
+| curl_cffi（**iwara / asmr.one / E-Hentai 三个站点需要**） | ✅ 自动下载 | 想用 `iwara/run.py`、`asmr_one/run.py` 或 `ehviewer/run.py` 时第一次启动自动装；只跑 Pixiv 的话完全不需要它。Termux 上要 Python 3.13+ 才是现成轮子（见第 6 节）。**GitHub 站点不需要它**——`github/` 只用根清单里的 `httpx` |
 | 完全没网的机器 | ❌ 需要提前准备 | 见 `README.md` 的「完全离线部署」（提前下载 `wheels/` 目录） |
 
 > 除了 Python 解释器，其它 Python 依赖都会自动安装。项目文件夹本身是自包含的。
@@ -44,7 +45,7 @@
 
 **第 2 步：解压**
 
-把 `pixiv-bridge.zip` 解压到任意目录，例如 `C:\pixiv-bridge`（路径别太深，**不要**放进 OneDrive 同步文件夹）。
+把 `site-bridge.zip` 解压到任意目录，例如 `C:\site-bridge`（路径别太深，**不要**放进 OneDrive 同步文件夹）。
 
 **第 3 步：启动**
 
@@ -53,11 +54,11 @@
 > 想直接看小说阅读器页面（本文第 5 步要开的那个网页），**不需要换启动方式**，只要在 `.env` 里加一行再照常用 `start.bat` 启动：
 >
 > ```bat
-> rem 编辑 C:\pixiv-bridge\.env，加一行（没有 .env 就先跑一次 start.bat 让它生成）
-> PIXIV_BRIDGE_EXTENSIONS=novel
+> rem 编辑 C:\site-bridge\.env，加一行（没有 .env 就先跑一次 start.bat 让它生成）
+> SITE_BRIDGE_EXTENSIONS=novel
 > ```
 >
-> `--port` 等参数用法完全不变，各接口项目共用同一套检查表。默认（不写扩展，走 `pixiv/run.py`）时 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、`/api/health` 等自带入口，此时不会有阅读器链接），加了 `PIXIV_BRIDGE_EXTENSIONS=novel` 就多出 `/novel` 阅读器页面（导航页上也会多出指向它的链接）和阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara\run.py` 是**另一个站点**，只提供 `/api/iwara/*`（不挂任何 Pixiv 接口），要 iwara 的视频页面，就在 `.env` 里再加一项 `iwara_web`（`PIXIV_BRIDGE_EXTENSIONS=iwara_web`，多项用逗号分隔；它调 `/api/iwara/*`，所以要配合 `iwara\run.py` 用）；`asmr_one\run.py` 是**第三个站点**，只提供 `/api/asmr/*`，纯匿名不需要登录；`ehviewer\run.py` 是**第四个站点**，只提供 `/api/eh/*`，同样匿名可用（E-Hentai 公开画廊不需要登录）。它们都不挂任何 Pixiv 或 iwara 路由，也互不挂对方的路由。
+> `--port` 等参数用法完全不变，各接口项目共用同一套检查表。默认（不写扩展，走 `pixiv/run.py`）时 `http://127.0.0.1:8765/` 是**导航页**（列出 `/docs`、`/api/health` 等自带入口，此时不会有阅读器链接），加了 `SITE_BRIDGE_EXTENSIONS=novel` 就多出 `/novel` 阅读器页面（导航页上也会多出指向它的链接）和阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara\run.py` 是**另一个站点**，只提供 `/api/iwara/*`（不挂任何 Pixiv 接口），要 iwara 的视频页面，就在 `.env` 里再加一项 `iwara_web`（`SITE_BRIDGE_EXTENSIONS=iwara_web`，多项用逗号分隔；它调 `/api/iwara/*`，所以要配合 `iwara\run.py` 用）；`asmr_one\run.py` 是**第三个站点**，只提供 `/api/asmr/*`，纯匿名不需要登录；`ehviewer\run.py` 是**第四个站点**，只提供 `/api/eh/*`，同样匿名可用（E-Hentai 公开画廊不需要登录）；`github\run.py` 是**第五个站点**，只提供 `/api/github/*` 的只读 JSON，匿名可用（配 `GITHUB_TOKEN` 只是把配额从 60 次/小时提到 5000）。它们都不挂任何 Pixiv 或 iwara 路由，也互不挂对方的路由。
 
 - 第一次运行会：自动生成 `.env` 配置文件 → 自动下载依赖（**1~3 分钟，属正常**）→ 打印环境检查结果（框架 4 项 + 本站点自己的检查项）→ 开始监听。
 - 看到类似下面的内容就成功了：
@@ -79,7 +80,7 @@
 再开一个新的 `cmd` 窗口（`Win+R` → `cmd`），切到项目目录并运行：
 
 ```bat
-cd /d C:\pixiv-bridge
+cd /d C:\site-bridge
 python pixiv/get_token.py
 ```
 
@@ -88,7 +89,7 @@ python pixiv/get_token.py
 
 **第 5 步：打开网页**
 
-浏览器访问 <http://127.0.0.1:8765/novel>，能看到小说榜单、点开一本能读正文即全部完成（`http://127.0.0.1:8765/` 是导航页，上面也有指向阅读器的链接）。页面顶部可以直接搜小说，右上角 `Aa` 调字号/主题，正文里的插图会直接显示，「下载 EPUB」「下载全系列（EPUB）」导出的是一本 `.epub`（**一本书只有一个文件**：单本 `<书名>.epub`，系列 `<系列名>（全N章）.epub`），插图作为图片打包进书里、带内置目录，离线打开也能看图。读过的书、下过的章节、收藏了哪些都记在**项目目录下的 `data\` 里**（`data\history.jsonl` 阅读历史、`data\downloads.jsonl` 下载历史、`data\bookmarks.jsonl` 收藏台账，都是一行一条 JSON，个人使用、不区分用户；想清空直接删对应文件即可，也可以在 `.env` 里用 `PIXIV_HISTORY_FILE` / `PIXIV_DOWNLOADS_FILE` / `PIXIV_BOOKMARKS_FILE` 换位置）。老版本的 `tokens.json` / `history.jsonl` 首次启动会自动搬进 `data\`。接口文档在 <http://127.0.0.1:8765/docs>。
+浏览器访问 <http://127.0.0.1:8765/novel>，能看到小说榜单、点开一本能读正文即全部完成（`http://127.0.0.1:8765/` 是导航页，上面也有指向阅读器的链接）。页面顶部可以直接搜小说，右上角 `Aa` 调字号/主题，正文里的插图会直接显示，「下载 EPUB」「下载全系列（EPUB）」导出的是一本 `.epub`（**一本书只有一个文件**：单本 `<书名>.epub`，系列 `<系列名>（全N章）.epub`），插图作为图片打包进书里、带内置目录，离线打开也能看图。读过的书、下过的章节、收藏了哪些都记在**项目目录下的 `data\` 里**（`data\history.jsonl` 阅读历史、`data\downloads.jsonl` 下载历史、`data\bookmarks.jsonl` 收藏台账，都是一行一条 JSON，个人使用、不区分用户；想清空直接删对应文件即可，也可以在 `.env` 里用 `SITE_HISTORY_FILE` / `SITE_DOWNLOADS_FILE` / `SITE_BOOKMARKS_FILE` 换位置）。老版本的 `tokens.json` / `history.jsonl` 首次启动会自动搬进 `data\`。接口文档在 <http://127.0.0.1:8765/docs>。
 
 **换端口**（默认 8765 被占用时）：`start.bat --port 9000`，然后访问 `http://127.0.0.1:9000/`。挂了阅读器扩展时用法完全一样，还是 `start.bat --port 9000`。
 
@@ -110,8 +111,8 @@ python --version    # 应为 3.10 以上
 ```sh
 termux-setup-storage          # 弹出权限请求，点允许
 pkg install -y unzip
-cd ~ && cp ~/storage/downloads/pixiv-bridge.zip . && unzip -o pixiv-bridge.zip
-cd pixiv-bridge
+cd ~ && cp ~/storage/downloads/site-bridge.zip . && unzip -o site-bridge.zip
+cd site-bridge
 ```
 
 （也可以直接在 Termux 里下载：`curl -LO <压缩包地址>`。）
@@ -126,7 +127,7 @@ sh start.sh
 >
 > ```sh
 > nano .env            # 没有就先跑一次 sh start.sh 让它生成
-> # 加一行：PIXIV_BRIDGE_EXTENSIONS=novel
+> # 加一行：SITE_BRIDGE_EXTENSIONS=novel
 > sh start.sh
 > ```
 >
@@ -140,7 +141,7 @@ sh start.sh
 从 Termux 左侧边缘向右滑 → `NEW SESSION`（新开一个会话），然后：
 
 ```sh
-cd ~/pixiv-bridge && python pixiv/get_token.py
+cd ~/site-bridge && python pixiv/get_token.py
 ```
 
 选 `2`，把网址复制到手机浏览器打开授权，再把回调网址粘回来。
@@ -154,11 +155,11 @@ cd ~/pixiv-bridge && python pixiv/get_token.py
 **小贴士**
 
 - 关掉 Termux 或手机清理后台会停掉服务。想让它一直活着：在启动前执行 `termux-wake-lock`（获取唤醒锁）。
-- **项目就放在 Termux 家目录里**（`~/pixiv-bridge`）。不要把项目、也不要把数据目录指到 `/sdcard`（`~/storage/...`）那边：那是安卓的 FUSE 目录，经常「读得到、写不进」，表现就是**设置里保存配置报 500**。真指过去了也不会坏：服务会把数据路径自动收回项目里的 `data/`，启动日志和设置页都会逐条提示（详见 README 的「保存配置报『写入失败』」）。
-- 电脑上访问手机的服务：`sh start.sh --host 0.0.0.0`（要看阅读器就先在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel`，命令不变），然后在电脑浏览器打开 `http://手机IP:8765/novel`（仅限同一局域网；注意这样别人也能访问，必要时加防火墙）。
+- **项目就放在 Termux 家目录里**（`~/site-bridge`）。不要把项目、也不要把数据目录指到 `/sdcard`（`~/storage/...`）那边：那是安卓的 FUSE 目录，经常「读得到、写不进」，表现就是**设置里保存配置报 500**。真指过去了也不会坏：服务会把数据路径自动收回项目里的 `data/`，启动日志和设置页都会逐条提示（详见 README 的「保存配置报『写入失败』」）。
+- 电脑上访问手机的服务：`sh start.sh --host 0.0.0.0`（要看阅读器就先在 `.env` 里写 `SITE_BRIDGE_EXTENSIONS=novel`，命令不变），然后在电脑浏览器打开 `http://手机IP:8765/novel`（仅限同一局域网；注意这样别人也能访问，必要时加防火墙）。
 - 其它 Linux（Ubuntu / Debian / 树莓派）和 macOS 用法一样：`sh start.sh`。
 
-> 手机上直接看也一样：在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 并用 `sh start.sh` 启动后，手机浏览器开 <http://127.0.0.1:8765/novel>。不加扩展时这个地址是 404。
+> 手机上直接看也一样：在 `.env` 里写 `SITE_BRIDGE_EXTENSIONS=novel` 并用 `sh start.sh` 启动后，手机浏览器开 <http://127.0.0.1:8765/novel>。不加扩展时这个地址是 404。
 
 ---
 
@@ -199,7 +200,7 @@ python github/run.py --check    # 同一套 + 3 项 github 专属（依赖 / api
 | --- | --- |
 | `ech OK` | 什么都不用改，已经在用加密 SNI 直连 |
 | `network OK 可达 3/3` | 网络本身没问题，正常用即可 |
-| `network WARN` / `ech WARN`，且本机有代理软件 | 用代理（见下）：在 `.env` 里写 `PIXIV_PROXY=http://127.0.0.1:7890` |
+| `network WARN` / `ech WARN`，且本机有代理软件 | 用代理（见下）：在 `.env` 里写 `SITE_PROXY=http://127.0.0.1:7890` |
 | `ech WARN` 且错误里有 `SSL_get_error=5` | 本机到 Cloudflare 这一段在阻断 ECH 扩展本身（与服务端无关），换网络或走代理，见第 4 节 |
 | 有 Termux/路由器级代理、手机上别的 Pixiv 客户端能用 | 用代理 |
 
@@ -208,8 +209,8 @@ python github/run.py --check    # 同一套 + 3 项 github 专属（依赖 / api
 在 `.env` 里：
 
 ```ini
-PIXIV_BRIDGE_ECH=1
-PIXIV_BRIDGE_BYPASS_SNI=0
+PIXIV_ECH=1
+PIXIV_BYPASS_SNI=0
 ```
 
 需要 **OpenSSL 4.0+**（ECH 是 4.0.0 才加入的，3.x 全系没有）——**项目自带的 `openssl-libs/` 里已经有了，Windows 与安卓 Termux 上都不用装任何东西**，程序会自动优先用这一份。
@@ -217,7 +218,7 @@ PIXIV_BRIDGE_BYPASS_SNI=0
 只有两种情况才需要自己动手：包里没有当前平台的子目录（比如把 Windows 版拷到 Linux 上），或自带的那份载入失败。这时程序会自动退去找系统安装的 OpenSSL（Windows 的 `C:\Program Files\OpenSSL*`、Debian 系的多架构目录 `/usr/lib/<架构>-linux-gnu`、Fedora 的 `/usr/lib64`、macOS Homebrew 的 `opt/openssl@4/lib`、BSD 的 `/usr/local/lib` 等，按当前系统与架构挑）；也可以自己装一份 4.0+，并在 `.env` 里指过去：
 
 ```ini
-PIXIV_BRIDGE_OPENSSL_DIR=C:\Program Files\OpenSSL-Win64\bin
+PIXIV_OPENSSL_DIR=C:\Program Files\OpenSSL-Win64\bin
 ```
 
 想在包里补一份本平台的库，放到 `openssl-libs/<系统>-<架构>/` 即可（如 `linux-arm64/`、`darwin-arm64/`），命名沿用 `libssl.so.4`、`libssl.4.dylib` 这类常见名。
@@ -227,14 +228,14 @@ PIXIV_BRIDGE_OPENSSL_DIR=C:\Program Files\OpenSSL-Win64\bin
 **方式二：SNI 绕过（不需要 OpenSSL，但可能被服务器拒绝）**
 
 ```ini
-PIXIV_BRIDGE_ECH=0
-PIXIV_BRIDGE_BYPASS_SNI=1
+PIXIV_ECH=0
+PIXIV_BYPASS_SNI=1
 ```
 
 **方式三：代理（最可靠，需要你已有可用的代理）**
 
 ```ini
-PIXIV_PROXY=http://127.0.0.1:7890
+SITE_PROXY=http://127.0.0.1:7890
 ```
 
 端口换成你代理软件的 HTTP 端口（Clash 常见 7890、v2ray 常见 10809）；设置后**所有** Pixiv 请求都走代理，ECH / SNI 绕过自动停用，不用管它们原来的开关。`socks5://` 需要先 `pip install "httpx[socks]"`。
@@ -255,14 +256,14 @@ PIXIV_PROXY=http://127.0.0.1:7890
 
 | 平台 | 启动 |
 | --- | --- |
-| Windows | 只需 Pixiv 接口：`start.bat` 然后回车（导航里的默认项就是它）；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `start.bat`；要用 iwara：`start.bat iwara` 或 `python iwara\run.py`（要 iwara 视频页面再加 `iwara_web`）；要用 asmr.one：`start.bat asmr_one` 或 `python asmr_one\run.py`；要用 E-Hentai：`start.bat ehviewer` 或 `python ehviewer\run.py`；要用 GitHub：`start.bat github` 或 `python github\run.py` |
-| Termux / Linux | 只需接口：`cd pixiv-bridge && sh start.sh` 然后回车；要小说阅读器：先在 `.env` 加 `PIXIV_BRIDGE_EXTENSIONS=novel`，还是 `sh start.sh`；要用 iwara 视频：`sh start.sh iwara` 或 `python3 iwara/run.py`（要 iwara 视频页面再加 `iwara_web`）；要用 asmr.one：`sh start.sh asmr_one` 或 `python3 asmr_one/run.py`；要用 E-Hentai：`sh start.sh ehviewer` 或 `python3 ehviewer/run.py`；要用 GitHub：`sh start.sh github` 或 `python3 github/run.py` |
+| Windows | 只需 Pixiv 接口：`start.bat` 然后回车（导航里的默认项就是它）；要小说阅读器：先在 `.env` 加 `SITE_BRIDGE_EXTENSIONS=novel`，还是 `start.bat`；要用 iwara：`start.bat iwara` 或 `python iwara\run.py`（要 iwara 视频页面再加 `iwara_web`）；要用 asmr.one：`start.bat asmr_one` 或 `python asmr_one\run.py`；要用 E-Hentai：`start.bat ehviewer` 或 `python ehviewer\run.py`；要用 GitHub：`start.bat github` 或 `python github\run.py` |
+| Termux / Linux | 只需接口：`cd site-bridge && sh start.sh` 然后回车；要小说阅读器：先在 `.env` 加 `SITE_BRIDGE_EXTENSIONS=novel`，还是 `sh start.sh`；要用 iwara 视频：`sh start.sh iwara` 或 `python3 iwara/run.py`（要 iwara 视频页面再加 `iwara_web`）；要用 asmr.one：`sh start.sh asmr_one` 或 `python3 asmr_one/run.py`；要用 E-Hentai：`sh start.sh ehviewer` 或 `python3 ehviewer/run.py`；要用 GitHub：`sh start.sh github` 或 `python3 github/run.py` |
 
-> 差别只在多挂了什么：一键脚本先给一个**项目导航**（直接回车＝默认的 `pixiv/run.py`）——默认只跑 Pixiv 接口、不挂扩展，浏览器打开 `/` 是**导航页**（列出接口文档、健康检查等自带入口）；在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel` 就在同一个入口上多挂了小说阅读器页面（`http://127.0.0.1:8765/novel`，导航页上也会多一段链接）与阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara/run.py` 提供的是 `/api/iwara/*`（视频浏览、解析直链、代转播放），它的 `/` 也是导航页、额外多一段 iwara 自己的入口；`asmr_one/run.py` 提供的是 `/api/asmr/*`（作品浏览、搜索、详情、音轨树、封面与音频代转），同样是导航页 + 自己那一段，且**匿名即可用**；`ehviewer/run.py` 提供的是 `/api/eh/*`（画廊列表、热门榜单、搜索、详情、图片页、大图页解析、元数据、图片代转），也是导航页 + 自己那一段，同样**不需要登录**；`github/run.py` 提供的是 `/api/github/*`（仓库详情、README、目录与文件、发行版、issue 与 PR、提交、仓库搜索、用户、配额账本），同样是导航页 + 自己那一段，也**不需要登录**（`GITHUB_TOKEN` 只是把配额从 60 次/小时提到 5000 次/小时）。命令行参数（`--host` / `--port` / `--reload` / `--check`）都一样，`python -m pixiv_bridge --list` 可以只看导航不启动。
+> 差别只在多挂了什么：一键脚本先给一个**项目导航**（直接回车＝默认的 `pixiv/run.py`）——默认只跑 Pixiv 接口、不挂扩展，浏览器打开 `/` 是**导航页**（列出接口文档、健康检查等自带入口）；在 `.env` 里写 `SITE_BRIDGE_EXTENSIONS=novel` 就在同一个入口上多挂了小说阅读器页面（`http://127.0.0.1:8765/novel`，导航页上也会多一段链接）与阅读历史 / 下载 / 收藏 / 书架那几个接口；`iwara/run.py` 提供的是 `/api/iwara/*`（视频浏览、解析直链、代转播放），它的 `/` 也是导航页、额外多一段 iwara 自己的入口；`asmr_one/run.py` 提供的是 `/api/asmr/*`（作品浏览、搜索、详情、音轨树、封面与音频代转），同样是导航页 + 自己那一段，且**匿名即可用**；`ehviewer/run.py` 提供的是 `/api/eh/*`（画廊列表、热门榜单、搜索、详情、图片页、大图页解析、元数据、图片代转），也是导航页 + 自己那一段，同样**不需要登录**；`github/run.py` 提供的是 `/api/github/*`（仓库详情、README、目录与文件、发行版、issue 与 PR、提交、仓库搜索、用户、配额账本），同样是导航页 + 自己那一段，也**不需要登录**（`GITHUB_TOKEN` 只是把配额从 60 次/小时提到 5000 次/小时）。命令行参数（`--host` / `--port` / `--reload` / `--check`）都一样，`python -m site_bridge --list` 可以只看导航不启动。
 
-> **阅读器为什么没有自己的启动命令？** 它现在按「扩展」的方式挂到接口项目上：配置里写目录名（`PIXIV_BRIDGE_EXTENSIONS=novel`），程序自己去找 `novel/extension.py`。这样每个接口项目各留一个入口，阅读器不再需要单独的脚本。写错目录名不会静默降级——启动前会打印一条错误并退出。
+> **阅读器为什么没有自己的启动命令？** 它现在按「扩展」的方式挂到接口项目上：配置里写目录名（`SITE_BRIDGE_EXTENSIONS=novel`），程序自己去找 `novel/extension.py`。这样每个接口项目各留一个入口，阅读器不再需要单独的脚本。写错目录名不会静默降级——启动前会打印一条错误并退出。
 
-> iwara、asmr.one 与 E-Hentai 那三条入口第一次启动会额外装一个 `curl_cffi`（比框架依赖慢一点，属正常）。Windows / Linux / macOS 与 **Python 3.13+ 的 Termux** 装的都是官方现成轮子；Termux 上 Python 是 3.12 及以下时没有对应轮子，会退回源码编译（要 Rust + C 工具链），见第 8 节排错表。**`github/run.py` 是例外：它没有任何额外依赖要装**（`api.github.com` 直连就通，只用根清单里的 `httpx`），所以第一次启动和其它入口一样快。
+> iwara、asmr.one 与 E-Hentai 那三条入口第一次启动会额外装一个 `curl_cffi`（比框架依赖慢一点，属正常）。Windows / Linux / macOS 与 **Python 3.13+ 的 Termux** 装的都是官方现成轮子；Termux 上 Python 是 3.12 及以下时没有对应轮子，会退回源码编译（要 Rust + C 工具链），见第 6 节排错表。**`github/run.py` 是例外：它没有任何额外依赖要装**（`api.github.com` 直连就通，只用根清单里的 `httpx`），所以第一次启动和其它入口一样快。
 >
 > **iwara 登录是可选的**：公开内容（含 R18）匿名就能看、能解析直链、能播。登录只为两件事——「订阅作者的内容」和「自己账号下的私密视频」。想登录就跑一次 `python iwara/get_token.py`（Termux：`python3 iwara/get_token.py`，只收邮箱 + 密码，没有浏览器授权），token 存到 `data/iwara_tokens.json`；`--status` 看当前登录态，`--logout` 删掉。也可以用环境变量 `IWARA_REFRESH_TOKEN` 临时覆盖。token 失效不会拖垮整站：自动退回匿名，接口照常可用。
 >
@@ -273,10 +274,10 @@ PIXIV_PROXY=http://127.0.0.1:7890
 启动后：
 
 - 导航页（各入口都有，`/`）：<http://127.0.0.1:8765/>；不挂扩展时列出接口自带的入口，挂了扩展会多出「扩展：X」一段
-- 网页（小说阅读器，**需在 `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=novel`**，在 `/novel`）：<http://127.0.0.1:8765/novel>；没启用扩展时这里是 404，属正常
+- 网页（小说阅读器，**需在 `.env` 里写 `SITE_BRIDGE_EXTENSIONS=novel`**，在 `/novel`）：<http://127.0.0.1:8765/novel>；没启用扩展时这里是 404，属正常
 - 自带的交互式接口文档（各入口都有）：<http://127.0.0.1:8765/docs>
 - 健康检查：<http://127.0.0.1:8765/api/health>
-- iwara 视频页面（**需 `iwara/run.py` 入口 + `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`**）：<http://127.0.0.1:8765/iwara>；用 `pixiv/run.py` 启动、或没挂 `iwara_web` 时是 404，属正常
+- iwara 视频页面（**需 `iwara/run.py` 入口 + `.env` 里写 `SITE_BRIDGE_EXTENSIONS=iwara_web`**）：<http://127.0.0.1:8765/iwara>；用 `pixiv/run.py` 启动、或没挂 `iwara_web` 时是 404，属正常
 - iwara 视频接口（**需 `iwara/run.py` 入口**）：<http://127.0.0.1:8765/api/iwara/videos>；用 `pixiv/run.py` 启动时是 404，属正常
 - asmr.one 接口（**需 `asmr_one/run.py` 入口**）：<http://127.0.0.1:8765/api/asmr/works>（搜索 `/api/asmr/search?query=...`、作品详情 `/api/asmr/work/{id}`、音轨 `/api/asmr/tracks/{id}`、封面 `/api/asmr/cover/{id}`、音频 `/api/asmr/stream?url=...`）；用 `pixiv/run.py` 或 `iwara/run.py` 启动时是 404，属正常
 - E-Hentai 接口（**需 `ehviewer/run.py` 入口**）：<http://127.0.0.1:8765/api/eh/list>（热门榜单 `/api/eh/popular`、搜索 `/api/eh/search?query=...`、画廊详情 `/api/eh/gallery/{gid}/{token}`、图片页清单 `/api/eh/images/{gid}/{token}`、大图页解析 `/api/eh/page?url=...`、元数据 `/api/eh/metadata?gid=&token=`、图片代转 `/api/eh/proxy?url=...`）；用别的入口启动时是 404，属正常
@@ -298,7 +299,7 @@ python scripts/make_share_packages.py          # 九个包全做，产物在 dis
 python scripts/make_share_packages.py --list   # 看看有哪几个
 ```
 
-每个包内都有自己的一份 `README.md`，写清这是接口包还是扩展包、怎么启动。**扩展包（`novel` / `iwara_web`）不能单独启动**：把包里的同名目录拷进接口项目根，再在 `.env` 里用 `PIXIV_BRIDGE_EXTENSIONS` 启用即可。详见 `README.md` 的「一键生成分享包」。
+每个包内都有自己的一份 `README.md`，写清这是接口包还是扩展包、怎么启动。**扩展包（`novel` / `iwara_web`）不能单独启动**：把包里的同名目录拷进接口项目根，再在 `.env` 里用 `SITE_BRIDGE_EXTENSIONS` 启用即可。详见 `README.md` 的「一键生成分享包」。
 
 ---
 
@@ -309,16 +310,16 @@ python scripts/make_share_packages.py --list   # 看看有哪几个
 | `'python' 不是内部或外部命令` | Python 没装或安装时没勾 PATH；见第 1 节第 1 步 |
 | 提示去 Microsoft Store 装 Python | 关闭「应用执行别名」里的 python.exe / python3.exe |
 | `port WARN 8765 已被占用` | 换端口：`start.bat --port 9000` / `sh start.sh --port 9000`；或关掉之前那个窗口 |
-| 依赖一直装不上 | 在 `.env` 里设 `PIXIV_BRIDGE_PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple`；或按 README 准备 `wheels/` 目录离线安装 |
+| 依赖一直装不上 | 在 `.env` 里设 `SITE_BRIDGE_PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple`；或按 README 准备 `wheels/` 目录离线安装 |
 | `network WARN 可达 0/3` | 连不上 Pixiv，见第 4 节 |
-| `ech WARN 且含 SSL_get_error=5` | 本机到 Cloudflare 这一段在阻断 ECH 扩展（与配置、IP、服务端无关），换网络或设 `PIXIV_PROXY` 走代理，见第 4 节 |
+| `ech WARN 且含 SSL_get_error=5` | 本机到 Cloudflare 这一段在阻断 ECH 扩展（与配置、IP、服务端无关），换网络或设 `SITE_PROXY` 走代理，见第 4 节 |
 | `ech WARN ECH 直连失败`（其他原因） | ECH 外层域名被封锁或配置过期，改用代理，见第 4 节 |
 | Termux 里 `pydantic-core` 编译失败 | 不应该发生：Termux 会自动用 `requirements-termux.txt`（纯 Python）。若出现，删掉 `.venv`/重装并确认 `python -m pip install -r requirements-termux.txt` |
 | `未配置 refresh_token` / 网页显示未登录 | 先跑 `python pixiv/get_token.py` 登录一次 |
 | 登录时报验证码/错误 | 改用 `get_token.py` 的「2) 浏览器授权」 |
-| 网页（小说阅读器）打不开 / `404` | 阅读器现在在 `/novel`，不在 `/`（`/` 是导航页，一定打得开）。没启用扩展时 `/novel` 返回 404 属正常，要阅读器就在 `.env` 里加一行 `PIXIV_BRIDGE_EXTENSIONS=novel`，然后**用原来的方式重启**（`start.bat` / `sh start.sh` / `python pixiv/run.py`） |
-| 启动时打印 `[扩展] …找不到入口文件…` 后退出 | `.env` 里 `PIXIV_BRIDGE_EXTENSIONS` 写的目录名不对（相对路径按项目根算）。要小说阅读器就写 `novel`，并确认 `novel/extension.py` 确实拷过来了 |
-| `/iwara` 打不开 / 404 | 视频页面现在归 **`iwara_web` 扩展包**：要 `python iwara\run.py` 入口 + `.env` 里写 `PIXIV_BRIDGE_EXTENSIONS=iwara_web`，并且 `iwara_web/` 目录要拷过来 |
+| 网页（小说阅读器）打不开 / `404` | 阅读器现在在 `/novel`，不在 `/`（`/` 是导航页，一定打得开）。没启用扩展时 `/novel` 返回 404 属正常，要阅读器就在 `.env` 里加一行 `SITE_BRIDGE_EXTENSIONS=novel`，然后**用原来的方式重启**（`start.bat` / `sh start.sh` / `python pixiv/run.py`） |
+| 启动时打印 `[扩展] …找不到入口文件…` 后退出 | `.env` 里 `SITE_BRIDGE_EXTENSIONS` 写的目录名不对（相对路径按项目根算）。要小说阅读器就写 `novel`，并确认 `novel/extension.py` 确实拷过来了 |
+| `/iwara` 打不开 / 404 | 视频页面现在归 **`iwara_web` 扩展包**：要 `python iwara\run.py` 入口 + `.env` 里写 `SITE_BRIDGE_EXTENSIONS=iwara_web`，并且 `iwara_web/` 目录要拷过来 |
 | `/api/iwara/...` 全部 404 | 用错入口了：iwara 接口只在 `python iwara\run.py` 下挂载，`pixiv/run.py` 那个站点没有（各站点互不挂对方的路由） |
 | `/api/asmr/...` 全部 404 | 用错入口了：asmr 接口只在 `python asmr_one\run.py` 下挂载，`pixiv/run.py` 与 `iwara/run.py` 都返回 404（各站点互不挂对方的路由；asmr 也不需要登录，404 一定是入口不对） |
 | `/api/eh/...` 全部 404 | 用错入口了：E-Hentai 接口只在 `python ehviewer\run.py` 下挂载，别的入口都返回 404（互不挂对方的路由；ehviewer 也不需要登录，404 一定是入口不对） |
@@ -334,8 +335,8 @@ python scripts/make_share_packages.py --list   # 看看有哪几个
 | iwara 全部接口都说「没有可用的候选地址」 | 内置的种子 IP（`iwara/client.py` 的 `SEED_HOSTS` / `SEED_IPS`）在这个网络里全不通，而 DoH 又只给了污染答案。换网络，或把实测可用的 iwara 边缘 IP 补进那张表 |
 | `files` 检查项说缺文件 | 这个检查分两处：框架根要 `requirements.txt`，站点目录要自己的 `run.py`（`pixiv/run.py` 或 `iwara/run.py`）。阅读器页面在 `novel/web/index.html`，由扩展提供，不在清单里 |
 | 网页打得开但列表空白 | 看启动窗口里的报错；多半是网络被阻断（见第 4 节）。iwara 视频页面（`/iwara`）列表空白时同理，另外它的封面图要走 `/api/iwara/image` 代转，连不上 iwara 图片主机时也会是空白 |
-| 设置里保存配置提示「写入失败」 | 先看提示里写的**文件路径和系统原因**：`data\settings.json` 被别的程序占着或带了只读属性（编辑器/同步盘/杀软）最常见，服务会自动摘只读位、重试、再退回直接覆盖写，一般会自动好；仍失败就关掉占用它的程序，或直接删掉该文件（会退回默认值）。**安卓上还要看数据目录是不是在项目外**：`PIXIV_DATA_DIR`/`PIXIV_*_FILE` 指到 `/sdcard/...` 会被自动收回项目里的 `data/`（启动日志和设置页会逐条提示）；项目本身也别放在 `/sdcard` 下，放到 Termux 家目录（`~/pixiv-bridge`）最稳 |
-| 保存配置报 `500`，提示里带 `AttributeError: … has no attribute 'model_dump'` | 用的是旧版代码（Termux 装的是 pydantic 1.x，没有 `model_dump`）。换成最新版的 `pixiv_bridge/`（里面有 `compat.py`，两个 pydantic 大版本都认）后重跑 `sh start.sh` |
+| 设置里保存配置提示「写入失败」 | 先看提示里写的**文件路径和系统原因**：`data\settings.json` 被别的程序占着或带了只读属性（编辑器/同步盘/杀软）最常见，服务会自动摘只读位、重试、再退回直接覆盖写，一般会自动好；仍失败就关掉占用它的程序，或直接删掉该文件（会退回默认值）。**安卓上还要看数据目录是不是在项目外**：`SITE_DATA_DIR`/`PIXIV_*_FILE` 指到 `/sdcard/...` 会被自动收回项目里的 `data/`（启动日志和设置页会逐条提示）；项目本身也别放在 `/sdcard` 下，放到 Termux 家目录（`~/site-bridge`）最稳 |
+| 保存配置报 `500`，提示里带 `AttributeError: … has no attribute 'model_dump'` | 用的是旧版代码（Termux 装的是 pydantic 1.x，没有 `model_dump`）。换成最新版的 `site_bridge/`（里面有 `compat.py`，两个 pydantic 大版本都认）后重跑 `sh start.sh` |
 
 ---
 

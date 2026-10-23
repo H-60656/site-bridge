@@ -1,6 +1,6 @@
 """Pixiv 接口站点：路由、客户端、协议实现、自检与入口都在这个包里。
 
-它和 `iwara/` 是**同级**的接口项目：两者都只依赖框架包 `pixiv_bridge`，
+它和 `iwara/` 是**同级**的接口项目：两者都只依赖框架包 `site_bridge`，
 互不依赖；框架也不认识它们中的任何一个。
 
 - `app.py`：站点描述符 `SITE` + 应用工厂 + 运行时对象装配
@@ -12,6 +12,6 @@
 - `get_token.py`：交互式获取 refresh_token
 """
 
-from pixiv_bridge import __version__
+from site_bridge import __version__
 
 __version__ = __version__

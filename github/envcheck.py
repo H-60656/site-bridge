@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 
-from pixiv_bridge.envcheck import CheckResult
+from site_bridge.envcheck import CheckResult
 
 from .client import GithubClient, GithubError
 from .config import as_github_settings
@@ -127,6 +127,6 @@ async def _async_checks(settings):
 
 
 def extra_checks(settings) -> list[CheckResult]:
-    """``--check`` 时被 ``pixiv_bridge.cli`` 调用的站点自检。"""
+    """``--check`` 时被 ``site_bridge.cli`` 调用的站点自检。"""
     resolved = as_github_settings(settings)
     return [deps_check()] + list(asyncio.run(_async_checks(resolved)))

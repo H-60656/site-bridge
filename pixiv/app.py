@@ -1,6 +1,6 @@
 """Pixiv 接口站点：路由清单、运行时对象装配、应用工厂与站点描述符 ``SITE``。
 
-框架（``pixiv_bridge``）只认识 :class:`pixiv_bridge.site.Site` 这一份契约；
+框架（``site_bridge``）只认识 :class:`site_bridge.site.Site` 这一份契约；
 本模块把 Pixiv 的细节填进去：
 
 - ``PIXIV_ROUTERS``：``/api/*`` 路由（``/api/health`` 与导航页由框架提供）；
@@ -9,9 +9,9 @@
   工厂也是 async）；
 - ``PIXIV_ERROR_TYPES``：站点的异常类型，交给框架统一映射成
   ``{"error": {"message": ..., "reason": ...}}``；
-- ``create_app``：签名与重构前的 ``pixiv_bridge.server.create_app`` 一致，
+- ``create_app``：签名与重构前的 ``site_bridge.server.create_app`` 一致，
   方便 ``novel`` 这类扩展继续在它上面追加路由与状态；
-- ``SITE``：入口脚本（``pixiv/run.py``）交给 ``pixiv_bridge.cli.main`` 的东西。
+- ``SITE``：入口脚本（``pixiv/run.py``）交给 ``site_bridge.cli.main`` 的东西。
 """
 
 import inspect
@@ -19,8 +19,8 @@ from pathlib import Path
 
 import httpx
 
-from pixiv_bridge.server import create_bridge_app
-from pixiv_bridge.site import Site
+from site_bridge.server import create_bridge_app
+from site_bridge.site import Site
 
 from .api import PixivApi, PixivApiError, PixivRateLimitError
 from .config import PixivSettings, as_pixiv_settings
@@ -84,8 +84,8 @@ def create_app(
     页面）属于附属项目 ``novel``，它通过两种方式之一挂进来：
 
     - **扩展机制**（配置驱动，推荐）：``extensions`` 传
-      ``pixiv_bridge.extensions.load_extensions(settings)`` 加载好的扩展列表，由
-      ``PIXIV_BRIDGE_EXTENSIONS`` 决定装哪些；命令行入口 ``python pixiv/run.py``
+      ``site_bridge.extensions.load_extensions(settings)`` 加载好的扩展列表，由
+      ``SITE_BRIDGE_EXTENSIONS`` 决定装哪些；命令行入口 ``python pixiv/run.py``
       走的就是这条路；
     - **显式组装**（代码驱动）：直接传 ``state_factory(settings)``（返回要挂到
       ``app.state`` 上的额外对象字典，可以是 async）与 ``extra_routers``。

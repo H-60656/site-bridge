@@ -1,6 +1,6 @@
 """命令行入口：解析参数、跑环境自检、按配置挂扩展、交给 uvicorn 启动。
 
-入口不认识任何站点：站点通过 :class:`pixiv_bridge.site.Site`（``<site>/app.py`` 里的
+入口不认识任何站点：站点通过 :class:`site_bridge.site.Site`（``<site>/app.py`` 里的
 ``SITE``）把自己的应用工厂、专属自检、登录校验与网络提示传进来，入口只负责
 「参数 → 配置 → 自检 → 应用 → uvicorn」这条流水线。
 """
@@ -18,7 +18,7 @@ FATAL_CHECKS = ("python", "deps", "port")
 
 NO_SITE_HINT = (
     "请用具体接口项目的入口启动：python pixiv/run.py 或 python iwara/run.py"
-    "（也可以 python -m pixiv_bridge <站点>）"
+    "（也可以 python -m site_bridge <站点>）"
 )
 
 
@@ -99,12 +99,12 @@ def load_extensions_or_exit(settings):
 def main(argv=None, site=None):
     """启动一个接口项目。
 
-    `site` 是 :class:`pixiv_bridge.site.Site`：站点入口脚本（``<site>/run.py``）先
+    `site` 是 :class:`site_bridge.site.Site`：站点入口脚本（``<site>/run.py``）先
     bootstrap 站点额外依赖，再把 `SITE` 传进来。框架本身不是服务，所以 `site=None`
     直接报错退出。
 
     这条流水线对每个站点都一样：读配置（站点可以用自己的 Settings 子类）→ 通用自检
-    + ``site.environment_checks`` → 按 ``PIXIV_BRIDGE_EXTENSIONS`` 挂扩展 →
+    + ``site.environment_checks`` → 按 ``SITE_BRIDGE_EXTENSIONS`` 挂扩展 →
     ``site.check_login``（``--check``）或 ``site.build_app`` + uvicorn。
     """
     if site is None:
@@ -134,7 +134,7 @@ def main(argv=None, site=None):
     _fail_on(results, skip=("port",) if args.check else ())
     site.warn_network(results, settings)
 
-    # 扩展按配置加载（`PIXIV_BRIDGE_EXTENSIONS`）；加载失败给一行可读报错。
+    # 扩展按配置加载（`SITE_BRIDGE_EXTENSIONS`）；加载失败给一行可读报错。
     extensions = load_extensions_or_exit(settings)
 
     if args.check:

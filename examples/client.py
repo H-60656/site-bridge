@@ -1,4 +1,4 @@
-"""Pixiv Bridge 的 Python 调用示例（同步 httpx 客户端 + 一个命令行 demo）。
+"""Site Bridge 的 Python 调用示例 —— 以 pixiv 站点为例（同步 httpx 客户端 + 一个命令行 demo）。
 """
 
 import argparse
@@ -68,7 +68,7 @@ def demo(base):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Pixiv Bridge Python 客户端示例")
+    parser = argparse.ArgumentParser(description="Site Bridge Python 客户端示例（pixiv 站点）")
     parser.add_argument("--base", default="http://127.0.0.1:8765")
     args = parser.parse_args()
     demo(args.base)

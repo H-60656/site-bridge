@@ -27,9 +27,9 @@ from urllib.parse import urlparse
 import httpx
 from fastapi.testclient import TestClient
 
-from pixiv_bridge.config import Settings
-from pixiv_bridge.extensions import load_extension_specs
-from pixiv_bridge.server import create_bridge_app as _create_bridge_app
+from site_bridge.config import Settings
+from site_bridge.extensions import load_extension_specs
+from site_bridge.server import create_bridge_app as _create_bridge_app
 
 # 与 test_bridge.py 同一约定：临时的东西放工作区 _tmp_tests/，别用系统 TEMP。
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -1281,7 +1281,7 @@ class IwaraRouteTestCase(unittest.TestCase):
         self.assertTrue(fake.closed)
 
     def test_framework_routes_are_present(self):
-        # `/api/health` 由框架（pixiv_bridge/routes/health.py）提供，
+        # `/api/health` 由框架（site_bridge/routes/health.py）提供，
         # 每个入口都有；站点自己不重复定义。
         client = self._client()
         self.assertEqual(client.get("/api/health").status_code, 200)
@@ -1480,7 +1480,7 @@ class IwaraEnvCheckTestCase(unittest.TestCase):
         return patch("iwara.client.IwaraClient", cls), instance
 
     def test_extra_checks_are_named_and_never_fatal(self):
-        from pixiv_bridge.cli import FATAL_CHECKS
+        from site_bridge.cli import FATAL_CHECKS
 
         from iwara.envcheck import AUTH_NAME, DEPS_NAME, NET_NAME
 
@@ -1602,10 +1602,10 @@ class IwaraEntryWiringTestCase(unittest.TestCase):
     def test_entry_hands_the_site_to_the_framework_cli(self):
         text = self._source()
         # 入口本身不再拼参数：站点的检查/登录钩子都挂在 `iwara.app.SITE` 上，
-        # 由框架基座 `pixiv_bridge.cli.main(site=...)` 统一取值。
+        # 由框架基座 `site_bridge.cli.main(site=...)` 统一取值。
         self.assertIn("from iwara.app import SITE", text)
         self.assertIn("main(site=SITE)", text)
-        self.assertIn("from pixiv_bridge.cli import main", text)
+        self.assertIn("from site_bridge.cli import main", text)
 
     def test_get_token_does_not_import_the_app_package(self):
         # `from iwara import tokens` 不能再顺带把 iwara.app（→ curl_cffi）拖进来，
@@ -2932,7 +2932,7 @@ class IwaraEchWiringTestCase(unittest.TestCase):
         self.assertIn("IWARA_BRIDGE_ECH=0", ech.detail)
 
     def test_the_ech_check_never_kills_the_startup(self):
-        from pixiv_bridge.cli import FATAL_CHECKS
+        from site_bridge.cli import FATAL_CHECKS
 
         from iwara.envcheck import ECH_NAME
 

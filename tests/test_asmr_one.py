@@ -25,8 +25,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 from fastapi.testclient import TestClient
 
-from pixiv_bridge.config import Settings
-from pixiv_bridge.server import create_bridge_app as _create_bridge_app
+from site_bridge.config import Settings
+from site_bridge.server import create_bridge_app as _create_bridge_app
 
 # 与 test_bridge.py 同一约定：临时的东西放工作区 _tmp_tests/，别用系统 TEMP。
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -481,7 +481,7 @@ class AsmrSettingsTestCase(unittest.TestCase):
         env = patch.dict(
             os.environ,
             {
-                "PIXIV_DATA_DIR": str(self.directory),
+                "SITE_DATA_DIR": str(self.directory),
                 "ASMR_BRIDGE_ECH": "",
                 "ASMR_BRIDGE_ECH_CONFIG": "",
                 "ASMR_BRIDGE_ECH_IPS": "",
@@ -532,7 +532,7 @@ class AsmrSettingsTestCase(unittest.TestCase):
 
     def test_the_site_variables_do_not_answer_to_the_pixiv_names(self):
         # 三个站点同级，各自的开关互不影响：ASMR_ 前缀之外的变量不该被读。
-        os.environ["PIXIV_BRIDGE_ECH"] = "0"
+        os.environ["PIXIV_ECH"] = "0"
 
         self.assertTrue(AsmrSettings.load(migrate=False).ech)
 
@@ -1707,7 +1707,7 @@ class AsmrEnvCheckTestCase(unittest.TestCase):
         self.addCleanup(drop_temp_dir, self.directory)
         env = patch.dict(
             os.environ,
-            {"PIXIV_DATA_DIR": str(self.directory), "ASMR_BRIDGE_ECH": ""},
+            {"SITE_DATA_DIR": str(self.directory), "ASMR_BRIDGE_ECH": ""},
             clear=False,
         )
         env.start()
@@ -1758,7 +1758,7 @@ class AsmrEnvCheckTestCase(unittest.TestCase):
         return patch("asmr_one.client.AsmrClient", cls), instance
 
     def test_extra_check_names_are_named_and_never_fatal(self):
-        from pixiv_bridge.cli import FATAL_CHECKS
+        from site_bridge.cli import FATAL_CHECKS
 
         from asmr_one.envcheck import DEPS_NAME
         from asmr_one.envcheck import ECH_NAME as ECH
@@ -2019,10 +2019,10 @@ class AsmrEntryWiringTestCase(unittest.TestCase):
     def test_entry_hands_the_site_to_the_framework_cli(self):
         text = self._source()
         # 入口本身不再拼参数：站点的检查钩子都挂在 `asmr_one.app.SITE` 上，
-        # 由框架基座 `pixiv_bridge.cli.main(site=...)` 统一取值。
+        # 由框架基座 `site_bridge.cli.main(site=...)` 统一取值。
         self.assertIn("from asmr_one.app import SITE", text)
         self.assertIn("main(site=SITE)", text)
-        self.assertIn("from pixiv_bridge.cli import main", text)
+        self.assertIn("from site_bridge.cli import main", text)
 
     def test_the_entry_puts_the_project_root_on_sys_path(self):
         # `python asmr_one/run.py` 时 sys.path[0] 是 asmr_one/，框架包在上一级。

@@ -1,6 +1,6 @@
 """杂项路由：``next_url`` 翻页，以及图片代理（``/img``）。
 
-健康检查（``/api/health``）不在这里：它属于框架（``pixiv_bridge/routes/health.py``），
+健康检查（``/api/health``）不在这里：它属于框架（``site_bridge/routes/health.py``），
 每个接口站点都天生有。
 """
 
@@ -9,7 +9,7 @@ from mimetypes import guess_type
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
-from pixiv_bridge import ranges
+from site_bridge import ranges
 
 from . import get_api, get_image_proxy
 

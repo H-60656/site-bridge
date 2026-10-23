@@ -33,7 +33,7 @@ def create_bridge_app(
       字典。可以是 ``async`` 函数（Pixiv 要先 ``await oauth.load()`` 才能开始服务）；
     - ``shutdown(app)``：站点自己的资源释放（``httpx`` 客户端等），在扩展之后跑；
     - ``error_types``：站点的异常类型，统一映射成 ``{"error": {...}}``；
-    - ``extensions``：调用方用 ``pixiv_bridge.extensions.load_extensions(settings)``
+    - ``extensions``：调用方用 ``site_bridge.extensions.load_extensions(settings)``
       加载好的扩展。本函数自己**不读配置去加载扩展**（保持纯组装语义，也免得附属
       项目之间互相把对方挂两遍）。
 

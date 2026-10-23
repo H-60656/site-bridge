@@ -3,10 +3,10 @@
 用法（两个等价入口）：
 
     python iwara/run.py [--host ...] [--port ...] [--check] [--env ...]
-    python -m pixiv_bridge iwara [同上]
+    python -m site_bridge iwara [同上]
 
 它和 ``pixiv/run.py`` 是同构的：入口只做三件事 —— 把项目根放进 ``sys.path``、
-补齐依赖、把站点的 ``SITE`` 交给 ``pixiv_bridge.cli.main``。
+补齐依赖、把站点的 ``SITE`` 交给 ``site_bridge.cli.main``。
 
 与 pixiv 入口的唯一区别是自举那一段：iwara 额外需要编译包 ``curl_cffi``
 （装在站点自己的 ``iwara/requirements.txt`` 里）。它必须排在
@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 # 直接 `python iwara/run.py` 时 sys.path[0] 是 iwara/，框架包在它的上一级。
 sys.path.insert(0, str(HERE.parent))
 
-from pixiv_bridge.deps import bootstrap, ensure_packages  # noqa: E402
+from site_bridge.deps import bootstrap, ensure_packages  # noqa: E402
 
 # iwara 额外需要的顶层模块 → 装在哪个清单里。curl_cffi 是编译包，
 # 不放进框架的 REQUIRED，免得只跑 pixiv 的人也被要求装。
@@ -33,7 +33,7 @@ IWARA_REQUIREMENTS = HERE / "requirements.txt"
 bootstrap(partial(ensure_packages, IWARA_EXTRA_MODULES, IWARA_REQUIREMENTS))
 
 from iwara.app import SITE  # noqa: E402  （依赖补齐后才能安全 import）
-from pixiv_bridge.cli import main  # noqa: E402
+from site_bridge.cli import main  # noqa: E402
 
 if __name__ == "__main__":
     main(site=SITE)

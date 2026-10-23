@@ -9,8 +9,8 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from pixiv_bridge.compat import dump_model
-from pixiv_bridge.jsonl import DEFAULT_LIMIT
+from site_bridge.compat import dump_model
+from site_bridge.jsonl import DEFAULT_LIMIT
 from ..downloads import normalize_download
 from . import get_downloads
 

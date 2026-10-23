@@ -13,7 +13,7 @@ public_name（cloudflare-ech.com），边缘节点解密 ClientHello 后按内�
 ClientHello 发出后约 0.2s 被 RST（SSL_get_error=5 = SSL_ERROR_SYSCALL）；而把配置换成
 OpenSSL 不接受的形状（不发扩展）或干脆不带 ECH，握手就能正常完成。服务端在解不开 ECH 时
 本应回落到外层 ClientHello，所以这个重置来自链路中间盒，而不是 Cloudflare——**这种情况下
-客户端无法绕过**，只能换网络/等它恢复，或改用代理（`PIXIV_PROXY`，见 config.Settings.proxy）。
+客户端无法绕过**，只能换网络/等它恢复，或改用代理（`SITE_PROXY`，见 config.Settings.proxy）。
 
 Python 自带的 OpenSSL 3.0.x 没有 ECH API，这里用 ctypes 驱动 OpenSSL **4.0+** 的 libssl
 （ECH 是 OpenSSL 4.0.0 才加入的能力，3.x 全系都没有，包括 3.5/3.6——所以「回退系统自带
@@ -82,7 +82,7 @@ READ_CHUNK = 65536
 # 104.18.42.239 5/8、172.64.145.17 3/8 成功），所以建连超时压到 5s，失败就换下一个 IP。
 CONNECT_TIMEOUT = 5.0
 
-# 项目自带的 OpenSSL 动态库目录（与 pixiv_bridge/ 同级，随项目一起拷贝）。
+# 项目自带的 OpenSSL 动态库目录（与 site_bridge/ 同级，随项目一起拷贝）。
 # 这样在没有装 OpenSSL 4.0+ 的机器上也能直接开 ECH，不必让用户先去装 OpenSSL。
 # 里面的库按 平台-架构 分子目录存放，见 _platform_tags()。
 # 当前已带：win32-amd64（4.0.2）、android-arm64（4.0.3，给 Termux 用）。
@@ -123,7 +123,7 @@ class EchConnectError(RuntimeError):
 
 
 def bundle_root():
-    """项目自带的 OpenSSL 目录（与 ``pixiv_bridge/`` 同级，随项目一起拷贝）。"""
+    """项目自带的 OpenSSL 目录（与 ``site_bridge/`` 同级，随项目一起拷贝）。"""
     return Path(__file__).resolve().parent.parent / BUNDLE_DIR_NAME
 
 
@@ -147,7 +147,7 @@ def is_termux():
 
     判定逻辑与 ``deps.is_termux()`` 同源，避免两处标准不一致（那里据此挑依赖清单）。
     """
-    from pixiv_bridge import deps
+    from site_bridge import deps
 
     return deps.is_termux()
 
@@ -277,7 +277,7 @@ def _platform_tags():
 def _candidate_dirs():
     """按优先级返回要搜索 libssl/libcrypto 的目录。
 
-    顺序 = 显式覆盖（``PIXIV_BRIDGE_OPENSSL_DIR``）→ **项目自带** → 系统安装。
+    顺序 = 显式覆盖（``PIXIV_OPENSSL_DIR``）→ **项目自带** → 系统安装。
     项目自带的那份排在系统前面，这样拷到一台没装 OpenSSL 的机器上也能直接开 ECH；
     显式指定的目录仍放最前，是因为那是用户明确点名的位置，不该被内置那份悄悄顶掉。
     """
@@ -294,7 +294,7 @@ def _candidate_dirs():
             dirs.append(candidate)
 
     # 1) 显式指定的目录（用户手动覆盖）。
-    add(os.environ.get("PIXIV_BRIDGE_OPENSSL_DIR"))
+    add(os.environ.get("PIXIV_OPENSSL_DIR"))
     # 2) 项目自带（首选：不依赖目标机器装 OpenSSL 4.0+）。
     bundle = bundle_root()
     for tag in _platform_tags():
@@ -370,7 +370,7 @@ def find_library_pair():
         return pair
     raise EchUnavailable(
         "未找到带 ECH 支持的 OpenSSL 动态库（需要 OpenSSL 4.0+ 的 libssl）。"
-        f"可把库文件放进 {bundle_root()}，或用 PIXIV_BRIDGE_OPENSSL_DIR 指定其所在目录"
+        f"可把库文件放进 {bundle_root()}，或用 PIXIV_OPENSSL_DIR 指定其所在目录"
     )
 
 

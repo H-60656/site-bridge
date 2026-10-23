@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from pixiv_bridge import ranges
+from site_bridge import ranges
 
 from .. import tokens
 from ..client import (

@@ -19,7 +19,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from pixiv_bridge import ranges
+from site_bridge import ranges
 
 from ..client import EhError, is_allowed_proxy, is_image_page
 from . import get_client

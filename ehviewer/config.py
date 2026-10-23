@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, fields
 
-from pixiv_bridge.config import Settings  # noqa: F401  （re-export：站点内沿用同一写法）
+from site_bridge.config import Settings  # noqa: F401  （re-export：站点内沿用同一写法）
 
 
 def split_ips(value: str) -> tuple[str, ...]:

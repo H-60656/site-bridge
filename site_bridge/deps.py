@@ -95,7 +95,7 @@ def wheel_dirs(project_root=None):
 
 
 def _pip_indexes():
-    custom = os.environ.get("PIXIV_BRIDGE_PIP_INDEX")
+    custom = os.environ.get("SITE_BRIDGE_PIP_INDEX")
     if custom:
         return (custom,)
     return DEFAULT_PIP_INDEXES
@@ -239,7 +239,7 @@ def ensure_dependencies(project_root=None):
 def bootstrap(install=ensure_dependencies):
     """入口自举：先补依赖，装不上就打一行 ``[deps]`` 再退出，不留堆栈。
 
-    ``run.py`` 与 ``pixiv_bridge/__main__.py`` 共用这一段，差别只在传进来的
+    ``run.py`` 与 ``site_bridge/__main__.py`` 共用这一段，差别只在传进来的
     安装函数（主项目传 ``ensure_dependencies``，iwara 传 ``ensure_packages``
     的偏函数）。各入口在模块级调用它，等于「进主程序之前先把依赖补齐」。
 

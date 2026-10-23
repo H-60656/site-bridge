@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import asyncio
 
-from pixiv_bridge.envcheck import CheckResult
+from site_bridge.envcheck import CheckResult
 
 # 与主项目那几项并列，前缀统一成 asmr，一眼能看出是哪来的。
 DEPS_NAME = "asmr 依赖"

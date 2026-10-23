@@ -22,9 +22,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 #: 框架包名（所有接口项目都依赖它，它不认识任何接口项目）。
-FRAMEWORK_PACKAGE = "pixiv_bridge"
+FRAMEWORK_PACKAGE = "site_bridge"
 
-#: 扩展机制约定的固定入口文件名（与 ``pixiv_bridge/extensions.py`` 一致）。
+#: 扩展机制约定的固定入口文件名（与 ``site_bridge/extensions.py`` 一致）。
 EXTENSION_FILENAME = "extension.py"
 
 
@@ -123,7 +123,7 @@ SITE_ASSETS = {
 class ExtensionInfo:
     """一个扩展包（挂在某个接口项目上的附属目录）。"""
 
-    name: str                          # 目录名，也是配置里 ``PIXIV_BRIDGE_EXTENSIONS`` 写的值
+    name: str                          # 目录名，也是配置里 ``SITE_BRIDGE_EXTENSIONS`` 写的值
     host: str                          # 宿主站点名（``SITES_BY_NAME`` 的键）
     title: str = ""
     extra_paths: frozenset = frozenset()  # 挂上后比宿主多出来的路由路径

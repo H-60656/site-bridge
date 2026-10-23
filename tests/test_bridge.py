@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 from fastapi.testclient import TestClient
 
-from pixiv_bridge import deps as deps_module
+from site_bridge import deps as deps_module
 from pixiv.api import (
     PixivApi,
     PixivApiError,
@@ -34,9 +34,9 @@ from pixiv.api import (
     normalize_image_urls,
     novel_text_has_embeds,
 )
-from pixiv_bridge.compat import dump_model
-from pixiv_bridge.config import Settings
-from pixiv_bridge.envcheck import (
+from site_bridge.compat import dump_model
+from site_bridge.config import Settings
+from site_bridge.envcheck import (
     CheckResult,
     dependencies,
     port_available,
@@ -44,7 +44,7 @@ from pixiv_bridge.envcheck import (
     python_version,
     run_checks,
 )
-from pixiv_bridge.extensions import (
+from site_bridge.extensions import (
     EXTENSION_FILENAME,
     EXTENSION_ROUTERS_ATTR,
     ExtensionError,
@@ -62,8 +62,8 @@ from pixiv.app import create_app
 from pixiv.envcheck import ech_transport, network
 from pixiv.config import PixivSettings
 
-from pixiv_bridge import nav as nav_module
-from pixiv_bridge import ranges
+from site_bridge import nav as nav_module
+from site_bridge import ranges
 
 
 def app_with_novel(settings, **kwargs):
@@ -72,8 +72,8 @@ def app_with_novel(settings, **kwargs):
 
 # 用系统临时目录（Windows 是 %TEMP%，Linux/Termux 是 /tmp 或 $TMPDIR）。
 # 不能写死 "/tmp"：Windows 上它会被解析成「当前盘符的 \tmp」，换一个盘跑测试就会静默失败。
-TEST_TOKEN_FILE = Path(tempfile.gettempdir()) / "pixiv_bridge_test_tokens.json"
-SERVER_TOKEN_FILE = Path(tempfile.gettempdir()) / "pixiv_bridge_server_test_tokens.json"
+TEST_TOKEN_FILE = Path(tempfile.gettempdir()) / "site_bridge_test_tokens.json"
+SERVER_TOKEN_FILE = Path(tempfile.gettempdir()) / "site_bridge_server_test_tokens.json"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEST_TMP_ROOT = PROJECT_ROOT / "_tmp_tests"     # 测试临时目录的根（跑完自动收掉）
 _TEMP_COUNTER = itertools.count(1)
@@ -205,7 +205,7 @@ class EnvCheckTestCase(unittest.TestCase):
 
     def test_dependencies_missing(self):
         with patch(
-            "pixiv_bridge.deps.missing_dependencies", return_value=["fastapi"]
+            "site_bridge.deps.missing_dependencies", return_value=["fastapi"]
         ):
             result = dependencies()
         self.assertFalse(result.ok)
@@ -249,18 +249,18 @@ class EnvCheckTestCase(unittest.TestCase):
 
 class DepsTestCase(unittest.TestCase):
     def test_missing_dependencies_empty(self):
-        with patch("pixiv_bridge.deps._importable", return_value=True):
+        with patch("site_bridge.deps._importable", return_value=True):
             self.assertEqual(deps_module.missing_dependencies(), [])
 
     def test_missing_dependencies_detected(self):
         def fake_importable(name):
             return name != "httpx"
 
-        with patch("pixiv_bridge.deps._importable", side_effect=fake_importable):
+        with patch("site_bridge.deps._importable", side_effect=fake_importable):
             self.assertEqual(deps_module.missing_dependencies(), ["httpx"])
 
     def test_ensure_dependencies_noop(self):
-        with patch("pixiv_bridge.deps.missing_dependencies", return_value=[]), patch(
+        with patch("site_bridge.deps.missing_dependencies", return_value=[]), patch(
             "subprocess.check_call"
         ) as mock_call:
             result = deps_module.ensure_dependencies()
@@ -275,7 +275,7 @@ class DepsTestCase(unittest.TestCase):
             return ["fastapi"] if calls["n"] == 1 else []
 
         with patch(
-            "pixiv_bridge.deps.missing_dependencies", side_effect=fake_missing
+            "site_bridge.deps.missing_dependencies", side_effect=fake_missing
         ), patch("subprocess.check_call") as mock_call:
             result = deps_module.ensure_dependencies()
         self.assertEqual(result, ["fastapi"])
@@ -283,7 +283,7 @@ class DepsTestCase(unittest.TestCase):
 
     def test_ensure_dependencies_failure(self):
         with patch(
-            "pixiv_bridge.deps.missing_dependencies", return_value=["fastapi"]
+            "site_bridge.deps.missing_dependencies", return_value=["fastapi"]
         ), patch("subprocess.check_call"):
             with self.assertRaises(RuntimeError):
                 deps_module.ensure_dependencies()
@@ -293,7 +293,7 @@ class DepsTestCase(unittest.TestCase):
             self.assertEqual(deps_module._pip_indexes(), deps_module.DEFAULT_PIP_INDEXES)
 
     def test_pip_indexes_custom(self):
-        with patch.dict(os.environ, {"PIXIV_BRIDGE_PIP_INDEX": "https://example.com/simple"}):
+        with patch.dict(os.environ, {"SITE_BRIDGE_PIP_INDEX": "https://example.com/simple"}):
             self.assertEqual(
                 deps_module._pip_indexes(), ("https://example.com/simple",)
             )
@@ -306,7 +306,7 @@ class DepsTestCase(unittest.TestCase):
             return ["fastapi"] if calls["n"] == 1 else []
 
         with patch(
-            "pixiv_bridge.deps.missing_dependencies", side_effect=fake_missing
+            "site_bridge.deps.missing_dependencies", side_effect=fake_missing
         ), patch("subprocess.check_call") as mock_call:
             deps_module.ensure_dependencies()
         args = mock_call.call_args[0][0]
@@ -321,7 +321,7 @@ class DepsTestCase(unittest.TestCase):
             return ["fastapi"] if calls["n"] == 1 else []
 
         with patch(
-            "pixiv_bridge.deps.missing_dependencies", side_effect=fake_missing
+            "site_bridge.deps.missing_dependencies", side_effect=fake_missing
         ), patch(
             "subprocess.check_call",
             side_effect=[subprocess.CalledProcessError(1, "pip"), None],
@@ -1264,7 +1264,7 @@ class SettingsEnvPathTestCase(unittest.TestCase):
         os.close(fd)
         self.addCleanup(os.remove, raw_path)
         Path(raw_path).write_text(
-            "PIXIV_REFRESH_TOKEN=from-file\nPIXIV_BRIDGE_PORT=9999\n",
+            "PIXIV_REFRESH_TOKEN=from-file\nSITE_BRIDGE_PORT=9999\n",
             encoding="utf-8",
         )
         with patch.dict(os.environ, {}, clear=True):
@@ -1276,7 +1276,7 @@ class SettingsEnvPathTestCase(unittest.TestCase):
         self.assertEqual(settings.token_file, PROJECT_ROOT / "data" / "tokens.json")
 
     def test_env_directory_path_still_supported(self):
-        target = PROJECT_ROOT / "pixiv_bridge"
+        target = PROJECT_ROOT / "site_bridge"
         with patch.dict(os.environ, {}, clear=True):
             settings = PixivSettings.load(str(target), migrate=False)
         self.assertEqual(settings.project_root, target)
@@ -1285,12 +1285,12 @@ class SettingsEnvPathTestCase(unittest.TestCase):
         self.assertEqual(settings.port, 8765)
 
     def test_blank_env_paths_fall_back_to_defaults(self):
-        """回归：`.env` 里写了 `PIXIV_HISTORY_FILE=`（空值）时，曾被解析成当前目录。"""
+        """回归：`.env` 里写了 `SITE_HISTORY_FILE=`（空值）时，曾被解析成当前目录。"""
         fd, raw_path = tempfile.mkstemp(dir=PROJECT_ROOT, suffix=".env")
         os.close(fd)
         self.addCleanup(os.remove, raw_path)
         Path(raw_path).write_text(
-            "PIXIV_TOKEN_FILE=\nPIXIV_HISTORY_FILE=\n",
+            "SITE_TOKEN_FILE=\nSITE_HISTORY_FILE=\n",
             encoding="utf-8",
         )
         with patch.dict(os.environ, {}, clear=True):
@@ -1301,7 +1301,7 @@ class SettingsEnvPathTestCase(unittest.TestCase):
 
 
 class EnvCheckIpPoolTestCase(unittest.TestCase):
-    """回归：envcheck 曾忽略 PIXIV_BRIDGE_*_IPS，自检结论与真实请求行为矛盾。"""
+    """回归：envcheck 曾忽略 PIXIV_*_IPS，自检结论与真实请求行为矛盾。"""
 
     def test_network_forwards_custom_pools_to_probe(self):
         seen = {}
@@ -1494,9 +1494,9 @@ class HeaderTerminatorTestCase(unittest.IsolatedAsyncioTestCase):
 class EchSettingsTestCase(unittest.TestCase):
     def test_ech_env_flags_parsed(self):
         env = {
-            "PIXIV_BRIDGE_ECH": "yes",
-            "PIXIV_BRIDGE_ECH_CONFIG": "AAAA",
-            "PIXIV_BRIDGE_ECH_IPS": "1.2.3.4,5.6.7.8",
+            "PIXIV_ECH": "yes",
+            "PIXIV_ECH_CONFIG": "AAAA",
+            "PIXIV_ECH_IPS": "1.2.3.4,5.6.7.8",
         }
         with patch.dict(os.environ, env, clear=True):
             settings = PixivSettings.load(str(PROJECT_ROOT / "_no_such_env_file"))
@@ -1513,10 +1513,10 @@ class EchSettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.proxy, "")
 
     def test_proxy_from_env(self):
-        with patch.dict(os.environ, {"PIXIV_PROXY": "http://127.0.0.1:7890"}, clear=True):
+        with patch.dict(os.environ, {"SITE_PROXY": "http://127.0.0.1:7890"}, clear=True):
             settings = PixivSettings.load(str(PROJECT_ROOT / "_no_such_env_file"))
         self.assertEqual(settings.proxy, "http://127.0.0.1:7890")
-        with patch.dict(os.environ, {"PIXIV_BRIDGE_PROXY": "socks5://127.0.0.1:1080"}, clear=True):
+        with patch.dict(os.environ, {"SITE_BRIDGE_PROXY": "socks5://127.0.0.1:1080"}, clear=True):
             settings = PixivSettings.load(str(PROJECT_ROOT / "_no_such_env_file"))
         self.assertEqual(settings.proxy, "socks5://127.0.0.1:1080")
 
@@ -2240,7 +2240,7 @@ class EchEnvCheckTestCase(unittest.TestCase):
         ):
             result = ech_transport()
         self.assertFalse(result.ok)
-        self.assertIn("PIXIV_PROXY", result.detail)
+        self.assertIn("SITE_PROXY", result.detail)
         self.assertIn("阻断", result.detail)
 
     def test_proxy_check_ok_and_failure(self):
@@ -2351,7 +2351,7 @@ class RefreshHintTestCase(unittest.TestCase):
             PixivSettings(), RuntimeError("ECH 握手失败（SSL_get_error=5）")
         )
         self.assertIn("本机到 Cloudflare", hint)
-        self.assertIn("PIXIV_PROXY", hint)
+        self.assertIn("SITE_PROXY", hint)
 
     def test_timeout_is_local(self):
         from pixiv.envcheck import _refresh_hint
@@ -2617,7 +2617,7 @@ class BundledOpenSslTestCase(unittest.TestCase):
     def test_bundled_dir_precedes_system_dirs(self):
         from pixiv import ech_client
 
-        with patch.dict(os.environ, {"PIXIV_BRIDGE_OPENSSL_DIR": ""}):
+        with patch.dict(os.environ, {"PIXIV_OPENSSL_DIR": ""}):
             dirs = ech_client._candidate_dirs()
         bundle = ech_client.bundle_root()
         bundled = [d for d in dirs if bundle in d.parents or d == bundle]
@@ -2635,7 +2635,7 @@ class BundledOpenSslTestCase(unittest.TestCase):
     def test_explicit_env_dir_still_wins(self):
         from pixiv import ech_client
 
-        with patch.dict(os.environ, {"PIXIV_BRIDGE_OPENSSL_DIR": str(PROJECT_ROOT)}):
+        with patch.dict(os.environ, {"PIXIV_OPENSSL_DIR": str(PROJECT_ROOT)}):
             dirs = ech_client._candidate_dirs()
         self.assertEqual(dirs[0], PROJECT_ROOT)
         # 显式指定只是排在最前，内置那份仍留在候选里兜底。
@@ -2670,7 +2670,7 @@ class BundledOpenSslTestCase(unittest.TestCase):
             with self.assertRaises(ech_client.EchUnavailable) as ctx:
                 ech_client.find_library_pair()
         self.assertIn(ech_client.BUNDLE_DIR_NAME, str(ctx.exception))
-        self.assertIn("PIXIV_BRIDGE_OPENSSL_DIR", str(ctx.exception))
+        self.assertIn("PIXIV_OPENSSL_DIR", str(ctx.exception))
 
     def test_lib_falls_through_and_reports_reasons(self):
         """内置库载入失败 → 用系统那份；两份都不行时错误里带上失败原因。"""
@@ -3084,7 +3084,7 @@ class OfflineWheelTestCase(unittest.TestCase):
 
     def test_wheel_dir_takes_priority_over_mirrors(self):
         fake = PROJECT_ROOT / "wheels"
-        with patch("pixiv_bridge.deps.wheel_dirs", return_value=(fake,)):
+        with patch("site_bridge.deps.wheel_dirs", return_value=(fake,)):
             candidates = deps_module._install_candidates(
                 PROJECT_ROOT / "requirements.txt", PROJECT_ROOT
             )
@@ -3112,7 +3112,7 @@ class PipBootstrapTestCase(unittest.TestCase):
     """有些系统自带 Python 没有 pip（Debian/Ubuntu），要能自动补上。"""
 
     def test_ensure_pip_noop_when_present(self):
-        with patch("pixiv_bridge.deps._pip_available", return_value=True), patch(
+        with patch("site_bridge.deps._pip_available", return_value=True), patch(
             "subprocess.check_call"
         ) as mock_call:
             self.assertTrue(deps_module._ensure_pip())
@@ -3126,13 +3126,13 @@ class PipBootstrapTestCase(unittest.TestCase):
             return calls["n"] > 1
 
         with patch(
-            "pixiv_bridge.deps._pip_available", side_effect=fake_available
+            "site_bridge.deps._pip_available", side_effect=fake_available
         ), patch("subprocess.check_call") as mock_call:
             self.assertTrue(deps_module._ensure_pip())
         self.assertIn("ensurepip", mock_call.call_args[0][0])
 
     def test_install_requirements_raises_without_pip(self):
-        with patch("pixiv_bridge.deps._ensure_pip", return_value=False):
+        with patch("site_bridge.deps._ensure_pip", return_value=False):
             with self.assertRaises(RuntimeError) as ctx:
                 deps_module._install_requirements(
                     PROJECT_ROOT / "requirements.txt", PROJECT_ROOT
@@ -3141,7 +3141,7 @@ class PipBootstrapTestCase(unittest.TestCase):
 
     def test_install_failure_mentions_manual_command(self):
         with patch(
-            "pixiv_bridge.deps.missing_dependencies", return_value=["fastapi"]
+            "site_bridge.deps.missing_dependencies", return_value=["fastapi"]
         ), patch("subprocess.check_call"):
             with self.assertRaises(RuntimeError) as ctx:
                 deps_module.ensure_dependencies(PROJECT_ROOT)
@@ -3150,7 +3150,7 @@ class PipBootstrapTestCase(unittest.TestCase):
 
     def test_entry_points_share_the_same_bootstrap(self):
         """各站点入口的自举都走 ``deps.bootstrap()``，不再各抄一遍 try/except。"""
-        from pixiv_bridge import __main__ as navigation
+        from site_bridge import __main__ as navigation
 
         for item in navigation.site_items():
             name = f"{item.name}/run.py"
@@ -3160,8 +3160,8 @@ class PipBootstrapTestCase(unittest.TestCase):
                 self.assertNotIn("except RuntimeError", source)
 
     def test_module_entry_dispatches_to_a_site_entry(self):
-        """``python -m pixiv_bridge <站点>`` 只负责找到并运行 ``<站点>/run.py``。"""
-        source = (PROJECT_ROOT / "pixiv_bridge/__main__.py").read_text(encoding="utf-8")
+        """``python -m site_bridge <站点>`` 只负责找到并运行 ``<站点>/run.py``。"""
+        source = (PROJECT_ROOT / "site_bridge/__main__.py").read_text(encoding="utf-8")
         self.assertIn("runpy.run_path", source)
         self.assertIn('"run.py"', source)
 
@@ -3190,7 +3190,7 @@ class _FakeTty(io.StringIO):
 
 
 class NavigationTestCase(unittest.TestCase):
-    """``python -m pixiv_bridge`` 就是整个项目的导航：列站点与扩展、挑一个、再执行入口。
+    """``python -m site_bridge`` 就是整个项目的导航：列站点与扩展、挑一个、再执行入口。
 
     导航信息必须**只靠读字面量**（:mod:`ast`）拿到，不能 import 站点代码 ——
     框架不认识任何站点，那几个假项目树里连 ``Site`` 都没定义，解析失败时
@@ -3199,7 +3199,7 @@ class NavigationTestCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import pixiv_bridge.__main__ as module
+        import site_bridge.__main__ as module
 
         cls.nav = module
 
@@ -3251,7 +3251,7 @@ class NavigationTestCase(unittest.TestCase):
         self.assertIn("项目导航", text)
         self.assertIn("1) pixiv", text)
         self.assertIn("2) iwara", text)
-        self.assertIn("PIXIV_BRIDGE_EXTENSIONS", text)
+        self.assertIn("SITE_BRIDGE_EXTENSIONS", text)
         self.assertIn("--list", text)
         self.assertIn("BRIDGE_SITE=pixiv", text)
         self.assertIn("iwara_web", text)
@@ -3507,7 +3507,7 @@ class NavigationTestCase(unittest.TestCase):
         sh = (PROJECT_ROOT / "start.sh").read_text(encoding="utf-8")
         for name, text in (("start.bat", bat), ("start.sh", sh)):
             with self.subTest(script=name):
-                self.assertIn("-m pixiv_bridge", text)
+                self.assertIn("-m site_bridge", text)
                 self.assertNotIn("$SITE/run.py", text)
         # .bat 必须是纯 ASCII：中文会被 cmd 的 936 代码页错解
         self.assertTrue(bat.isascii(), "start.bat 必须保持纯 ASCII")
@@ -3538,7 +3538,7 @@ class BodyValidationTestCase(unittest.TestCase):
             ("/api/novel/bookmark/add", {"novel_id": 3}, None),
             ("/api/novel/bookmark/delete", {"novel_id": 3}, None),
             # watchlist 的 series_id 是查询参数
-            # （见 pixiv_bridge/routes/pixiv_novel.py 的 watchlist_novel_add）
+            # （见 site_bridge/routes/pixiv_novel.py 的 watchlist_novel_add）
             ("/api/watchlist/novel/add", None, {"series_id": "1"}),
             ("/api/watchlist/manga/add", None, {"series_id": 1}),
         )
@@ -3625,7 +3625,7 @@ class TermuxRequirementsTestCase(unittest.TestCase):
         with patch.dict(
             os.environ, {"PREFIX": "/data/data/com.termux/files/usr"}
         ), patch(
-            "pixiv_bridge.deps.missing_dependencies", side_effect=[["fastapi"], []]
+            "site_bridge.deps.missing_dependencies", side_effect=[["fastapi"], []]
         ), patch(
             "subprocess.check_call"
         ), patch("builtins.print") as mock_print:
@@ -3673,7 +3673,7 @@ class PydanticCompatTestCase(unittest.TestCase):
         """路由里必须走 dump_model()：直接 .model_dump() 在 Termux 上必 500。"""
         offenders = []
         for routes_dir in (
-            PROJECT_ROOT / "pixiv_bridge" / "routes",
+            PROJECT_ROOT / "site_bridge" / "routes",
             PROJECT_ROOT / "novel" / "routes",
         ):
             for path in sorted(routes_dir.glob("*.py")):
@@ -3934,7 +3934,7 @@ class HistoryRouteTestCase(unittest.TestCase):
 # 只追加测试，不改动已有测试与任何源码。
 # ---------------------------------------------------------------------------
 
-from pixiv_bridge.jsonl import (
+from site_bridge.jsonl import (
     MAX_LINE_BYTES,
     JsonlStore,
     as_int,
@@ -3942,7 +3942,7 @@ from pixiv_bridge.jsonl import (
     as_text,
     iso_now,
 )
-from pixiv_bridge.userdata import (
+from site_bridge.userdata import (
     DEFAULT_CONFIG,
     LocalLibrary,
     UserConfig,
@@ -4476,7 +4476,7 @@ class UserConfigTestCase(unittest.TestCase):
         self.assertFalse((self.tmp / "settings.json.tmp").exists())
 
     def test_check_writable_dir_reports_reason(self):
-        from pixiv_bridge.userdata import check_writable_dir
+        from site_bridge.userdata import check_writable_dir
 
         ok, why = check_writable_dir(self.tmp)
         self.assertTrue(ok, why)
@@ -4495,7 +4495,7 @@ class UserConfigTestCase(unittest.TestCase):
             Path.write_text = real_write_text
         self.assertFalse(ok)
         self.assertIn("写不进去", why)
-        self.assertFalse((blocker / ".pixiv-bridge-write-test").exists())
+        self.assertFalse((blocker / ".site-bridge-write-test").exists())
 
     def test_save_error_still_cleans_tmp_and_raises(self):
         """连直接覆盖写也失败：抛 OSError（路由转成带说明的 500）且不留 .tmp。"""
@@ -4654,7 +4654,7 @@ class SettingsDataDirTestCase(unittest.TestCase):
         outside = make_temp_dir("settings_outside")
         self.addCleanup(drop_temp_dir, outside)
         (outside / "tokens.json").write_text('{"refresh_token":"rt"}', encoding="utf-8")
-        with patch.dict(os.environ, {"PIXIV_DATA_DIR": str(outside)}, clear=True):
+        with patch.dict(os.environ, {"SITE_DATA_DIR": str(outside)}, clear=True):
             settings = PixivSettings.load(str(self.root), migrate=True)
         # 路径全部落回项目里的 data/
         self.assertEqual(settings.data_dir, self.root / "data")
@@ -4670,7 +4670,7 @@ class SettingsDataDirTestCase(unittest.TestCase):
             '{"refresh_token":"rt"}',
         )
         notes = "\n".join(settings.warnings)
-        self.assertIn("PIXIV_DATA_DIR", notes)
+        self.assertIn("SITE_DATA_DIR", notes)
         self.assertIn("tokens.json", notes)
 
     def test_external_config_file_is_pulled_back_without_moving_when_migrate_off(self):
@@ -4678,7 +4678,7 @@ class SettingsDataDirTestCase(unittest.TestCase):
         self.addCleanup(drop_temp_dir, outside)
         cfg = outside / "settings.json"
         cfg.write_text('{"scan_depth": 2}', encoding="utf-8")
-        env = {"PIXIV_CONFIG_FILE": str(cfg)}
+        env = {"SITE_CONFIG_FILE": str(cfg)}
         with patch.dict(os.environ, env, clear=True):
             settings = PixivSettings.load(str(self.root), migrate=False)
         # 配置文件必须写在项目里（否则项目外写不动时又变成 500）
@@ -4687,7 +4687,7 @@ class SettingsDataDirTestCase(unittest.TestCase):
         self.assertTrue(settings.warnings)
 
     def test_relative_data_dir_inside_project_is_kept(self):
-        with patch.dict(os.environ, {"PIXIV_DATA_DIR": "mydata"}, clear=True):
+        with patch.dict(os.environ, {"SITE_DATA_DIR": "mydata"}, clear=True):
             settings = PixivSettings.load(str(self.root), migrate=False)
         self.assertEqual(settings.data_dir, self.root / "mydata")
         self.assertEqual(settings.token_file, self.root / "mydata" / "tokens.json")
@@ -5080,7 +5080,7 @@ class BookmarksRouteTestCase(UserDataRouteBase):
 
 
 class ExtensionSpecsTestCase(unittest.TestCase):
-    """扩展配置项解析：`PIXIV_BRIDGE_EXTENSIONS` 的原始字符串怎么切。"""
+    """扩展配置项解析：`SITE_BRIDGE_EXTENSIONS` 的原始字符串怎么切。"""
 
     def test_single_spec(self):
         self.assertEqual(parse_extension_specs("novel"), ["novel"])
@@ -5099,20 +5099,20 @@ class ExtensionSpecsTestCase(unittest.TestCase):
         self.assertEqual(parse_extension_specs(None), [])
 
     def test_settings_default_is_empty(self):
-        # 默认构造与 PixivSettings.load 在没配 PIXIV_BRIDGE_EXTENSIONS 时都得是空元组，
+        # 默认构造与 PixivSettings.load 在没配 SITE_BRIDGE_EXTENSIONS 时都得是空元组，
         # 否则「默认只跑纯接口」这条约定会被破坏。
         self.assertEqual(PixivSettings().extensions, ())
         self.assertIsInstance(PixivSettings().extensions, tuple)
 
     def test_settings_load_reads_the_env_var(self):
         with patch.dict(
-            os.environ, {"PIXIV_BRIDGE_EXTENSIONS": "novel, extra"}, clear=False
+            os.environ, {"SITE_BRIDGE_EXTENSIONS": "novel, extra"}, clear=False
         ):
             settings = PixivSettings.load(str(PROJECT_ROOT))
         self.assertEqual(settings.extensions, ("novel", "extra"))
 
     def test_blank_env_var_gives_empty_tuple(self):
-        with patch.dict(os.environ, {"PIXIV_BRIDGE_EXTENSIONS": ""}, clear=False):
+        with patch.dict(os.environ, {"SITE_BRIDGE_EXTENSIONS": ""}, clear=False):
             settings = PixivSettings.load(str(PROJECT_ROOT))
         self.assertEqual(settings.extensions, ())
 
@@ -5367,7 +5367,7 @@ class ExtensionLayoutTestCase(unittest.TestCase):
     def test_two_api_entry_points_are_peers(self):
         # 各接口项目同级：各自 <站点>/run.py，根目录不再有 run.py。
         # 站点/扩展清单跟着导航发现走（不再写死），加站点时这里自动覆盖。
-        from pixiv_bridge import __main__ as navigation
+        from site_bridge import __main__ as navigation
 
         sites = navigation.site_items()
         self.assertGreaterEqual(len(sites), 2)
@@ -5381,10 +5381,10 @@ class ExtensionLayoutTestCase(unittest.TestCase):
         ]
         for name in local:
             with self.subTest(framework=name):
-                self.assertFalse((PROJECT_ROOT / "pixiv_bridge" / name).exists(), name)
+                self.assertFalse((PROJECT_ROOT / "site_bridge" / name).exists(), name)
 
     def test_extension_packages_have_no_dedicated_entry_point(self):
-        from pixiv_bridge import __main__ as navigation
+        from site_bridge import __main__ as navigation
 
         for item in navigation.extension_items():
             with self.subTest(name=item.name):
@@ -5525,7 +5525,7 @@ class NavigationPageTestCase(unittest.TestCase):
 
     def test_settings_loads_nav_links_from_env(self):
         with patch.dict(
-            os.environ, {"PIXIV_BRIDGE_NAV_LINKS": "iwara=http://127.0.0.1:8766/"}, clear=False
+            os.environ, {"SITE_BRIDGE_NAV_LINKS": "iwara=http://127.0.0.1:8766/"}, clear=False
         ):
             settings = PixivSettings.load(str(PROJECT_ROOT))
         self.assertEqual(settings.nav_links, "iwara=http://127.0.0.1:8766/")
@@ -5624,14 +5624,14 @@ class CliCheckTestCase(unittest.IsolatedAsyncioTestCase):
         return [CheckResult("python", True, "3.13"), CheckResult("port", False, "8765 已被占用")]
 
     def test_fail_on_stops_on_a_fatal_check(self):
-        from pixiv_bridge.cli import _fail_on
+        from site_bridge.cli import _fail_on
 
         with self.assertRaises(SystemExit) as ctx:
             _fail_on(self._fatal_results())
         self.assertEqual(ctx.exception.code, 1)
 
     def test_fail_on_skips_the_port_check_when_asked(self):
-        from pixiv_bridge.cli import _fail_on
+        from site_bridge.cli import _fail_on
 
         # --check 只校验、不监听端口，端口被占不该拦下自检。
         _fail_on(self._fatal_results(), skip=("port",))
@@ -5655,7 +5655,7 @@ class CliCheckTestCase(unittest.IsolatedAsyncioTestCase):
 
     def _demo_site(self, checks):
         """一个最小站点：只挂一个专属自检，应用工厂是空壳（uvicorn 被 mock）。"""
-        from pixiv_bridge.site import Site
+        from site_bridge.site import Site
 
         return Site(
             name="demo",
@@ -5667,7 +5667,7 @@ class CliCheckTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_main_calls_site_checks_in_the_same_table(self):
-        from pixiv_bridge import cli
+        from site_bridge import cli
 
         seen = {}
 
@@ -5693,7 +5693,7 @@ class CliCheckTestCase(unittest.IsolatedAsyncioTestCase):
         uvicorn_run.assert_called_once()
 
     def test_main_without_a_site_tells_the_user_where_to_start(self):
-        from pixiv_bridge import cli
+        from site_bridge import cli
 
         buffer = io.StringIO()
         with contextlib.redirect_stderr(buffer), self.assertRaises(SystemExit) as ctx:
@@ -5705,7 +5705,7 @@ class CliCheckTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("iwara/run.py", buffer.getvalue())
 
     def test_main_reports_site_checks_failure_without_stopping(self):
-        from pixiv_bridge import cli
+        from site_bridge import cli
 
         def extra(settings):
             return [CheckResult("站点依赖", False, "不可用")]

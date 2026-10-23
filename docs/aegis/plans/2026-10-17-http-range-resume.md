@@ -12,19 +12,19 @@
   `200` / `206` / `416` 三种应答。
 
 收敛目标是「一件事只有一个 owner」：挑选转发头、解析区间、拼区间应答这三件逻辑目前在四个
-站点里各写一份（或不写），本次收进框架模块 `pixiv_bridge/ranges.py`。
+站点里各写一份（或不写），本次收进框架模块 `site_bridge/ranges.py`。
 
 ## Aegis Visibility
 
-这次改动同时动三样东西：一个新框架模块（`pixiv_bridge/ranges.py`，新的公共 owner）、一条对外
+这次改动同时动三样东西：一个新框架模块（`site_bridge/ranges.py`，新的公共 owner）、一条对外
 HTTP 契约（`/img` 从「永远 200」变成「200/206/304/416」，新增 `Accept-Ranges` /
 `Content-Range`）、以及四个站点模块的响应构造。契约是浏览器直接消费的，回归面横跨框架与三个站点，
 所以值得一份 durable plan；不做计划容易漏掉「哪些站点该切、哪些该留」。
 
 ## Architecture
 
-框架 `pixiv_bridge/` 不认识任何站点；站点各有 `run.py` + `app.py`，只能单向 import 框架
-（`scripts/check_boundary.py` 强制）。`pixiv_bridge/ranges.py` 是**纯 HTTP 工具**：不出现任何
+框架 `site_bridge/` 不认识任何站点；站点各有 `run.py` + `app.py`，只能单向 import 框架
+（`scripts/check_boundary.py` 强制）。`site_bridge/ranges.py` 是**纯 HTTP 工具**：不出现任何
 站点名、不 import fastapi 之外的东西（用 `starlette.responses.Response`，FastAPI 已重导出）。
 
 字节出口一共 8 个，现状矩阵：
@@ -84,7 +84,7 @@ Python 3.13 + FastAPI 0.136.1 / **Starlette 1.7.0**（`.venv` 实测）、httpx�
 
 命中「public API / contract」与「duplicate owner」两项：
 
-- canonical owner（本次确立）：`pixiv_bridge/ranges.py` 独占「该转哪些续传头」与「区间应答怎么拼」。
+- canonical owner（本次确立）：`site_bridge/ranges.py` 独占「该转哪些续传头」与「区间应答怎么拼」。
 - 下游消费者：四个站点的字节路由 + 浏览器 + 可能的第三方下载器。
 - 重复 owner 的退休：`ehviewer/routes/galleries.py:28-37` 的 `_FORWARD_HEADERS` /
   `_pick_forward_headers`，以及 `iwara/routes/videos.py:210-214`、`asmr_one/routes/works.py:136-140`
@@ -101,7 +101,7 @@ Python 3.13 + FastAPI 0.136.1 / **Starlette 1.7.0**（`.venv` 实测）、httpx�
 
 ## Tasks
 
-### Task 1 — 新增 `pixiv_bridge/ranges.py`
+### Task 1 — 新增 `site_bridge/ranges.py`
 
 新文件。公开 API：
 
@@ -126,7 +126,7 @@ def bytes_response(request, content, media_type, cache_control="public, max-age=
 - `bytes_response` 的 206 带 `Content-Range: bytes {start}-{end}/{size}`，416 带
   `Content-Range: bytes */{size}`、空 body、`Content-Type` 不写。
 
-验收：`python -c "import pixiv_bridge.ranges"` 通过；`python scripts/check_boundary.py` 通过
+验收：`python -c "import site_bridge.ranges"` 通过；`python scripts/check_boundary.py` 通过
 （模块内无站点名）。
 
 ### Task 2 — pixiv `/img` 透传 Range
@@ -239,7 +239,7 @@ def bytes_response(request, content, media_type, cache_control="public, max-age=
 ## Execution Route
 
 - route: `inline`（四处改动顺序依赖同一模块，且工作树必须在同一提交里保持一致）
-- reason: 任务间共享 `pixiv_bridge/ranges.py`，切给 subagent 会重复读同一批基线文件
+- reason: 任务间共享 `site_bridge/ranges.py`，切给 subagent 会重复读同一批基线文件
 - fallback: 无
 - `User confirmation required: no`
 
@@ -247,7 +247,7 @@ def bytes_response(request, content, media_type, cache_control="public, max-age=
 
 ### 落地形态
 
-- **新增** `pixiv_bridge/ranges.py`（144 行）：`REQUEST_HEADERS = ("range", "if-range")`、
+- **新增** `site_bridge/ranges.py`（144 行）：`REQUEST_HEADERS = ("range", "if-range")`、
   `RESPONSE_HEADERS = ("content-range", "accept-ranges", "content-length", "etag", "last-modified")`、
   `class RangeNotSatisfiable(Exception)`（带 `.size`）、`forwarded_headers(request, extra=())`、
   `response_headers(headers)`、`parse_range(value, size)`、`bytes_response(request, content, media_type, cache_control="public, max-age=86400")`。

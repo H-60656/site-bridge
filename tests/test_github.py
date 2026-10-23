@@ -49,8 +49,8 @@ from github.config import (
     as_github_settings,
 )
 from github.routes import get_client
-from pixiv_bridge.config import Settings
-from pixiv_bridge.server import create_bridge_app
+from site_bridge.config import Settings
+from site_bridge.server import create_bridge_app
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1537,7 +1537,7 @@ class GithubSettingsTestCase(unittest.TestCase):
         source = (PROJECT_ROOT / "github" / "config.py").read_text(encoding="utf-8")
 
         self.assertIn("GITHUB_", source)
-        self.assertNotIn("PIXIV_BRIDGE_", source)
+        self.assertNotIn("SITE_BRIDGE_", source)
         self.assertNotIn("ech_ips", source)
         self.assertNotIn("edge_ips", source)
 
@@ -1835,14 +1835,14 @@ class GithubEntryPointTestCase(unittest.TestCase):
         self.assertIn(site.directory, spec.entries())
 
     def test_the_nav_order_has_no_gap(self):
-        from pixiv_bridge.__main__ import site_items
+        from site_bridge.__main__ import site_items
 
         orders = sorted(item.order for item in site_items())
 
         self.assertEqual(orders, list(range(1, len(orders) + 1)))
 
     def test_the_nav_page_lists_github_last(self):
-        from pixiv_bridge.__main__ import site_items
+        from site_bridge.__main__ import site_items
 
         items = site_items()
 

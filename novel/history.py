@@ -4,7 +4,7 @@
 这里只负责阅读记录本身的字段与折叠主键：每本小说只留最新一条。
 """
 
-from pixiv_bridge.jsonl import (
+from site_bridge.jsonl import (
     COMPACT_AT_LINES,
     DEFAULT_LIMIT,
     MAX_LINE_BYTES,

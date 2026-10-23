@@ -6,7 +6,7 @@
 #   （rust + cargo + clang），普通用户装不动。因此这里钉在**纯 Python**的
 #   pydantic 1.x，并配套使用仍兼容 pydantic v1 的 fastapi。
 #   本项目代码只用到 pydantic.BaseModel 的基础用法，两个大版本都能正常工作：
-#   取模型字段统一走 pixiv_bridge/compat.py 的 dump_model()（2.x 用
+#   取模型字段统一走 site_bridge/compat.py 的 dump_model()（2.x 用
 #   model_dump()，1.x 退回 dict()），所以 v1 上不会因为缺 model_dump 报 500。
 #   pydantic 1.10.26 + fastapi 0.115.14 + starlette 0.41.3 已实测通过全部
 #   单元测试。

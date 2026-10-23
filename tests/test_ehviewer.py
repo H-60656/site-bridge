@@ -23,8 +23,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from pixiv_bridge.config import Settings
-from pixiv_bridge.server import create_bridge_app as _create_bridge_app
+from site_bridge.config import Settings
+from site_bridge.server import create_bridge_app as _create_bridge_app
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1851,13 +1851,13 @@ class EhSettingsTestCase(unittest.TestCase):
             )
 
     def test_the_prefix_is_not_borrowed_from_another_site(self):
-        # 站点各用各的前缀（EH_BRIDGE_*），Pixiv 的那套不该影响这里。
-        with patch.dict(os.environ, {"PIXIV_BRIDGE_HTTP3": "0"}, clear=False):
+        # 站点各用各的前缀（EH_BRIDGE_*），框架那套（SITE_BRIDGE_*）不该影响这里。
+        with patch.dict(os.environ, {"SITE_BRIDGE_HTTP3": "0"}, clear=False):
             self.assertTrue(as_eh_settings(Settings(rate_limit_rpm=10000)).http3)
 
         text = (PROJECT_ROOT / "ehviewer" / "config.py").read_text(encoding="utf-8")
         self.assertIn("EH_BRIDGE_", text)
-        self.assertNotIn("PIXIV_BRIDGE_", text)
+        self.assertNotIn("SITE_BRIDGE_", text)
         # 这个站点不用 ECH，别把别站的三项抄过来。
         self.assertNotIn("ech_ips", text)
 
@@ -2008,16 +2008,16 @@ class EhEntryPointTestCase(unittest.TestCase):
 
     def test_the_nav_order_has_no_gap(self):
         # nav_order 是用 AST 从各站点的 app.py 里读出来的（见
-        # ``pixiv_bridge/__main__._site_metadata``），加站点时最容易出错的就是
+        # ``site_bridge/__main__._site_metadata``），加站点时最容易出错的就是
         # 留个空洞（比如从 3 直接跳到 5）。导航项上暴露的字段叫 ``order``。
-        from pixiv_bridge.__main__ import site_items
+        from site_bridge.__main__ import site_items
 
         orders = sorted(item.order for item in site_items())
 
         self.assertEqual(orders, list(range(1, len(orders) + 1)))
 
     def test_the_nav_page_lists_the_sites_in_order(self):
-        from pixiv_bridge.__main__ import site_items
+        from site_bridge.__main__ import site_items
 
         items = site_items()
 
@@ -2408,7 +2408,7 @@ class EhEntryWiringTestCase(unittest.TestCase):
 
         self.assertIn("from ehviewer.app import SITE", text)
         self.assertIn("main(site=SITE)", text)
-        self.assertIn("from pixiv_bridge.cli import main", text)
+        self.assertIn("from site_bridge.cli import main", text)
 
     def test_the_entry_puts_the_project_root_on_sys_path(self):
         # `python ehviewer/run.py` 时 sys.path[0] 是 ehviewer/，框架包在上一级。

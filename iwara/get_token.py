@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pixiv_bridge.deps import ensure_packages  # noqa: E402
+from site_bridge.deps import ensure_packages  # noqa: E402
 
 from iwara import tokens  # noqa: E402
 

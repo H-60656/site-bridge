@@ -1,8 +1,8 @@
 """Pixiv 站点的配置：框架 ``Settings`` 基座 + Pixiv 凭据与协议常量。
 
-环境变量名沿用既有前缀（``PIXIV_`` / ``PIXIV_BRIDGE_``）——既有的 ``.env`` 里
-就是这些名字，改名会破坏升级路径；划分的依据是「路径/布局归框架、站点凭据归站点」，
-不是名字前缀。
+环境变量一律用站点自己的 ``PIXIV_*`` 前缀（凭据、ECH、SNI 绕过、各域 IP 池、
+OpenSSL 目录都在这里读）；框架的通用配置（监听地址、数据目录、代理、扩展）用
+``SITE_*`` / ``SITE_BRIDGE_*``，由基座 ``Settings`` 负责。两者互不借用。
 
 ``Settings`` 在这里再导出一次：站点内的模块（``api`` / ``oauth`` / ``image_proxy``）
 原本就 ``from .config import Settings``，搬进 ``pixiv/`` 后一行都不用改。
@@ -11,7 +11,7 @@
 import os
 from dataclasses import dataclass
 
-from pixiv_bridge.config import Settings  # noqa: F401  （re-export：站点内沿用旧写法）
+from site_bridge.config import Settings  # noqa: F401  （re-export：站点内沿用旧写法）
 
 DEFAULT_CLIENT_ID = "MOBrBDS8blbauoSck0ZfDbtuzpyT"
 DEFAULT_CLIENT_SECRET = "lsACyCD94FhDUtGTXi3QzcFE2uU1hqtDaKeqrdwj"
@@ -63,15 +63,15 @@ class PixivSettings(Settings):
         return cls(
             **vars(base),
             refresh_token=os.environ.get("PIXIV_REFRESH_TOKEN", ""),
-            bypass_sni=os.environ.get("PIXIV_BRIDGE_BYPASS_SNI", "").lower()
+            bypass_sni=os.environ.get("PIXIV_BYPASS_SNI", "").lower()
             in ("1", "true", "yes", "on"),
-            ech=os.environ.get("PIXIV_BRIDGE_ECH", "").lower()
+            ech=os.environ.get("PIXIV_ECH", "").lower()
             in ("1", "true", "yes", "on"),
-            ech_config=os.environ.get("PIXIV_BRIDGE_ECH_CONFIG", ""),
-            ech_ips=os.environ.get("PIXIV_BRIDGE_ECH_IPS", ""),
-            api_ips=os.environ.get("PIXIV_BRIDGE_API_IPS", ""),
-            oauth_ips=os.environ.get("PIXIV_BRIDGE_OAUTH_IPS", ""),
-            image_ips=os.environ.get("PIXIV_BRIDGE_IMAGE_IPS", ""),
+            ech_config=os.environ.get("PIXIV_ECH_CONFIG", ""),
+            ech_ips=os.environ.get("PIXIV_ECH_IPS", ""),
+            api_ips=os.environ.get("PIXIV_API_IPS", ""),
+            oauth_ips=os.environ.get("PIXIV_OAUTH_IPS", ""),
+            image_ips=os.environ.get("PIXIV_IMAGE_IPS", ""),
         )
 
 

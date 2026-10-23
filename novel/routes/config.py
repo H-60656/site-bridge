@@ -10,8 +10,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from pixiv_bridge.compat import dump_model
-from pixiv_bridge.userdata import DEFAULT_CONFIG, check_writable_dir
+from site_bridge.compat import dump_model
+from site_bridge.userdata import DEFAULT_CONFIG, check_writable_dir
 from . import get_config, get_library
 
 router = APIRouter(prefix="/api", tags=["config"])
@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api", tags=["config"])
 # 个人数据目录必须能写：安卓 / Termux 上把数据目录指到 `/sdcard` 是「保存配置 500」
 # 的最常见原因，这里给出对应提示。
 TERMUX_HINT = (
-    "安卓 / Termux 上请把项目放在 Termux 家目录里（例如 ~/pixiv-bridge），"
+    "安卓 / Termux 上请把项目放在 Termux 家目录里（例如 ~/site-bridge），"
     "不要把数据目录指到 /sdcard 下的路径。"
 )
 

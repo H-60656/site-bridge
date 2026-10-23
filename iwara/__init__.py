@@ -1,6 +1,6 @@
 """iwara.tv 接口站点：视频浏览、搜索、直链解析与代转播放（自带 curl_cffi 客户端）。
 
-依赖方向与 `novel` 一致：本包只 import 主项目 `pixiv_bridge`，
+依赖方向与 `novel` 一致：本包只 import 主项目 `site_bridge`，
 主项目不认识 `iwara`，单向依赖不会倒过来。
 
 和 `novel` 不同的是，iwara 站点不能用主项目那套 httpx 客户端：

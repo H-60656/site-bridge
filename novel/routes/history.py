@@ -6,7 +6,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from pixiv_bridge.compat import dump_model
+from site_bridge.compat import dump_model
 from ..history import DEFAULT_LIMIT, normalize_entry
 from . import get_history
 

@@ -1,6 +1,6 @@
 """asmr 接口站点：作品接口、运行时对象装配、应用工厂与站点描述符 ``SITE``。
 
-依赖方向：本模块只 import 框架（``pixiv_bridge``）与本站点自己的模块，框架不
+依赖方向：本模块只 import 框架（``site_bridge``）与本站点自己的模块，框架不
 认识 ``asmr_one``，单向依赖不会倒过来。
 
 与 ``pixiv/`` / ``iwara/`` 站点的区别同样在传输层：asmr.one 的边缘 IP 在本机
@@ -14,9 +14,9 @@ iwara 的属于 ``iwara/``，三个接口项目同级、互不挂载。
 
 from pathlib import Path
 
-from pixiv_bridge.nav import NavItem, NavSection
-from pixiv_bridge.server import create_bridge_app
-from pixiv_bridge.site import Site
+from site_bridge.nav import NavItem, NavSection
+from site_bridge.server import create_bridge_app
+from site_bridge.site import Site
 
 from .client import AsmrClient
 from .config import AsmrSettings, as_asmr_settings, split_ips

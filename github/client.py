@@ -11,7 +11,7 @@
 1. **把配额当成一等公民**：每次响应都把 ``x-ratelimit-*`` 三件套记下来，下一次
    请求前先问「还剩几次、什么时候重置」，配额见底就**直接本地拒绝**（带上还要
    等多少秒），不去撞上游；
-2. **按预算配速**：用框架的 :class:`~pixiv_bridge.rate_limit.RateLimiter` 把节奏
+2. **按预算配速**：用框架的 :class:`~site_bridge.rate_limit.RateLimiter` 把节奏
    压到「用满一小时也不超」—— 未认证 1 次/分钟，带 token 才放开；
 3. **出口处把语义定死**：403 究竟是限流还是真没权限，用 ``x-ratelimit-remaining``
    与正文 ``message`` 横向判定，翻成不同的异常类（``GithubRateLimitError`` /
@@ -32,7 +32,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from pixiv_bridge.rate_limit import RateLimiter
+from site_bridge.rate_limit import RateLimiter
 
 from .config import DEFAULT_API_URL, GithubSettings, as_github_settings
 
@@ -49,7 +49,7 @@ _DEFAULT_RESOURCE = "core"
 _DEFAULT_HEADERS = {
     "accept": "application/vnd.github+json",
     "x-github-api-version": "2022-11-28",
-    "user-agent": "pixiv-bridge-github/1.0 (+https://github.com/)",
+    "user-agent": "site-bridge-github/1.0 (+https://github.com/)",
 }
 
 _LINK_RE = re.compile(r'<([^>]+)>\s*;\s*rel="([^"]+)"')

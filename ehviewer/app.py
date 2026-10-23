@@ -14,9 +14,9 @@
 
 from pathlib import Path
 
-from pixiv_bridge.nav import NavItem, NavSection
-from pixiv_bridge.server import create_bridge_app
-from pixiv_bridge.site import Site
+from site_bridge.nav import NavItem, NavSection
+from site_bridge.server import create_bridge_app
+from site_bridge.site import Site
 
 from .client import EhClient
 from .config import EhSettings, as_eh_settings, split_ips

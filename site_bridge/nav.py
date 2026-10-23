@@ -1,7 +1,7 @@
 """导航页：把「接口项目自带的入口」和「各扩展声明的页面」列成一页。
 
 页面是零依赖的静态 HTML（和 `novel/web/index.html` 一样单文件、无构建步骤），
-由 `pixiv_bridge/routes/nav.py` 挂在 `/` 上。
+由 `site_bridge/routes/nav.py` 挂在 `/` 上。
 
 扩展出现在导航页上有两种程度：
 
@@ -16,8 +16,8 @@
 
 框架不认识任何具体扩展，也不认识具体接口站点 —— 页面标题取自应用自己的
 `app.title`（站点在建应用时声明），别的入口（例如另一个站点 `iwara` 的运行实例）
-在配置里用 `PIXIV_BRIDGE_NAV_LINKS` 手工补链接即可，例如
-`PIXIV_BRIDGE_NAV_LINKS=iwara 视频=http://127.0.0.1:8766/`。
+在配置里用 `SITE_BRIDGE_NAV_LINKS` 手工补链接即可，例如
+`SITE_BRIDGE_NAV_LINKS=iwara 视频=http://127.0.0.1:8766/`。
 
 依赖方向：本模块只依赖标准库，扩展与接口项目都可以用它渲染自己的那一页。
 """
@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from html import escape
 
 # 配置项：导航页上「其它入口」那一段的额外链接（`标题=地址`，逗号分隔）。
-NAV_LINKS_ENV = "PIXIV_BRIDGE_NAV_LINKS"
+NAV_LINKS_ENV = "SITE_BRIDGE_NAV_LINKS"
 
 # 接口项目自带、永远列在最上面的那几个入口。
 BUILTIN_ITEMS = (
@@ -90,7 +90,7 @@ def normalize_nav_items(raw):
 
 
 def parse_nav_links(value):
-    """把 `PIXIV_BRIDGE_NAV_LINKS` 解析成额外链接。
+    """把 `SITE_BRIDGE_NAV_LINKS` 解析成额外链接。
 
     写法：`标题=地址`，多项用逗号 / 分号 / 换行分隔；只写地址时用地址当标题。
     例：`iwara 视频=http://127.0.0.1:8766/, 接口文档=/docs`。

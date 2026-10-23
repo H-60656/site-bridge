@@ -5,7 +5,7 @@
 
 检查四件事：
 
-1. 依赖方向：``pixiv_bridge/`` 里不出现任何站点/扩展的名字；各接口项目互不
+1. 依赖方向：``site_bridge/`` 里不出现任何站点/扩展的名字；各接口项目互不
    依赖；扩展只允许依赖框架、自己与它的宿主站点；
 2. 出入口：每个接口项目一个 ``<site>/run.py``，根目录不再有 ``run.py``，
    扩展包只有 ``<ext>/extension.py``（没有专属入口）；
@@ -129,9 +129,9 @@ def check_layout(errors):
 ROUTE_PROBE = """
 import json, sys
 sys.path.insert(0, r'{root}')
-from pixiv_bridge.server import create_bridge_app
-from pixiv_bridge.config import Settings
-from pixiv_bridge.extensions import load_extension_specs
+from site_bridge.server import create_bridge_app
+from site_bridge.config import Settings
+from site_bridge.extensions import load_extension_specs
 {imports}
 
 #: 站点名 → 站点模块（由上面的 import 逐条拼出来，不写死某几个站点名）。

@@ -8,7 +8,7 @@
 - 重复下载同一章只追加一行，读取时折叠成最新一条（记的是最新一次导出的文件与大小）。
 """
 
-from pixiv_bridge.jsonl import DEFAULT_LIMIT, JsonlStore, as_int, as_text, iso_now
+from site_bridge.jsonl import DEFAULT_LIMIT, JsonlStore, as_int, as_text, iso_now
 
 __all__ = ["DownloadStore", "normalize_download"]
 

@@ -1,23 +1,23 @@
 """扩展机制：让「附属项目」以目录的形式挂到接口项目上。
 
-接口项目（`pixiv_bridge`）本身只做 Pixiv 接口；「小说阅读器」这类附属功能
+接口项目（`site_bridge`）本身只做 Pixiv 接口；「小说阅读器」这类附属功能
 默认完全不参与。要让接口项目带上它，只需两步：
 
 1. 把扩展目录放进项目目录里（例如 `novel/`）；
-2. 在配置里写上它的相对路径：`PIXIV_BRIDGE_EXTENSIONS=novel`。
+2. 在配置里写上它的相对路径：`SITE_BRIDGE_EXTENSIONS=novel`。
 
 程序会去该目录下找**固定文件名** `extension.py`，从里面读出四样东西：
 
 - `EXTENSION_ROUTERS`（必需）：要挂到接口应用上的路由元组；
 - `extension_state_factory(settings)`（可选）：返回要挂到 `app.state` 上的
-  对象字典，和 `pixiv_bridge.server.create_app(state_factory=...)` 同形；
+  对象字典，和 `site_bridge.server.create_app(state_factory=...)` 同形；
 - `extension_shutdown(app)`（可选，async）：自己的资源在停机时释放
   （接口项目只关自己的 httpx 客户端，管不到扩展自己开的东西）；
 - `EXTENSION_NAV`（可选）：要在导航页（`/`）上露出的页面清单，每项
   `{"title": ..., "path": ..., "description": ...}`。不写也照样出现在导航页上
   （只列扩展名），写了就有链接可点。
 
-依赖方向仍然是单向的：扩展可以 import `pixiv_bridge`，接口项目永远不认识
+依赖方向仍然是单向的：扩展可以 import `site_bridge`，接口项目永远不认识
 任何扩展的名字 —— 这里只是按配置里的路径去执行一个文件。
 """
 
@@ -60,7 +60,7 @@ class Extension:
 
 
 def parse_extension_specs(value):
-    """把 `PIXIV_BRIDGE_EXTENSIONS` 的原始字符串切成一项一项。
+    """把 `SITE_BRIDGE_EXTENSIONS` 的原始字符串切成一项一项。
 
     逗号 / 分号 / 空白都算分隔符，所以 `novel, reader` 与 `novel;reader`
     与 `novel reader` 写法等价；空项自动丢掉。
@@ -83,7 +83,7 @@ def resolve_extension_dir(spec, project_root):
 def _module_name(spec):
     """给扩展模块起一个不会撞车的名字（要注册进 sys.modules）。"""
     cleaned = "".join(ch if ch.isalnum() else "_" for ch in spec)
-    return f"pixiv_bridge_extension_{cleaned}"
+    return f"site_bridge_extension_{cleaned}"
 
 
 def load_extension(spec, project_root):

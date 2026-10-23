@@ -9,7 +9,7 @@
   历史仍然留痕，不会因为一次误操作把记录抹掉。
 """
 
-from pixiv_bridge.jsonl import JsonlStore, as_int, as_text, iso_now
+from site_bridge.jsonl import JsonlStore, as_int, as_text, iso_now
 
 __all__ = ["BookmarkStore", "normalize_bookmark"]
 

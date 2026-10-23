@@ -5,9 +5,9 @@
 - ``<site>/app.py``：导出 ``SITE``（本模块的 :class:`Site` 实例），把站点的
   ``create_app``、专属自检、登录校验、网络提示、错误类型声明清楚；
 - ``<site>/run.py``：二十行的同构入口 —— 先 bootstrap（框架依赖 + 站点额外依赖），
-  再把 ``SITE`` 交给 ``pixiv_bridge.cli.main``。
+  再把 ``SITE`` 交给 ``site_bridge.cli.main``。
 
-框架层不 import 任何站点模块（``pixiv_bridge/`` 里出现站点包名即架构违规，
+框架层不 import 任何站点模块（``site_bridge/`` 里出现站点包名即架构违规，
 ``scripts/check_boundary.py`` 会拒绝），站点通过 ``SITE`` 反向挂到框架上。
 """
 
@@ -24,7 +24,7 @@ from .envcheck import CheckResult
 #   login_check(settings)                -> int（进程退出码，0 = 通过）
 #   network_hint(results, settings)      -> None
 #
-# 另外 ``nav_order`` 只影响导航里的排序（见 ``pixiv_bridge.__main__``），与运行无关。
+# 另外 ``nav_order`` 只影响导航里的排序（见 ``site_bridge.__main__``），与运行无关。
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ class Site:
     #: 组装应用的工厂：create_app(settings, extensions=())
     create_app: Callable[..., Any]
     version: str = "1.0.0"
-    #: ``python -m pixiv_bridge`` 导航里的排序（小的在前，也是默认启动的那个）；
+    #: ``python -m site_bridge`` 导航里的排序（小的在前，也是默认启动的那个）；
     #: 不写就是 100，排在写了 ``nav_order`` 的站点后面、彼此按目录名排
     nav_order: int = 100
     #: 站点自己的配置类（默认框架的 Settings；Pixiv 用 PixivSettings）

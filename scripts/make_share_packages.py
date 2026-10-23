@@ -14,8 +14,8 @@
 （说明这东西是什么、怎么启动、包里有什么），完整文档放在 ``手册/`` 里。
 
 布局约定（重构后）：接口项目 ``pixiv/``、``iwara/``、``asmr_one/`` 是**同级**目录，
-各自有 ``run.py`` 入口，都只依赖框架 ``pixiv_bridge/``；根目录不再有 ``run.py``。
-所以每个接口包 = ``pixiv_bridge/`` + 一个（或两个）站点目录 + 根目录的启动文件。
+各自有 ``run.py`` 入口，都只依赖框架 ``site_bridge/``；根目录不再有 ``run.py``。
+所以每个接口包 = ``site_bridge/`` + 一个（或两个）站点目录 + 根目录的启动文件。
 
 约定：扩展包（``novel`` / ``iwara_web``）只是可挂载的目录，不能单独启动 ——
 它们要放进一个接口项目的**项目根**，再在 ``.env`` 里写扩展名。
@@ -119,7 +119,7 @@ BASE_NOTES = (
     "个人数据都在 `data/` 里（登录凭据 / 阅读历史 / 下载记录 / 收藏台账 / 页面配置）；"
     "换机只拷这一个目录。",
     "各接口项目 `pixiv/` / `iwara/` / `asmr_one/` / `ehviewer/` / `github/` 是**同级**的："
-    "各自一个 `run.py`，互相不挂载，都只用框架 `pixiv_bridge/`。",
+    "各自一个 `run.py`，互相不挂载，都只用框架 `site_bridge/`。",
 )
 
 PIXIV_NOTES = (
@@ -329,13 +329,13 @@ PACKAGES = (
             "# 这是一个扩展，本身不能单独启动。用法：",
             "# 1) 把 novel/ 整个目录拷到 Pixiv 接口包的项目根（与 pixiv/ 同级）",
             "# 2) 在接口项目的 .env 里加一行：",
-            "PIXIV_BRIDGE_EXTENSIONS=novel",
+            "SITE_BRIDGE_EXTENSIONS=novel",
             "# 3) 用接口项目原来的方式启动：",
             "start.bat",
             "# 或：python pixiv/run.py",
         ),
         setup_lines=(
-            "先有一个能跑的 Pixiv 接口包（`pixiv-api`，或任意含 `pixiv_bridge/` 与 `pixiv/` 的项目根）。",
+            "先有一个能跑的 Pixiv 接口包（`pixiv-api`，或任意含 `site_bridge/` 与 `pixiv/` 的项目根）。",
             "把 `novel/` 拷到那个项目根里，保持目录名不变。",
         ),
         notes=(
@@ -359,7 +359,7 @@ PACKAGES = (
             "# 这是一个扩展，本身不能单独启动。用法：",
             "# 1) 把 iwara_web/ 整个目录拷到 iwara 接口包的项目根（与 iwara/ 同级）",
             "# 2) 在 .env 里加一行：",
-            "PIXIV_BRIDGE_EXTENSIONS=iwara_web",
+            "SITE_BRIDGE_EXTENSIONS=iwara_web",
             "# 3) 用 iwara 的入口启动：",
             "python iwara/run.py",
         ),
@@ -383,7 +383,7 @@ PACKAGES = (
         dirs=_site_dirs(PIXIV.directory, "novel"),
         files=API_ROOT_FILES,
         start_commands=(
-            "# 先在 .env 里加一行：PIXIV_BRIDGE_EXTENSIONS=novel",
+            "# 先在 .env 里加一行：SITE_BRIDGE_EXTENSIONS=novel",
             "",
             "# Windows",
             "start.bat",
@@ -410,7 +410,7 @@ PACKAGES = (
         dirs=_site_dirs(IWARA.directory, "iwara_web", with_assets=False),
         files=API_ROOT_FILES,
         start_commands=(
-            "# 先在 .env 里加一行：PIXIV_BRIDGE_EXTENSIONS=iwara_web",
+            "# 先在 .env 里加一行：SITE_BRIDGE_EXTENSIONS=iwara_web",
             "",
             "# Windows",
             "start.bat",
@@ -573,7 +573,7 @@ def render_readme(spec: PackageSpec) -> str:
         lines += [
             "## 包里是什么",
             "",
-            "框架（`pixiv_bridge/`）+ 一个接口项目 + 一个扩展目录，已经放在一起了。"
+            "框架（`site_bridge/`）+ 一个接口项目 + 一个扩展目录，已经放在一起了。"
             "接口项目启动时会在项目根找扩展目录，配置里写名字即可。",
             "",
         ]
@@ -581,7 +581,7 @@ def render_readme(spec: PackageSpec) -> str:
         lines += [
             "## 包里是什么",
             "",
-            "框架（`pixiv_bridge/`）+ 一个接口项目。框架不认识任何接口项目，"
+            "框架（`site_bridge/`）+ 一个接口项目。框架不认识任何接口项目，"
             "接口项目之间也互不依赖 —— 这里装的是其中一个。",
             "",
         ]

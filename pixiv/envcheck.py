@@ -1,6 +1,6 @@
 """Pixiv 站点的专属自检、登录校验与失败提示。
 
-通用自检（Python / 依赖 / 必需文件 / 端口）在框架 ``pixiv_bridge.envcheck`` 里；
+通用自检（Python / 依赖 / 必需文件 / 端口）在框架 ``site_bridge.envcheck`` 里；
 这里只有 Pixiv 才需要的部分：网络可达性、代理、ECH 直连探测、``--check`` 的
 真实 OAuth 刷新，以及失败时该给用户什么提示。
 
@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from pixiv_bridge.envcheck import CheckResult
+from site_bridge.envcheck import CheckResult
 
 from . import ech_client
 from .hoster import resolve, resolve_ech
@@ -37,7 +37,7 @@ ECH_BLOCKED_HINT = (
     "；握手被重置通常说明本机到 Cloudflare 这一段在阻断 ECH 扩展"
     "（只与本地网络/运营商有关，与配置、IP 和服务端无关；Pixiv/Cloudflare 自身的 ECH 支持正常），"
     "同一台机器也可能时通时断；可重试、换网络/手机热点，或设置 "
-    "PIXIV_PROXY=http://127.0.0.1:7890 走代理"
+    "SITE_PROXY=http://127.0.0.1:7890 走代理"
 )
 
 MISSING_TOKEN_HINT = (
@@ -191,21 +191,21 @@ def network_hint(results, settings):
             "  提示: ECH 模式仍无法直连。若错误里是 SSL_get_error=5（握手被重置），"
             "说明本机到 Cloudflare 这一段在阻断 ECH 扩展（只与本地网络/运营商有关，"
             "与服务端无关；同一台机器也可能时通时断），可重试、换网络/手机热点，"
-            "或设置 PIXIV_PROXY=http://127.0.0.1:7890 走代理；"
-            "也可检查 PIXIV_BRIDGE_ECH_CONFIG / PIXIV_BRIDGE_ECH_IPS，"
+            "或设置 SITE_PROXY=http://127.0.0.1:7890 走代理；"
+            "也可检查 PIXIV_ECH_CONFIG / PIXIV_ECH_IPS，"
             "或安装带 ECH 支持的 OpenSSL（4.0+）",
             flush=True,
         )
     elif settings.bypass_sni:
         print(
-            "  提示: SNI 绕过已开启仍无法直连，可改用 PIXIV_BRIDGE_ECH=1（加密 SNI），"
-            "或设置 PIXIV_PROXY 走代理",
+            "  提示: SNI 绕过已开启仍无法直连，可改用 PIXIV_ECH=1（加密 SNI），"
+            "或设置 SITE_PROXY 走代理",
             flush=True,
         )
     else:
         print(
-            "  提示: 无法直连 Pixiv，可设置 PIXIV_BRIDGE_ECH=1 走加密 SNI，"
-            "或设置 PIXIV_BRIDGE_BYPASS_SNI=1 开启 SNI 绕过，或设置 PIXIV_PROXY",
+            "  提示: 无法直连 Pixiv，可设置 PIXIV_ECH=1 走加密 SNI，"
+            "或设置 PIXIV_BYPASS_SNI=1 开启 SNI 绕过，或设置 SITE_PROXY",
             flush=True,
         )
 
@@ -216,19 +216,19 @@ def _refresh_hint(settings, exc):
     if "getaddrinfo" in text or "NameResolution" in text or "No address" in text:
         return (
             "  提示: 域名解析失败（getaddrinfo）是**本地 DNS 问题**，不是服务端问题——"
-            "系统解析被污染时普通模式必然失败；请设置 PIXIV_BRIDGE_ECH=1（ECH 用 DoH 解析，"
-            "不走系统 DNS）或 PIXIV_PROXY 走代理"
+            "系统解析被污染时普通模式必然失败；请设置 PIXIV_ECH=1（ECH 用 DoH 解析，"
+            "不走系统 DNS）或 SITE_PROXY 走代理"
         )
     if "SSL_get_error=5" in text or "SyscallError" in text or "EchConnectError" in text:
         return (
             "  提示: 握手被重置说明**本机到 Cloudflare 这一段**在阻断 ECH 扩展"
             "（Pixiv/Cloudflare 服务端正常，同一台机器也可能时通时断），可换网络/手机热点，"
-            "或设置 PIXIV_PROXY=http://127.0.0.1:7890 走代理"
+            "或设置 SITE_PROXY=http://127.0.0.1:7890 走代理"
         )
     if isinstance(exc, (httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout)):
         return (
             "  提示: 连不上 Pixiv（连接失败/超时）属于**本地链路问题**，"
-            "不是服务端问题；可重试、换网络，或设置 PIXIV_PROXY 走代理"
+            "不是服务端问题；可重试、换网络，或设置 SITE_PROXY 走代理"
         )
     status = getattr(exc, "status", None)
     if status in (401, 403):

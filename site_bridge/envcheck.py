@@ -1,7 +1,7 @@
 """启动前的通用环境自检：Python 版本、依赖、必需文件、端口。
 
 站点专属的探测（网络 / ECH / 代理 / 站点依赖 / 登录态）不在框架里 ——
-站点通过 :class:`pixiv_bridge.site.Site` 的 ``checks`` 钩子把自己的检查项
+站点通过 :class:`site_bridge.site.Site` 的 ``checks`` 钩子把自己的检查项
 追加到同一张表里（见 ``iwara/envcheck.py``、``pixiv/envcheck.py``）。
 """
 
@@ -86,7 +86,7 @@ def run_checks(port=None, files=()):
     """通用自检项：Python / 依赖 / 必需文件 / 端口。
 
     `files` 是 ``(目录, 文件名序列)`` 的列表（框架项目根 + 站点目录）。
-    站点专属项由入口追加，见 :meth:`pixiv_bridge.site.Site.environment_checks`。
+    站点专属项由入口追加，见 :meth:`site_bridge.site.Site.environment_checks`。
     """
     results = [python_version(), dependencies(), project_files(files)]
     if port is not None:

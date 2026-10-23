@@ -19,7 +19,7 @@ class AuthError(RuntimeError):
     """登录态相关错误：框架的错误处理器按 ``status`` 决定 HTTP 码。
 
     ``status`` / ``reason`` / ``message`` 是框架与站点之间唯一的约定
-    （见 ``pixiv_bridge/errors.py``）—— 缺了 ``status`` 就会被当成 400，
+    （见 ``site_bridge/errors.py``）—— 缺了 ``status`` 就会被当成 400，
     所以这里显式给 401。
     """
 

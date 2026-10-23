@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE="${PIXIV_BRIDGE_URL:-http://127.0.0.1:8765}"
+BASE="${SITE_BRIDGE_URL:-http://127.0.0.1:8765}"
 
 echo "== 健康检查 =="
 curl -s "$BASE/api/health"

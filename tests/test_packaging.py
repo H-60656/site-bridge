@@ -101,7 +101,7 @@ class PackageSpecTestCase(unittest.TestCase):
                 continue
             with self.subTest(key=spec.key):
                 self.assertEqual(tuple(spec.files), packaging.API_ROOT_FILES)
-                self.assertIn("pixiv_bridge", spec.dirs)
+                self.assertIn("site_bridge", spec.dirs)
 
     def test_extension_packages_ship_only_their_own_directory(self):
         extensions = [spec for spec in packaging.PACKAGES if spec.kind == "extension"]
@@ -111,7 +111,7 @@ class PackageSpecTestCase(unittest.TestCase):
                 self.assertEqual(len(spec.dirs), 1)
                 self.assertEqual(spec.dirs[0], spec.key.split("-")[0])
                 self.assertEqual(tuple(spec.files), ())
-                self.assertIn("PIXIV_BRIDGE_EXTENSIONS=", "\n".join(spec.start_commands))
+                self.assertIn("SITE_BRIDGE_EXTENSIONS=", "\n".join(spec.start_commands))
 
     def test_entries_concatenates_files_extra_files_and_dirs(self):
         spec = packaging.PackageSpec(
@@ -147,7 +147,7 @@ class PackagingHelpersTestCase(unittest.TestCase):
         for name in ("x.pyc", "x.pyo"):
             with self.subTest(name=name):
                 self.assertTrue(packaging.should_ignore(name))
-        for name in ("pixiv_bridge", "README.md", "requirements.txt", ".env.example"):
+        for name in ("site_bridge", "README.md", "requirements.txt", ".env.example"):
             with self.subTest(name=name):
                 self.assertFalse(packaging.should_ignore(name))
 
@@ -328,7 +328,7 @@ class RenderReadmeTestCase(unittest.TestCase):
         self.assertTrue(tree.startswith(spec.zip_name + "/"))
         self.assertIn("README.md", tree)
         self.assertIn("手册/", tree)
-        self.assertIn("pixiv_bridge/", tree)
+        self.assertIn("site_bridge/", tree)
         self.assertIn("pixiv/", tree)
         for name in spec.files:
             self.assertIn(name, tree)
@@ -352,7 +352,7 @@ class ValidateSpecsTestCase(unittest.TestCase):
     def test_rejects_a_package_that_mixes_two_api_projects(self):
         bogus = packaging.PackageSpec(
             key="pixiv-api", zip_name="pixiv-api", title="t", kind="api", summary="s",
-            dirs=("pixiv_bridge", "pixiv", "iwara"),
+            dirs=("site_bridge", "pixiv", "iwara"),
         )
         with patch.object(packaging, "PACKAGES", (bogus,)):
             problems = packaging.validate_specs()
@@ -376,7 +376,7 @@ class ValidateSpecsTestCase(unittest.TestCase):
         # iwara_web 挂在 iwara 上，放进 pixiv 的组合包里必须报出来。
         bogus = packaging.PackageSpec(
             key="pixiv-novel", zip_name="pixiv-novel", title="t", kind="bundle",
-            summary="s", dirs=("pixiv_bridge", "pixiv", "iwara_web"),
+            summary="s", dirs=("site_bridge", "pixiv", "iwara_web"),
         )
         with patch.object(packaging, "PACKAGES", (bogus,)):
             problems = packaging.validate_specs()

@@ -1,6 +1,6 @@
 """asmr.one 接口站点：作品浏览、搜索、音轨树与音频/封面代转（自带客户端）。
 
-依赖方向与 ``iwara`` 一致：本包只 import 框架 ``pixiv_bridge`` 与自己的模块，
+依赖方向与 ``iwara`` 一致：本包只 import 框架 ``site_bridge`` 与自己的模块，
 不认识 ``pixiv`` / ``iwara`` —— 三个接口项目同级、互不挂载。
 
 传输层的坎和 iwara 同源（都在 Cloudflare 后面、本机 DNS 与 TLS 指纹都会被拦），

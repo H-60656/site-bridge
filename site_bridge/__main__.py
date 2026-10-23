@@ -1,10 +1,10 @@
-"""``python -m pixiv_bridge``：整个项目的导航 —— 列出接口项目与扩展，选一个再启动。
+"""``python -m site_bridge``：整个项目的导航 —— 列出接口项目与扩展，选一个再启动。
 
 三种用法：
 
-    python -m pixiv_bridge                      列出导航，选一个启动（回车＝默认）
-    python -m pixiv_bridge <接口项目> [入口参数...]  直接启动某一个
-    python -m pixiv_bridge --list               只打印导航，不启动
+    python -m site_bridge                      列出导航，选一个启动（回车＝默认）
+    python -m site_bridge <接口项目> [入口参数...]  直接启动某一个
+    python -m site_bridge --list               只打印导航，不启动
 
 框架仍然不认识任何站点：这里只做目录发现（有 ``run.py`` 的目录＝接口项目，
 只有 ``extension.py`` 的目录＝扩展），导航里的名字、简介、顺序都用 :mod:`ast`
@@ -40,9 +40,9 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_NAV_ORDER = 100
 
 USAGE = """用法:
-  python -m pixiv_bridge                          列出导航，选一个接口项目启动
-  python -m pixiv_bridge <接口项目> [入口参数...]    直接启动它
-  python -m pixiv_bridge --list                   只打印导航，不启动
+  python -m site_bridge                          列出导航，选一个接口项目启动
+  python -m site_bridge <接口项目> [入口参数...]    直接启动它
+  python -m site_bridge --list                   只打印导航，不启动
 
 入口参数原样传给站点入口：--host / --port / --reload / --check / --env。"""
 
@@ -235,7 +235,7 @@ def render_navigation(root=None):
     else:
         lines.append("  （没有找到：本目录下需要有 <接口项目>/run.py）")
     lines.append("")
-    lines.append("扩展（不是入口、没有 run.py；在 .env 里写 PIXIV_BRIDGE_EXTENSIONS=<名字> 挂到接口项目上）")
+    lines.append("扩展（不是入口、没有 run.py；在 .env 里写 SITE_BRIDGE_EXTENSIONS=<名字> 挂到接口项目上）")
     if extensions:
         lines += [_line(item, "      ") for item in extensions]
     else:

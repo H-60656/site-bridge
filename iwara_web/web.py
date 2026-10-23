@@ -9,7 +9,7 @@
 所以挂它之前得先有 iwara 接口包。
 
 路径是 `/iwara` 而不是 `/`：根地址留给接口项目的**导航页**
-（`pixiv_bridge/routes/nav.py`），导航页再把这里列成一条链接
+（`site_bridge/routes/nav.py`），导航页再把这里列成一条链接
 （本包的 `extension.py` 用 `EXTENSION_NAV` 声明）。
 
 页面内部不需要跟着改 —— 它的接口调用全是绝对路径，前端路由走

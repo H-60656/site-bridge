@@ -17,7 +17,7 @@ from pathlib import Path
 # 直接 `python pixiv/get_token.py` 时 sys.path[0] 是 pixiv/，框架包在它的上一级。
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pixiv_bridge.deps import ensure_dependencies
+from site_bridge.deps import ensure_dependencies
 
 try:
     ensure_dependencies()

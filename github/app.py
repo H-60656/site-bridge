@@ -1,6 +1,6 @@
 """github 接口站点：路由清单、运行时对象装配、应用工厂与站点描述符 ``SITE``。
 
-框架（``pixiv_bridge``）只认识 :class:`pixiv_bridge.site.Site` 这一份契约；
+框架（``site_bridge``）只认识 :class:`site_bridge.site.Site` 这一份契约；
 本模块把 GitHub 的细节填进去：
 
 - ``GITHUB_ROUTERS``：``/api/github/*`` 路由（``/api/health`` 与导航页由框架提供）；
@@ -10,7 +10,7 @@
 - ``GITHUB_ERROR_TYPES``：站点异常，交给框架统一映射成
   ``{"error": {"message": ..., "reason": ...}}``；
 - ``create_app``：站点应用工厂；
-- ``SITE``：入口脚本（``github/run.py``）交给 ``pixiv_bridge.cli.main`` 的东西。
+- ``SITE``：入口脚本（``github/run.py``）交给 ``site_bridge.cli.main`` 的东西。
 
 **没有代理**：``api.github.com`` 在本机直连即可（实测 200），所以这里刻意不读
 ``settings.proxy``，也没有 ECH / 边缘 IP 借道 —— 这一层在这个站点上是纯负担。
@@ -20,9 +20,9 @@ from pathlib import Path
 
 import httpx
 
-from pixiv_bridge.nav import NavItem, NavSection
-from pixiv_bridge.server import create_bridge_app
-from pixiv_bridge.site import Site
+from site_bridge.nav import NavItem, NavSection
+from site_bridge.server import create_bridge_app
+from site_bridge.site import Site
 
 from .client import (
     GithubClient,

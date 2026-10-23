@@ -150,7 +150,7 @@ def check_writable_dir(path):
         path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return False, "建目录失败：%s" % _reason(exc)
-    probe = path / ".pixiv-bridge-write-test"
+    probe = path / ".site-bridge-write-test"
     try:
         probe.write_text("ok", encoding="utf-8")
     except OSError as exc:
