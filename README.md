@@ -131,6 +131,7 @@ SITE_PROXY=http://127.0.0.1:7890      # Clash/v2ray 常见的混合端口
 整个项目文件夹是自包含的：直接拷贝到另一台机器即可运行（详见 [打包与移植](#打包与移植换机--离线部署)）。
 
 ```bash
+git clone https://github.com/H-60656/site-bridge.git   # 或者直接拷这个文件夹（自包含）
 cd site-bridge
 python3 -m venv .venv                                   # 可选，但推荐（Windows: python -m venv .venv）
 
