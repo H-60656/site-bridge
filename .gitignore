@@ -20,6 +20,12 @@ history.jsonl
 history.jsonl.tmp
 _tmp_tests/
 
+# 单元测试用的假凭据文件。测试优先写系统 TEMP；某些环境（TEMP 不可写 /
+# 沙箱）会退回当前目录，于是落在项目根，这里兜住，避免污染工作区。
+site_bridge_test_tokens.json
+site_bridge_server_test_tokens.json
+*_test_tokens.json
+
 # 分享打包产物（用 README「打包与移植」里的命令随时重新生成）
 dist/
 

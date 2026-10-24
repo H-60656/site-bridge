@@ -70,12 +70,15 @@ def app_with_novel(settings, **kwargs):
     """主项目的接口应用 + 小说子项目那一层（原来的完整服务）。"""
     return create_novel_app(settings, **kwargs)
 
-# 用系统临时目录（Windows 是 %TEMP%，Linux/Termux 是 /tmp 或 $TMPDIR）。
-# 不能写死 "/tmp"：Windows 上它会被解析成「当前盘符的 \tmp」，换一个盘跑测试就会静默失败。
-TEST_TOKEN_FILE = Path(tempfile.gettempdir()) / "site_bridge_test_tokens.json"
-SERVER_TOKEN_FILE = Path(tempfile.gettempdir()) / "site_bridge_server_test_tokens.json"
+# 假的 token 落盘文件放工作区的 _tmp_tests/ 下，与其它临时产物同一约定。
+# 原先用系统 TEMP（tempfile.gettempdir()），但 TEMP 不可写的环境里 Python 会
+# 悄悄退回当前目录，于是这些假凭据文件就落在项目根、被误当成项目文件；
+# 放到 _tmp_tests/ 下既确定位置（已被 .gitignore 忽略），也不会污染工作区。
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEST_TMP_ROOT = PROJECT_ROOT / "_tmp_tests"     # 测试临时目录的根（跑完自动收掉）
+TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+TEST_TOKEN_FILE = TEST_TMP_ROOT / "site_bridge_test_tokens.json"
+SERVER_TOKEN_FILE = TEST_TMP_ROOT / "site_bridge_server_test_tokens.json"
 _TEMP_COUNTER = itertools.count(1)
 
 
